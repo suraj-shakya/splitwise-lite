@@ -1,10 +1,12 @@
 """Splitwise Lite: a shared expense ledger for small groups.
 
-The domain vocabulary lives in two modules and is re-exported here:
+The domain vocabulary lives in three modules and is re-exported here:
 
 * ``money``: currency, integer-cent ``Money``, amount parsing and formatting, and the
   ``DomainError`` base every domain exception subclasses.
 * ``events``: the immutable ledger events, their ids and their allocations.
+* ``split``: the resolver that turns a total and a split mode into the explicit
+  allocations an expense event stores.
 """
 
 from .events import (
@@ -35,6 +37,12 @@ from .money import (
     format_amount,
     parse_amount,
 )
+from .split import (
+    InvalidSplit,
+    split_by_weight,
+    split_equally,
+    split_exact,
+)
 
 __version__ = "0.1.0"
 
@@ -52,6 +60,7 @@ __all__ = [
     "InvalidAmount",
     "InvalidCurrency",
     "InvalidEvent",
+    "InvalidSplit",
     "LedgerEvent",
     "MemberId",
     "Money",
@@ -64,4 +73,7 @@ __all__ = [
     "new_id",
     "ordering_key",
     "parse_amount",
+    "split_by_weight",
+    "split_equally",
+    "split_exact",
 ]
