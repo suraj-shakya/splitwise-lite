@@ -25,6 +25,7 @@ from splitwise_lite.money import (
     InvalidAmount,
     InvalidCurrency,
     Money,
+    format_amount,
     parse_amount,
 )
 
@@ -385,3 +386,79 @@ def test_parse_amount_rejects_a_currency_that_is_not_a_currency(
 ) -> None:
     with pytest.raises(TypeError):
         parse_amount("12.50", currency)
+
+
+# --- format_amount ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cents", "text"),
+    [
+        (1250, "12.50"),
+        (123450, "1,234.50"),
+        (0, "0.00"),
+        (5, "0.05"),
+        (50, "0.50"),
+        (100, "1.00"),
+        (99999, "999.99"),
+        (100000, "1,000.00"),
+        (123456789, "1,234,567.89"),
+        (2**63 - 1, "92,233,720,368,547,758.07"),
+    ],
+)
+def test_format_amount_renders_two_places_with_thousands_separators(
+    cents: int, text: str
+) -> None:
+    assert format_amount(Money(cents, AUD)) == text
+
+
+@pytest.mark.parametrize(
+    ("cents", "text"),
+    [
+        (-1250, "-12.50"),
+        (-5, "-0.05"),
+        (-123450, "-1,234.50"),
+    ],
+)
+def test_format_amount_renders_negatives_with_a_leading_minus(
+    cents: int, text: str
+) -> None:
+    assert format_amount(Money(cents, AUD)) == text
+
+
+def test_format_amount_omits_the_symbol_by_default() -> None:
+    assert "$" not in format_amount(Money(123450, AUD))
+
+
+def test_format_amount_prefixes_a_symbol_on_request() -> None:
+    assert format_amount(Money(123450, AUD), symbol=True) == "$1,234.50"
+
+
+def test_format_amount_keeps_the_minus_outside_the_symbol() -> None:
+    assert format_amount(Money(-1250, AUD), symbol=True) == "-$12.50"
+
+
+def test_symbol_is_keyword_only_so_it_cannot_be_passed_by_accident() -> None:
+    with pytest.raises(TypeError):
+        format_amount(Money(1250, AUD), True)
+
+
+@pytest.mark.parametrize("value", [1250, "12.50", None, Decimal("12.50")])
+def test_format_amount_rejects_anything_that_is_not_money(value: object) -> None:
+    with pytest.raises(TypeError):
+        format_amount(value)
+
+
+@pytest.mark.parametrize(
+    "cents",
+    [0, 1, 5, 50, 99, 100, 1250, 99999, 100000, 123450, 123456789, 2**63 - 1],
+)
+def test_parse_and_format_round_trip_for_non_negative_money(cents: int) -> None:
+    amount = Money(cents, AUD)
+    assert parse_amount(format_amount(amount), amount.currency) == amount
+
+
+@pytest.mark.parametrize("cents", [0, 5, 1250, 123456789])
+def test_round_trip_also_holds_with_the_symbol_prefix(cents: int) -> None:
+    amount = Money(cents, AUD)
+    assert parse_amount(format_amount(amount, symbol=True), amount.currency) == amount

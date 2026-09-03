@@ -28,6 +28,7 @@ __all__ = [
     "InvalidAmount",
     "InvalidCurrency",
     "Money",
+    "format_amount",
     "parse_amount",
 ]
 
@@ -279,3 +280,45 @@ def _to_cents(whole_digits: str, fraction_digits: str) -> int:
         if scaled != scaled.to_integral_value():
             raise InvalidAmount(f"amount is not a whole number of cents: {scaled}")
         return int(scaled)
+
+
+def format_amount(money: Money, *, symbol: bool = False) -> str:
+    """Render ``Money`` for display, with exactly ``MINOR_UNITS`` decimal places.
+
+    This is the only display edge. It always emits two decimal places and comma
+    thousands separators, so 1250 cents renders as ``"12.50"``, 123450 as
+    ``"1,234.50"``, 0 as ``"0.00"`` and 5 as ``"0.05"``.
+
+    A negative amount renders with a leading minus and nothing else: no parentheses and
+    no currency-specific placement. The minus sits outside the symbol, so -1250 with a
+    symbol renders as ``"-$12.50"``.
+
+    ``symbol`` is keyword-only and off by default, so a ``$`` is never concatenated into
+    stored text by accident. Stored amounts are cents; this string is for humans.
+
+    Invariant, and the test that keeps this function's comma rules in step with the
+    parser's: for any non-negative ``Money``,
+    ``parse_amount(format_amount(m), m.currency) == m``.
+
+    Raises:
+        TypeError: if ``money`` is not a ``Money``.
+    """
+    if not isinstance(money, Money):
+        raise TypeError(
+            f"format_amount takes Money, got {type(money).__name__}: {money!r}"
+        )
+    magnitude = _from_cents(abs(money.cents))
+    sign = "-" if money.cents < 0 else ""
+    prefix = "$" if symbol else ""
+    return f"{sign}{prefix}{magnitude:,.{MINOR_UNITS}f}"
+
+
+def _from_cents(cents: int) -> Decimal:
+    """Scale a non-negative cent count down to an exact ``Decimal`` for rendering.
+
+    The context precision is widened to the size of the value so the shift is exact for
+    any amount, not just amounts that fit the default 28 significant digits.
+    """
+    with localcontext() as context:
+        context.prec = len(str(cents)) + MINOR_UNITS + 1
+        return Decimal(cents).scaleb(-MINOR_UNITS)
