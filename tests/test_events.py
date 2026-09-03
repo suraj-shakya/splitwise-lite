@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import splitwise_lite
 from splitwise_lite import events as events_module
 from splitwise_lite import money as money_module
 from splitwise_lite.events import (
@@ -513,3 +514,18 @@ def test_the_module_documents_which_settlements_move_a_balance() -> None:
     doc = (events_module.__doc__ or "").lower()
     assert "only confirmed settlements" in doc
     assert "pending settlement moves no balance" in doc
+
+
+# --- Package surface --------------------------------------------------------
+
+
+def test_the_package_re_exports_the_public_names_of_both_modules() -> None:
+    for module in (money_module, events_module):
+        for name in module.__all__:
+            assert getattr(splitwise_lite, name) is getattr(module, name), name
+            assert name in splitwise_lite.__all__
+
+
+def test_re_exporting_leaves_the_version_alone() -> None:
+    assert splitwise_lite.__version__ == "0.1.0"
+    assert "__version__" in splitwise_lite.__all__
