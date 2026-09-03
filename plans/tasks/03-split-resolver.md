@@ -157,8 +157,10 @@ so a one-cent remainder would always land on the same index.
 - Coverage is randomised where it is not, seeded from a fixed constant so a failure is
   reproducible from the test alone. Random totals reach into the millions of cents and
   random weights cover zero, one and large values.
-- The rotation is property-tested: over any window of `n` consecutive totals for `n`
-  members, the extra cent is not always the same member.
+- The rotation is property-tested: for every head count from 2 to 8, a run of `n * n`
+  consecutive totals hands the extra cent to every member at least once. A single
+  leftover cent lands on index `(total // n) % n`, so the recipient advances once every
+  `n` cents and the walk provably visits everyone inside that run.
 
 **Suite**
 
