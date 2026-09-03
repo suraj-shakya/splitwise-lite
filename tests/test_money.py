@@ -22,8 +22,10 @@ from splitwise_lite.money import (
     Currency,
     CurrencyMismatch,
     DomainError,
+    InvalidAmount,
     InvalidCurrency,
     Money,
+    parse_amount,
 )
 
 AUD = Currency("AUD")
@@ -236,3 +238,150 @@ def test_decimal_never_appears_in_the_public_money_api() -> None:
             continue
         hints = typing.get_type_hints(obj)
         assert Decimal not in hints.values(), name
+
+
+# --- parse_amount -----------------------------------------------------------
+
+
+def test_invalid_amount_is_a_domain_error() -> None:
+    assert issubclass(InvalidAmount, DomainError)
+
+
+@pytest.mark.parametrize(
+    ("text", "cents"),
+    [
+        ("12.5", 1250),
+        ("12.50", 1250),
+        ("12", 1200),
+        (".5", 50),
+        (".05", 5),
+        ("12.", 1200),
+        ("0", 0),
+        ("0.00", 0),
+        ("0.0", 0),
+        ("1,234.50", 123450),
+        ("1234.50", 123450),
+        ("1,234,567.89", 123456789),
+        ("999", 99900),
+        ("1,000", 100000),
+    ],
+)
+def test_parse_amount_converts_text_to_cents(text: str, cents: int) -> None:
+    assert parse_amount(text, AUD) == Money(cents, AUD)
+
+
+def test_parse_amount_returns_money_in_the_currency_given() -> None:
+    parsed = parse_amount("12.50", USD)
+    assert isinstance(parsed, Money)
+    assert parsed.currency == USD
+
+
+@pytest.mark.parametrize("text", [" $12.50 ", "$12.50", " 12.50", "12.50 ", "\t12.50\n"])
+def test_parse_amount_accepts_a_leading_dollar_sign_and_outer_whitespace(
+    text: str,
+) -> None:
+    assert parse_amount(text, AUD) == Money(1250, AUD)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "12.345",
+        "12.500",
+        "12.999",
+        "0.000",
+        ".123",
+    ],
+)
+def test_parse_amount_rejects_more_fractional_digits_than_minor_units(
+    text: str,
+) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "12,5",
+        "12,50",
+        "1,23,456.00",
+        "1234,567.00",
+        ",123.00",
+        "1,2345.00",
+        "1,234,56.00",
+        "1234,00",
+        "1.234,50",
+        "12.50,00",
+    ],
+)
+def test_parse_amount_rejects_malformed_or_comma_decimal_grouping(text: str) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["1e3", "1E3", "NaN", "nan", "Infinity", "-Infinity", "inf", "+12", "+12.50"],
+)
+def test_parse_amount_rejects_everything_decimal_would_have_accepted(text: str) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize("text", ["\u0661\u0662", "\u0661\u0662.\u0665\u0660", "\uff11\uff12"])
+def test_parse_amount_rejects_non_ascii_digits(text: str) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "   ", ".", "$", "abc", "12 34", "1.2.3", "12$", "$ 12.50", "AUD 12.50", "12 AUD", "1 234.50"],
+)
+def test_parse_amount_rejects_junk(text: str) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize("text", ["-5.00", "-0.01", "-12", "- 5.00", "$-5.00", "-$5.00"])
+def test_parse_amount_rejects_negative_input_at_the_edge(text: str) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+def test_parse_amount_error_message_carries_the_offending_input() -> None:
+    with pytest.raises(InvalidAmount) as excinfo:
+        parse_amount("12.345", AUD)
+    assert "12.345" in str(excinfo.value)
+
+
+def test_parse_amount_accepts_the_largest_value_that_fits_a_signed_64_bit_column() -> None:
+    assert parse_amount("92233720368547758.07", AUD) == Money(2**63 - 1, AUD)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "92233720368547758.08",
+        "92233720368547759",
+        "999999999999999999999999999999.99",
+    ],
+)
+def test_parse_amount_rejects_a_value_that_would_overflow_64_bits(text: str) -> None:
+    with pytest.raises(InvalidAmount):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize("text", [12, 12.5, Decimal("12.50"), None, b"12.50", ["12"]])
+def test_parse_amount_rejects_a_non_string_amount(text: object) -> None:
+    with pytest.raises(TypeError):
+        parse_amount(text, AUD)
+
+
+@pytest.mark.parametrize("currency", ["AUD", None, 1])
+def test_parse_amount_rejects_a_currency_that_is_not_a_currency(
+    currency: object,
+) -> None:
+    with pytest.raises(TypeError):
+        parse_amount("12.50", currency)
