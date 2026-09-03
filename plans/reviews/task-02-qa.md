@@ -1,0 +1,64 @@
+## Verdict: PASS
+
+- [x] Money is a frozen value type holding cents and currency, and is hashable — PASS
+- [x] Money may be negative or zero — PASS
+- [x] Constructing Money with float or bool raises TypeError — PASS
+- [x] Adding, subtracting, or comparing Money across currencies raises CurrencyMismatch — PASS
+- [x] Multiplying Money by int is supported; division is not exposed — PASS
+- [x] No float anywhere in the money path (no float(), /, or round() on floats) — PASS
+- [x] Decimal is used only internally in parsing/formatting, never in public API — PASS
+- [x] Currency is a frozen value type holding ISO 4217 alpha-3 code, validated as A-Z only — PASS
+- [x] Lowercase currency codes are rejected rather than coerced — PASS
+- [x] Minor units fixed at 2 for every currency in v1 — PASS
+- [x] parse_amount takes str and Currency, returns Money; rejects int/float/Decimal — PASS
+- [x] parse_amount("12.5") = 1250, ("12.50") = 1250, ("12") = 1200 — PASS
+- [x] Missing integer part and missing fractional part are allowed, but neither is rejected — PASS
+- [x] Extra fractional digits rejected, including trailing zeros (12.500) — PASS
+- [x] Comma thousands separators accepted for correct three-digit groups — PASS
+- [x] Comma as decimal separator (12,5) is rejected — PASS
+- [x] Malformed comma grouping rejected (1,23,456.00, 1234,567.00, ,123.00) — PASS
+- [x] Optional leading $ and surrounding whitespace accepted — PASS
+- [x] 1e3, NaN, Infinity, -Infinity, +12 all rejected — PASS
+- [x] Non-ASCII digits rejected (e.g., Arabic-Indic U+0661 U+0662) — PASS
+- [x] Empty strings, whitespace-only, and junk rejected — PASS
+- [x] Negative input rejected at parse edge (-5.00) — PASS
+- [x] "0" and "0.00" parse successfully to zero cents — PASS
+- [x] Values exceeding 2**63 - 1 are rejected — PASS
+- [x] Every rejection raises one named exception type with offending input in message — PASS
+- [x] format_amount returns exactly two decimal places with thousands separators — PASS
+- [x] Negative values render with leading minus, no parentheses — PASS
+- [x] Keyword-only symbol option prefixes $, off by default — PASS
+- [x] Round-trip holds: parse_amount(format_amount(m), m.currency) == m for non-negative Money — PASS
+- [x] MemberId, GroupId, ExpenseId, SettlementId are distinct declared types over str — PASS
+- [x] New ids minted by factory returning UUID4 string — PASS
+- [x] Every event validates each id field is a non-empty str at construction — PASS
+- [x] Allocation is frozen value type holding member_id and cents — PASS
+- [x] Allocation cents must be zero or positive; zero is legal, negatives rejected — PASS
+- [x] Allocation carries no currency field — PASS
+- [x] ExpenseEvent is frozen with slots, holds all 9 documented fields — PASS
+- [x] allocations is tuple, not list; frozen dataclass remains immutable and hashable — PASS
+- [x] sum(a.cents for a in allocations) == total_cents exactly, validated at construction — PASS
+- [x] total_cents must be strictly positive — PASS
+- [x] Empty allocations tuple is rejected — PASS
+- [x] Member id appearing twice in allocations is rejected — PASS
+- [x] Payer is not required to appear in allocations — PASS
+- [x] Expense where payer is only participant is legal and produces no debt — PASS
+- [x] created_at is timezone-aware datetime stored in UTC; naive datetime rejected — PASS
+- [x] description is stripped of whitespace and may be empty — PASS
+- [x] ExpenseEvent exposes no mutating method — PASS
+- [x] SettlementEvent and SettlementDecisionEvent are two append-only pieces — PASS
+- [x] SettlementEvent holds 8 documented fields, born pending, carries no state field — PASS
+- [x] SettlementDecisionEvent holds 5 documented fields, never restates amount — PASS
+- [x] SettlementState enum has exactly PENDING, CONFIRMED, REJECTED — PASS
+- [x] Settlement amount_cents must be strictly positive — PASS
+- [x] from_member_id != to_member_id; self-settlement rejected — PASS
+- [x] Module docstring documents earliest-decision rule for conflicting decisions — PASS
+- [x] Module docstring documents that only CONFIRMED settlements move balance — PASS
+- [x] All domain exceptions subclass single DomainError base — PASS
+- [x] Every event type carries group_id — PASS
+- [x] ordering_key function provides total order with (created_at, id) — PASS
+- [x] Constructing any invalid value raises; no valid-ish objects — PASS
+- [x] New tests live in tests/ and all pass — PASS
+
+Tests: `uv run python -m pytest` — 281 passed, 0 failed
+
