@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from splitwise_lite import events as events_module
 from splitwise_lite import money as money_module
 from splitwise_lite.events import (
     Allocation,
@@ -24,8 +25,12 @@ from splitwise_lite.events import (
     InvalidAllocation,
     InvalidEvent,
     MemberId,
+    SettlementDecisionEvent,
+    SettlementEvent,
     SettlementId,
+    SettlementState,
     new_id,
+    ordering_key,
 )
 from splitwise_lite.money import Currency, DomainError
 
@@ -299,3 +304,212 @@ def test_every_id_field_must_be_a_non_empty_str(field: str) -> None:
 def test_expense_currency_must_be_a_currency(currency: object) -> None:
     with pytest.raises(TypeError):
         make_expense(currency=currency)
+
+
+# --- Settlement events ------------------------------------------------------
+
+
+def make_settlement(**overrides) -> SettlementEvent:
+    fields = {
+        "id": SettlementId("settlement-1"),
+        "group_id": GROUP,
+        "currency": AUD,
+        "from_member_id": BOB,
+        "to_member_id": ALICE,
+        "amount_cents": 600,
+        "created_at": WHEN,
+        "created_by": BOB,
+    }
+    fields.update(overrides)
+    return SettlementEvent(**fields)
+
+
+def make_decision(**overrides) -> SettlementDecisionEvent:
+    fields = {
+        "id": new_id(),
+        "settlement_id": SettlementId("settlement-1"),
+        "decision": SettlementState.CONFIRMED,
+        "decided_by": ALICE,
+        "created_at": WHEN,
+    }
+    fields.update(overrides)
+    return SettlementDecisionEvent(**fields)
+
+
+def test_settlement_state_has_exactly_three_members() -> None:
+    assert [state.name for state in SettlementState] == [
+        "PENDING",
+        "CONFIRMED",
+        "REJECTED",
+    ]
+
+
+def test_rejection_is_a_state_not_a_deletion() -> None:
+    assert SettlementState.REJECTED in set(SettlementState)
+
+
+def test_settlement_event_holds_the_documented_fields() -> None:
+    assert [f.name for f in dataclasses.fields(SettlementEvent)] == [
+        "id",
+        "group_id",
+        "currency",
+        "from_member_id",
+        "to_member_id",
+        "amount_cents",
+        "created_at",
+        "created_by",
+    ]
+
+
+def test_settlement_event_is_born_pending_and_carries_no_state_field() -> None:
+    settlement = make_settlement()
+    assert not hasattr(settlement, "state")
+    assert "state" not in {f.name for f in dataclasses.fields(SettlementEvent)}
+
+
+def test_settlement_event_is_frozen_slotted_and_hashable() -> None:
+    settlement = make_settlement()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        settlement.amount_cents = 1
+    assert not hasattr(settlement, "__dict__")
+    assert len({make_settlement(), make_settlement()}) == 1
+
+
+@pytest.mark.parametrize("amount_cents", [0, -1, -600])
+def test_settlement_amount_must_be_strictly_positive(amount_cents: int) -> None:
+    with pytest.raises(InvalidEvent):
+        make_settlement(amount_cents=amount_cents)
+
+
+@pytest.mark.parametrize("amount_cents", [6.0, "600", True, None])
+def test_settlement_amount_must_be_an_int(amount_cents: object) -> None:
+    with pytest.raises(TypeError):
+        make_settlement(amount_cents=amount_cents)
+
+
+def test_a_self_settlement_is_rejected() -> None:
+    with pytest.raises(InvalidEvent):
+        make_settlement(from_member_id=ALICE, to_member_id=ALICE)
+
+
+@pytest.mark.parametrize(
+    "field", ["id", "group_id", "from_member_id", "to_member_id", "created_by"]
+)
+def test_settlement_id_fields_must_be_non_empty_strs(field: str) -> None:
+    with pytest.raises(InvalidEvent):
+        make_settlement(**{field: ""})
+    with pytest.raises(TypeError):
+        make_settlement(**{field: None})
+
+
+@pytest.mark.parametrize("currency", ["AUD", None, 1])
+def test_settlement_currency_must_be_a_currency(currency: object) -> None:
+    with pytest.raises(TypeError):
+        make_settlement(currency=currency)
+
+
+def test_settlement_created_at_must_be_aware_and_is_stored_in_utc() -> None:
+    with pytest.raises(InvalidEvent):
+        make_settlement(created_at=datetime(2026, 9, 3, 12, 0))
+    sydney = timezone(timedelta(hours=10))
+    settlement = make_settlement(created_at=datetime(2026, 9, 3, 22, 0, tzinfo=sydney))
+    assert settlement.created_at.utcoffset() == timedelta(0)
+
+
+# --- Settlement decision events ---------------------------------------------
+
+
+def test_decision_event_holds_the_documented_fields() -> None:
+    assert [f.name for f in dataclasses.fields(SettlementDecisionEvent)] == [
+        "id",
+        "settlement_id",
+        "decision",
+        "decided_by",
+        "created_at",
+    ]
+
+
+def test_a_decision_never_restates_the_amount() -> None:
+    names = " ".join(f.name for f in dataclasses.fields(SettlementDecisionEvent))
+    assert "amount" not in names
+    assert "cents" not in names
+
+
+def test_a_decision_may_confirm_or_reject() -> None:
+    confirmed = make_decision(decision=SettlementState.CONFIRMED)
+    rejected = make_decision(decision=SettlementState.REJECTED)
+    assert confirmed.decision is SettlementState.CONFIRMED
+    assert rejected.decision is SettlementState.REJECTED
+
+
+def test_a_decision_of_pending_is_not_a_decision() -> None:
+    with pytest.raises(InvalidEvent):
+        make_decision(decision=SettlementState.PENDING)
+
+
+@pytest.mark.parametrize("decision", ["CONFIRMED", "confirmed", 1, None])
+def test_a_decision_must_be_a_settlement_state(decision: object) -> None:
+    with pytest.raises(TypeError):
+        make_decision(decision=decision)
+
+
+def test_decision_event_is_frozen_slotted_and_hashable() -> None:
+    decision = make_decision(id="decision-1")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        decision.decided_by = BOB
+    assert not hasattr(decision, "__dict__")
+    assert len({make_decision(id="decision-1"), make_decision(id="decision-1")}) == 1
+
+
+@pytest.mark.parametrize("field", ["id", "settlement_id", "decided_by"])
+def test_decision_id_fields_must_be_non_empty_strs(field: str) -> None:
+    with pytest.raises(InvalidEvent):
+        make_decision(**{field: ""})
+    with pytest.raises(TypeError):
+        make_decision(**{field: None})
+
+
+def test_decision_created_at_must_be_aware_and_is_stored_in_utc() -> None:
+    with pytest.raises(InvalidEvent):
+        make_decision(created_at=datetime(2026, 9, 3, 12, 0))
+    sydney = timezone(timedelta(hours=10))
+    decision = make_decision(created_at=datetime(2026, 9, 3, 22, 0, tzinfo=sydney))
+    assert decision.created_at.utcoffset() == timedelta(0)
+
+
+# --- Ordering and the documented conflict rule ------------------------------
+
+
+def test_ordering_key_is_created_at_then_id() -> None:
+    expense = make_expense()
+    assert ordering_key(expense) == (expense.created_at, expense.id)
+    settlement = make_settlement()
+    assert ordering_key(settlement) == (settlement.created_at, settlement.id)
+    decision = make_decision(id="decision-1")
+    assert ordering_key(decision) == (decision.created_at, decision.id)
+
+
+def test_ordering_key_breaks_a_timestamp_tie_by_id() -> None:
+    later = make_expense(id=ExpenseId("expense-b"))
+    earlier = make_expense(id=ExpenseId("expense-a"))
+    assert sorted([later, earlier], key=ordering_key) == [earlier, later]
+
+
+def test_ordering_key_sorts_by_time_first() -> None:
+    first = make_expense(id=ExpenseId("expense-z"), created_at=WHEN)
+    second = make_expense(
+        id=ExpenseId("expense-a"), created_at=WHEN + timedelta(seconds=1)
+    )
+    assert sorted([second, first], key=ordering_key) == [first, second]
+
+
+def test_the_module_documents_the_conflicting_decision_rule() -> None:
+    doc = (events_module.__doc__ or "").lower()
+    assert "earliest decision" in doc
+    assert "later decisions" in doc
+
+
+def test_the_module_documents_which_settlements_move_a_balance() -> None:
+    doc = (events_module.__doc__ or "").lower()
+    assert "only confirmed settlements" in doc
+    assert "pending settlement moves no balance" in doc
