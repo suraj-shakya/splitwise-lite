@@ -19,12 +19,22 @@ from pathlib import Path
 
 import pytest
 
-from splitwise_lite.money import Currency, DomainError
+from splitwise_lite.events import (
+    Allocation,
+    ExpenseEvent,
+    ExpenseId,
+    GroupId,
+    InvalidEvent,
+    MemberId,
+    ordering_key,
+)
+from splitwise_lite.money import MAX_CENTS, Currency, CurrencyMismatch, DomainError
 from splitwise_lite.store import (
     BUSY_TIMEOUT_MS,
     IN_MEMORY,
     MIN_SQLITE_VERSION,
     SCHEMA_VERSION,
+    AmountTooLarge,
     CannotOpenStore,
     ConstraintViolated,
     DuplicateRecord,
@@ -83,6 +93,7 @@ def test_store_error_is_a_domain_error() -> None:
 @pytest.mark.parametrize(
     "error",
     [
+        AmountTooLarge,
         CannotOpenStore,
         ConstraintViolated,
         DuplicateRecord,
@@ -488,3 +499,417 @@ def test_a_groups_name_is_not_trigger_locked(store: EventStore) -> None:
     a_group(store, "g1")
     raw(store, "UPDATE groups SET name = 'Renamed' WHERE id = 'g1'")
     assert store.get_group("g1").name == "Renamed"
+
+
+# --- Expenses ---------------------------------------------------------------
+
+
+def a_flat(store: EventStore, group_id: str = "g1", currency: Currency = AUD) -> None:
+    """A group with three members, ``<group_id>m1`` through ``<group_id>m3``."""
+    a_group(store, group_id, currency)
+    for index in (1, 2, 3):
+        a_member(store, f"{group_id}m{index}", group_id)
+
+
+def an_expense(
+    expense_id: str = "e1",
+    group_id: str = "g1",
+    currency: Currency = AUD,
+    payer_id: str = "g1m1",
+    total_cents: int = 1000,
+    allocations: tuple[Allocation, ...] | None = None,
+    description: str = "Dinner",
+    created_at: datetime | None = None,
+    created_by: str = "g1m1",
+) -> ExpenseEvent:
+    """An expense event, defaulting to $10 split evenly between two members."""
+    if allocations is None:
+        allocations = (
+            Allocation(MemberId(f"{group_id}m1"), total_cents // 2),
+            Allocation(MemberId(f"{group_id}m2"), total_cents - total_cents // 2),
+        )
+    return ExpenseEvent(
+        ExpenseId(expense_id),
+        GroupId(group_id),
+        currency,
+        MemberId(payer_id),
+        total_cents,
+        allocations,
+        description,
+        created_at if created_at is not None else at(),
+        MemberId(created_by),
+    )
+
+
+def test_an_expense_round_trips_equal(store: EventStore) -> None:
+    a_flat(store)
+    expense = an_expense()
+    store.append_expense(expense)
+    assert store.get_expense("e1") == expense
+
+
+def test_allocations_come_back_in_the_order_they_were_written(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    descending = (
+        Allocation(MemberId("g1m3"), 500),
+        Allocation(MemberId("g1m2"), 300),
+        Allocation(MemberId("g1m1"), 200),
+    )
+    store.append_expense(an_expense(allocations=descending))
+    assert store.get_expense("e1").allocations == descending
+
+
+def test_a_zero_cent_allocation_round_trips(store: EventStore) -> None:
+    a_flat(store)
+    shares = (
+        Allocation(MemberId("g1m1"), 1),
+        Allocation(MemberId("g1m2"), 1),
+        Allocation(MemberId("g1m3"), 0),
+    )
+    store.append_expense(an_expense(total_cents=2, allocations=shares))
+    assert store.get_expense("e1").allocations == shares
+
+
+def test_an_expense_whose_payer_is_not_a_participant_round_trips(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    shares = (Allocation(MemberId("g1m2"), 1000),)
+    expense = an_expense(payer_id="g1m1", allocations=shares)
+    store.append_expense(expense)
+    assert store.get_expense("e1") == expense
+
+
+def test_a_single_allocation_equal_to_the_total_round_trips(store: EventStore) -> None:
+    a_flat(store)
+    expense = an_expense(allocations=(Allocation(MemberId("g1m1"), 1000),))
+    store.append_expense(expense)
+    assert store.get_expense("e1") == expense
+
+
+def test_an_empty_description_round_trips_as_empty_text(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense(description=""))
+    assert store.get_expense("e1").description == ""
+    assert raw(store, "SELECT description FROM expense_events") == [("",)]
+
+
+def test_a_description_of_emoji_and_scripts_round_trips(store: EventStore) -> None:
+    a_flat(store)
+    description = "Pizza \U0001f355 with 日本語 and\na newline"
+    store.append_expense(an_expense(description=description))
+    assert store.get_expense("e1").description == description
+    # The cap on the column counts characters, not bytes: SQLite's length() on TEXT
+    # agrees with Python's len() even though this string is 42 bytes of UTF-8.
+    assert raw(store, "SELECT length(description) FROM expense_events") == [
+        (len(description),)
+    ]
+    assert len(description.encode("utf-8")) > len(description)
+
+
+def test_the_largest_storable_amount_round_trips_exactly(store: EventStore) -> None:
+    a_flat(store)
+    expense = an_expense(
+        total_cents=MAX_CENTS,
+        allocations=(Allocation(MemberId("g1m1"), MAX_CENTS),),
+    )
+    store.append_expense(expense)
+    loaded = store.get_expense("e1")
+    assert loaded.total_cents == MAX_CENTS
+    assert loaded.allocations[0].cents == MAX_CENTS
+    assert loaded == expense
+
+
+def test_a_total_above_the_bound_is_rejected_naming_the_field(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    over = an_expense(
+        total_cents=MAX_CENTS + 1,
+        allocations=(
+            Allocation(MemberId("g1m1"), MAX_CENTS),
+            Allocation(MemberId("g1m2"), 1),
+        ),
+    )
+    with pytest.raises(AmountTooLarge) as caught:
+        store.append_expense(over)
+    assert "total_cents" in str(caught.value)
+    assert str(MAX_CENTS) in str(caught.value)
+    assert count(store, "expense_events") == 0
+    assert count(store, "expense_allocations") == 0
+
+
+def test_an_allocation_above_the_bound_is_rejected_naming_the_field(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    over = an_expense(
+        total_cents=MAX_CENTS + 1,
+        allocations=(Allocation(MemberId("g1m1"), MAX_CENTS + 1),),
+    )
+    with pytest.raises(AmountTooLarge) as caught:
+        store.append_expense(over)
+    assert "cents" in str(caught.value)
+    assert str(MAX_CENTS) in str(caught.value)
+    assert count(store, "expense_events") == 0
+
+
+def test_a_float_reaching_the_store_raises_type_error(store: EventStore) -> None:
+    a_flat(store)
+    corrupted = an_expense()
+    object.__setattr__(corrupted, "total_cents", 1000.0)
+    with pytest.raises(TypeError):
+        store.append_expense(corrupted)
+    assert count(store, "expense_events") == 0
+
+
+def test_a_timestamp_from_another_offset_round_trips_as_utc(store: EventStore) -> None:
+    a_flat(store)
+    brisbane = timezone(timedelta(hours=10))
+    constructed = an_expense(created_at=datetime(2026, 9, 3, 20, 0, tzinfo=brisbane))
+    store.append_expense(constructed)
+    loaded = store.get_expense("e1")
+    assert loaded.created_at == constructed.created_at
+    assert loaded.created_at == at()
+    assert raw(store, "SELECT created_at FROM expense_events")[0][0].endswith("+00:00")
+
+
+def test_a_whole_second_timestamp_stores_six_fractional_digits(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    store.append_expense(an_expense(created_at=at()))
+    stored = raw(store, "SELECT created_at FROM expense_events")[0][0]
+    assert stored == "2026-09-03T10:00:00.000000+00:00"
+    assert len(stored) == 32
+
+
+def test_loading_re_checks_the_task_2_invariants(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    raw(
+        store,
+        "INSERT INTO expense_allocations (expense_id, position, member_id, cents) "
+        "VALUES ('e1', 2, 'g1m3', 700)",
+    )
+    with pytest.raises(InvalidEvent):
+        store.get_expense("e1")
+
+
+def test_allocations_live_in_their_own_table_not_a_blob(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    columns = {row[1] for row in raw(store, "PRAGMA table_info(expense_allocations)")}
+    assert columns == {"expense_id", "position", "member_id", "cents"}
+    assert count(store, "expense_allocations") == 2
+
+
+# --- Expense rejections -----------------------------------------------------
+
+
+def test_a_duplicate_expense_id_leaves_the_stored_row_untouched(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    store.append_expense(an_expense(description="First"))
+    before = raw(store, "SELECT * FROM expense_events")
+    with pytest.raises(DuplicateRecord) as caught:
+        store.append_expense(an_expense(description="Second", total_cents=4000))
+    assert "e1" in str(caught.value)
+    assert raw(store, "SELECT * FROM expense_events") == before
+    assert count(store, "expense_events") == 1
+    assert count(store, "expense_allocations") == 2
+
+
+def test_an_expense_in_the_wrong_currency_raises_currency_mismatch(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    with pytest.raises(CurrencyMismatch) as caught:
+        store.append_expense(an_expense(currency=NZD))
+    assert "AUD" in str(caught.value)
+    assert "NZD" in str(caught.value)
+    assert count(store, "expense_events") == 0
+
+
+def test_a_raw_insert_in_the_wrong_currency_is_rejected_by_the_foreign_key(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(
+            store,
+            "INSERT INTO expense_events (id, group_id, currency_code, payer_id, "
+            "total_cents, description, created_at, created_by) "
+            "VALUES ('e9', 'g1', 'NZD', 'g1m1', 1000, 'Sneaky', ?, 'g1m1')",
+            (_STAMP,),
+        )
+
+
+def test_an_expense_for_an_unknown_group_is_rejected(store: EventStore) -> None:
+    with pytest.raises(RecordNotFound):
+        store.append_expense(an_expense(group_id="ghost"))
+
+
+@pytest.mark.parametrize("field", ["payer_id", "created_by"])
+def test_a_payer_or_author_from_another_group_is_rejected(
+    store: EventStore, field: str
+) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    with pytest.raises(ConstraintViolated):
+        store.append_expense(an_expense(**{field: "g2m1"}))
+    assert count(store, "expense_events") == 0
+
+
+def test_an_allocation_member_from_another_group_is_rejected(store: EventStore) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    intruder = (
+        Allocation(MemberId("g1m1"), 500),
+        Allocation(MemberId("g2m1"), 500),
+    )
+    with pytest.raises(ConstraintViolated):
+        store.append_expense(an_expense(allocations=intruder))
+    assert count(store, "expense_events") == 0
+    assert count(store, "expense_allocations") == 0
+
+
+def test_a_raw_cross_group_allocation_is_rejected_by_the_database(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    store.append_expense(an_expense())
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(
+            store,
+            "INSERT INTO expense_allocations (expense_id, position, member_id, cents) "
+            "VALUES ('e1', 7, 'g2m1', 0)",
+        )
+
+
+def test_a_failed_append_leaves_nothing_behind(store: EventStore) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    with pytest.raises(StoreError):
+        store.append_expense(
+            an_expense(
+                allocations=(
+                    Allocation(MemberId("g1m1"), 999),
+                    Allocation(MemberId("g2m1"), 1),
+                )
+            )
+        )
+    assert raw(store, "SELECT * FROM expense_events WHERE id = 'e1'") == []
+    assert raw(store, "SELECT * FROM expense_allocations WHERE expense_id = 'e1'") == []
+
+
+# --- Append-only ------------------------------------------------------------
+
+
+APPEND_ONLY_TABLES = [
+    "expense_events",
+    "expense_allocations",
+    "settlement_events",
+    "settlement_decision_events",
+]
+
+
+def test_a_raw_update_of_an_expense_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    before = raw(store, "SELECT * FROM expense_events")
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        raw(store, "UPDATE expense_events SET total_cents = 1 WHERE id = 'e1'")
+    assert "expense_events" in str(caught.value)
+    assert raw(store, "SELECT * FROM expense_events") == before
+
+
+def test_a_raw_delete_of_an_expense_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        raw(store, "DELETE FROM expense_events WHERE id = 'e1'")
+    assert "expense_events" in str(caught.value)
+    assert count(store, "expense_events") == 1
+
+
+def test_a_raw_update_of_an_allocation_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    before = raw(store, "SELECT * FROM expense_allocations ORDER BY position")
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        raw(store, "UPDATE expense_allocations SET cents = 0")
+    assert "expense_allocations" in str(caught.value)
+    assert raw(store, "SELECT * FROM expense_allocations ORDER BY position") == before
+
+
+def test_a_raw_delete_of_an_allocation_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        raw(store, "DELETE FROM expense_allocations")
+    assert "expense_allocations" in str(caught.value)
+    assert count(store, "expense_allocations") == 2
+
+
+def test_no_event_table_carries_a_mutable_bookkeeping_column(store: EventStore) -> None:
+    forbidden = {"updated_at", "version", "is_deleted", "is_void", "revision"}
+    for table in APPEND_ONLY_TABLES:
+        columns = {row[1] for row in raw(store, f"PRAGMA table_info({table})")}
+        assert not columns & forbidden, table
+
+
+def test_no_table_stores_a_balance_or_a_running_total(store: EventStore) -> None:
+    tables = raw(
+        store,
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name NOT LIKE 'sqlite_%'",
+    )
+    for (table,) in tables:
+        for row in raw(store, f"PRAGMA table_info({table})"):
+            column = row[1]
+            assert "balance" not in column, f"{table}.{column}"
+            assert "running" not in column, f"{table}.{column}"
+            assert not column.startswith("net_"), f"{table}.{column}"
+
+
+# --- Listing and ordering ---------------------------------------------------
+
+
+def test_list_expenses_is_empty_for_a_group_with_no_events(store: EventStore) -> None:
+    a_flat(store)
+    assert store.list_expenses("g1") == ()
+
+
+def test_list_expenses_for_an_unknown_group_raises_not_found(store: EventStore) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.list_expenses("ghost")
+    assert "ghost" in str(caught.value)
+
+
+def test_list_expenses_is_in_ordering_key_order(store: EventStore) -> None:
+    a_flat(store)
+    written = [
+        an_expense("e5", created_at=at(1)),
+        an_expense("e1", created_at=at()),
+        an_expense("e3", created_at=at()),
+        an_expense("e2", created_at=at()),
+        an_expense("e4", created_at=at(0, microsecond=1)),
+    ]
+    for expense in written:
+        store.append_expense(expense)
+    assert list(store.list_expenses("g1")) == sorted(written, key=ordering_key)
+
+
+def test_each_group_reads_back_only_its_own_expenses(store: EventStore) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    store.append_expense(an_expense("e1", "g1", AUD, "g1m1", created_by="g1m1"))
+    store.append_expense(an_expense("e2", "g2", NZD, "g2m1", created_by="g2m1"))
+    assert [expense.id for expense in store.list_expenses("g1")] == ["e1"]
+    assert [expense.id for expense in store.list_expenses("g2")] == ["e2"]
+    assert store.list_expenses("g2")[0].currency == NZD

@@ -51,14 +51,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final, Iterator, NewType
 
-from .events import GroupId, MemberId
-from .money import Currency, DomainError
+from .events import (
+    Allocation,
+    ExpenseEvent,
+    ExpenseId,
+    GroupId,
+    MemberId,
+)
+from .money import MAX_CENTS, Currency, CurrencyMismatch, DomainError
 
 __all__ = [
     "BUSY_TIMEOUT_MS",
     "IN_MEMORY",
     "MIN_SQLITE_VERSION",
     "SCHEMA_VERSION",
+    "AmountTooLarge",
     "CannotOpenStore",
     "ConstraintViolated",
     "DuplicateRecord",
@@ -182,6 +189,17 @@ class ConstraintViolated(StoreError):
     """
 
 
+class AmountTooLarge(StoreError):
+    """Raised when a cent value would not fit the signed 64-bit column, naming both.
+
+    ``events.py`` puts no upper bound on an amount, and ``parse_amount`` only guards the
+    values that arrive as text, so an event built from cents directly can carry more
+    than ``MAX_CENTS``. SQLite answers that with ``OverflowError``, which says nothing
+    about which field was wrong; this says the field and the bound, and the append that
+    raised it leaves no rows behind.
+    """
+
+
 class StorageFailed(StoreError):
     """Raised when SQLite fails for any other reason, wrapping ``sqlite3.Error``.
 
@@ -273,6 +291,23 @@ def _encode_timestamp(value: datetime) -> str:
 def _decode_timestamp(text: str) -> datetime:
     """Parse stored timestamp text back into a timezone-aware UTC datetime."""
     return datetime.fromisoformat(text)
+
+
+def _require_storable_cents(value: object, field: str) -> int:
+    """Return ``value`` if it is an ``int`` that fits the cents column, else raise.
+
+    The column is a signed 64-bit ``INTEGER``, which is the same bound ``MAX_CENTS``
+    names, so this check and the database agree by construction. It runs before the
+    transaction opens, so a rejected amount never starts a write.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be an int, got {type(value).__name__}: {value!r}")
+    if value > MAX_CENTS:
+        raise AmountTooLarge(
+            f"{field} is {value}, above MAX_CENTS ({MAX_CENTS}), the largest value the "
+            f"cents column can hold"
+        )
+    return value
 
 
 def _params(*values: object) -> tuple[str | int | None, ...]:
@@ -686,6 +721,45 @@ _SELECT_MEMBERS_BY_GROUP: Final[str] = (
     "WHERE group_id = ? ORDER BY created_at, id"
 )
 
+_SELECT_GROUP_CURRENCY: Final[str] = "SELECT currency_code FROM groups WHERE id = ?"
+
+_INSERT_EXPENSE: Final[str] = (
+    "INSERT INTO expense_events (id, group_id, currency_code, payer_id, total_cents, "
+    "description, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+_INSERT_ALLOCATION: Final[str] = (
+    "INSERT INTO expense_allocations (expense_id, position, member_id, cents) "
+    "VALUES (?, ?, ?, ?)"
+)
+
+_EXISTS_EXPENSE: Final[str] = "SELECT 1 FROM expense_events WHERE id = ?"
+
+_SELECT_EXPENSE: Final[str] = (
+    "SELECT id, group_id, currency_code, payer_id, total_cents, description, "
+    "created_at, created_by FROM expense_events WHERE id = ?"
+)
+
+# The ordered reads below are the ones EXPLAIN QUERY PLAN is asserted against: the
+# (group_id, created_at, id) index has to serve both the filter and the sort, with no
+# temp B-tree, or the ledger sorts itself in memory on every read.
+_SELECT_EXPENSES_BY_GROUP: Final[str] = (
+    "SELECT id, group_id, currency_code, payer_id, total_cents, description, "
+    "created_at, created_by FROM expense_events WHERE group_id = ? "
+    "ORDER BY created_at, id"
+)
+
+_SELECT_ALLOCATIONS_BY_EXPENSE: Final[str] = (
+    "SELECT member_id, cents FROM expense_allocations WHERE expense_id = ? "
+    "ORDER BY position"
+)
+
+_SELECT_ALLOCATIONS_BY_GROUP: Final[str] = (
+    "SELECT a.expense_id, a.member_id, a.cents FROM expense_allocations AS a "
+    "JOIN expense_events AS e ON e.id = a.expense_id WHERE e.group_id = ? "
+    "ORDER BY a.expense_id, a.position"
+)
+
 
 def open_store(path: str | Path) -> EventStore:
     """Open, and create if necessary, the store at ``path``.
@@ -864,6 +938,28 @@ class EventStore:
         if row is None:
             raise RecordNotFound(f"no group with id {group_id!r}")
 
+    @staticmethod
+    def _require_group_currency(
+        connection: sqlite3.Connection, group_id: str, currency: Currency
+    ) -> None:
+        """Raise unless ``group_id`` exists and is denominated in ``currency``.
+
+        The same disagreement is impossible at the schema level too: an event's
+        ``(group_id, currency_code)`` is a composite foreign key into
+        ``groups (id, currency_code)``, so a raw ``INSERT`` in the wrong currency is
+        refused as well. This check exists so a caller gets ``CurrencyMismatch`` from
+        ``money.py``, naming both codes, rather than a foreign key message.
+        """
+        row = connection.execute(_SELECT_GROUP_CURRENCY, _params(group_id)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no group with id {group_id!r}")
+        stored = row[0]
+        if stored != currency.code:
+            raise CurrencyMismatch(
+                f"group {group_id!r} is denominated in {stored}, so it cannot hold an "
+                f"event in {currency.code}"
+            )
+
     # --- Writes: the reference tables ---------------------------------------
 
     def add_user(self, user: User) -> None:
@@ -972,6 +1068,73 @@ class EventStore:
                 ),
             )
 
+    # --- Writes: the log ----------------------------------------------------
+
+    def append_expense(self, expense: ExpenseEvent) -> None:
+        """Append one expense and all of its allocations, in a single transaction.
+
+        ``append_`` rather than ``add_`` because this table can only grow. There is no
+        method that updates or deletes an event, and a ``BEFORE UPDATE`` and
+        ``BEFORE DELETE`` trigger on both tables refuses to do it for anyone who tries
+        another way. Correcting an expense is task 17 appending a new event.
+
+        Allocations are written with their tuple position, because ``ExpenseEvent``
+        does not require them sorted and the order they were built in is part of the
+        value. A zero-cent allocation is written like any other: 2 cents across 3 people
+        is ``1, 1, 0``, and dropping the third share would drop a participant.
+
+        Nothing about the payer is checked against the allocations: someone can pay for
+        a meal they did not eat.
+
+        Raises:
+            TypeError: if ``expense`` is not an ``ExpenseEvent``, or if a field that
+                should be an ``int`` is not one.
+            AmountTooLarge: if the total or any allocation is above ``MAX_CENTS``.
+            RecordNotFound: if the group does not exist.
+            CurrencyMismatch: if the event's currency is not the group's currency.
+            DuplicateRecord: if an expense with this id has already been appended.
+            ConstraintViolated: if the payer, the author or an allocation member
+                belongs to another group, or any other database constraint refuses it.
+        """
+        if not isinstance(expense, ExpenseEvent):
+            raise TypeError(
+                f"append_expense takes an ExpenseEvent, got {type(expense).__name__}"
+            )
+        for allocation in expense.allocations:
+            _require_storable_cents(allocation.cents, "allocation cents")
+        _require_storable_cents(expense.total_cents, "expense total_cents")
+
+        with self._writing("appending an expense") as connection:
+            self._require_group_currency(
+                connection, expense.group_id, expense.currency
+            )
+            self._require_free(
+                connection,
+                _EXISTS_EXPENSE,
+                (expense.id,),
+                f"an expense with id {expense.id!r} has already been appended",
+            )
+            connection.execute(
+                _INSERT_EXPENSE,
+                _params(
+                    expense.id,
+                    expense.group_id,
+                    expense.currency.code,
+                    expense.payer_id,
+                    expense.total_cents,
+                    expense.description,
+                    _encode_timestamp(expense.created_at),
+                    expense.created_by,
+                ),
+            )
+            for position, allocation in enumerate(expense.allocations):
+                connection.execute(
+                    _INSERT_ALLOCATION,
+                    _params(
+                        expense.id, position, allocation.member_id, allocation.cents
+                    ),
+                )
+
     # --- Reads: the reference tables ----------------------------------------
 
     def get_user(self, user_id: str) -> User:
@@ -1028,6 +1191,91 @@ class EventStore:
                 _SELECT_MEMBERS_BY_GROUP, _params(group_id)
             ).fetchall()
         return tuple(_member_from_row(row) for row in rows)
+
+    # --- Reads: the log -----------------------------------------------------
+
+    def get_expense(self, expense_id: str) -> ExpenseEvent:
+        """Return the expense with ``expense_id``, allocations and all.
+
+        The loaded event is a real ``ExpenseEvent``, so every task 2 invariant is
+        re-checked here: a hand-edited database whose allocations no longer sum to
+        ``total_cents`` surfaces as ``InvalidEvent`` at load time rather than as a
+        quietly wrong balance.
+
+        Raises:
+            RecordNotFound: if no expense has that id.
+            InvalidEvent: if the stored rows no longer satisfy the event's invariants.
+        """
+        with self._reading("reading an expense") as connection:
+            row = connection.execute(_SELECT_EXPENSE, _params(expense_id)).fetchone()
+            if row is None:
+                raise RecordNotFound(f"no expense with id {expense_id!r}")
+            allocations = connection.execute(
+                _SELECT_ALLOCATIONS_BY_EXPENSE, _params(expense_id)
+            ).fetchall()
+        return _expense_from_rows(row, allocations)
+
+    def list_expenses(self, group_id: str) -> tuple[ExpenseEvent, ...]:
+        """Every expense in ``group_id``, in ascending ``ordering_key`` order.
+
+        Ascending is the only order the store has. Task 11's reverse-chronological feed
+        reverses in Python, which keeps one ordering rule in one place.
+
+        Raises:
+            RecordNotFound: if the group does not exist. A group that exists and has no
+                expenses returns an empty tuple: empty is a legitimate state, and a
+                typo in a group id must not read as "this group has spent nothing".
+        """
+        with self._reading("listing expenses") as connection:
+            self._require_group(connection, group_id)
+            rows = connection.execute(
+                _SELECT_EXPENSES_BY_GROUP, _params(group_id)
+            ).fetchall()
+            allocation_rows = connection.execute(
+                _SELECT_ALLOCATIONS_BY_GROUP, _params(group_id)
+            ).fetchall()
+        by_expense: dict[str, list[tuple[str, int]]] = {}
+        for expense_id, member_id, cents in allocation_rows:
+            by_expense.setdefault(expense_id, []).append((member_id, cents))
+        return tuple(
+            _expense_from_rows(row, by_expense.get(row[0], [])) for row in rows
+        )
+
+
+def _expense_from_rows(
+    row: tuple[str, str, str, str, int, str, str, str],
+    allocation_rows: list[tuple[str, int]] | tuple[tuple[str, int], ...],
+) -> ExpenseEvent:
+    """Build an ``ExpenseEvent`` from its row and its allocation rows.
+
+    The allocation rows arrive in ``position`` order, which is the order they were
+    written in, so the tuple that comes out is the tuple that went in rather than a
+    re-sorted one.
+    """
+    (
+        expense_id,
+        group_id,
+        currency_code,
+        payer_id,
+        total_cents,
+        description,
+        created_at,
+        created_by,
+    ) = row
+    return ExpenseEvent(
+        ExpenseId(expense_id),
+        GroupId(group_id),
+        Currency(currency_code),
+        MemberId(payer_id),
+        total_cents,
+        tuple(
+            Allocation(MemberId(member_id), cents)
+            for member_id, cents in allocation_rows
+        ),
+        description,
+        _decode_timestamp(created_at),
+        MemberId(created_by),
+    )
 
 
 def _user_from_row(row: tuple[str, str, str, str]) -> User:
