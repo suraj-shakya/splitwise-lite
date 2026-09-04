@@ -387,3 +387,197 @@ def test_an_expense_id_equal_to_a_settlement_id_is_not_a_duplicate() -> None:
     ]
     result = derive_balances(events, group_id=GROUP, currency=AUD)
     assert cents_of(result) == {ALI: 0, BO: 0}
+
+
+# --- Sign conventions -------------------------------------------------------
+
+
+def assert_consistent(balances: Balances) -> None:
+    """Assert the invariants that must hold for every fold, whatever the input.
+
+    Exact integer comparison throughout: a balance that is one cent out is wrong, and an
+    approximate assertion would not notice.
+    """
+    net = cents_of(balances)
+    debts = debts_of(balances)
+
+    assert sum(net.values()) == 0
+    assert all(amount > 0 for amount in debts.values())
+    for debtor, creditor in debts:
+        assert debtor != creditor
+        assert (creditor, debtor) not in debts
+
+    for member_id, position in net.items():
+        owed_to_them = sum(
+            amount for (_, creditor), amount in debts.items() if creditor == member_id
+        )
+        they_owe = sum(
+            amount for (debtor, _), amount in debts.items() if debtor == member_id
+        )
+        assert position == owed_to_them - they_owe
+
+    assert list(balances.net) == sorted(balances.net)
+    assert list(balances.pairwise) == sorted(balances.pairwise)
+
+
+def test_a_positive_net_means_the_group_owes_the_member() -> None:
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=3000, shares={ALI: 1000, BO: 1000, CASS: 1000})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert result.net_for(ALI) == Money(2000, AUD)
+    assert result.net_for(BO) == Money(-1000, AUD)
+    assert_consistent(result)
+
+
+def test_owed_between_is_signed_and_total() -> None:
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=1000, shares={BO: 1000})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert result.owed_between(BO, ALI) == Money(1000, AUD)
+    assert result.owed_between(ALI, BO) == Money(-1000, AUD)
+    assert result.owed_between(ALI, CASS) == Money(0, AUD)
+    assert result.owed_between(CASS, CASS) == Money(0, AUD)
+
+
+def test_iteration_ascends_by_member_and_by_pair() -> None:
+    result = derive_balances(
+        [
+            expense(
+                "e1",
+                payer=CASS,
+                total=300,
+                shares={CASS: 100, BO: 100, ALI: 100},
+            )
+        ],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert list(result.net) == [ALI, BO, CASS]
+    assert list(result.pairwise) == [(ALI, CASS), (BO, CASS)]
+
+
+# --- The expense fold -------------------------------------------------------
+
+
+def test_payer_is_a_participant() -> None:
+    """Ali pays 3000 for a dinner she also ate: her own share is no debt to herself."""
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=3000, shares={ALI: 1000, BO: 1000, CASS: 1000})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert cents_of(result) == {ALI: 2000, BO: -1000, CASS: -1000}
+    assert debts_of(result) == {(BO, ALI): 1000, (CASS, ALI): 1000}
+    assert_consistent(result)
+
+
+def test_payer_is_not_a_participant() -> None:
+    """Ali pays for a meal she did not eat, and holds a net entry without a share of her own."""
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=3000, shares={BO: 1500, CASS: 1500})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert cents_of(result) == {ALI: 3000, BO: -1500, CASS: -1500}
+    assert debts_of(result) == {(BO, ALI): 1500, (CASS, ALI): 1500}
+    assert_consistent(result)
+
+
+def test_the_payer_as_the_only_participant_owes_nobody_and_still_appears() -> None:
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=1000, shares={ALI: 1000})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert cents_of(result) == {ALI: 0}
+    assert debts_of(result) == {}
+    assert_consistent(result)
+
+
+def test_a_zero_cent_allocation_is_no_debt_but_keeps_its_member_in_net() -> None:
+    """Task 3 emits a zero share when a total is smaller than the head count."""
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=2, shares={ALI: 1, BO: 1, CASS: 0})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert cents_of(result) == {ALI: 1, BO: -1, CASS: 0}
+    assert debts_of(result) == {(BO, ALI): 1}
+    assert_consistent(result)
+
+
+def test_two_expenses_between_the_same_pair_accumulate_into_one_entry() -> None:
+    result = derive_balances(
+        [
+            expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
+            expense("e2", payer=ALI, total=500, shares={BO: 500}, minute=1),
+        ],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert debts_of(result) == {(BO, ALI): 1500}
+    assert cents_of(result) == {ALI: 1500, BO: -1500}
+    assert_consistent(result)
+
+
+def test_debts_in_opposite_directions_net_to_one_entry() -> None:
+    result = derive_balances(
+        [
+            expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
+            expense("e2", payer=BO, total=400, shares={ALI: 400}, minute=1),
+        ],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert debts_of(result) == {(BO, ALI): 600}
+    assert cents_of(result) == {ALI: 600, BO: -600}
+    assert_consistent(result)
+
+
+def test_debts_that_cancel_exactly_leave_no_entry() -> None:
+    result = derive_balances(
+        [
+            expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
+            expense("e2", payer=BO, total=1000, shares={ALI: 1000}, minute=1),
+        ],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert debts_of(result) == {}
+    assert cents_of(result) == {ALI: 0, BO: 0}
+    assert_consistent(result)
+
+
+def test_the_fold_credits_the_total_not_the_sum_of_the_allocations() -> None:
+    """The two are equal by construction, so the payer's credit is the whole total."""
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=999, shares={ALI: 333, BO: 333, CASS: 333})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert result.net_for(ALI) == Money(666, AUD)
+    assert_consistent(result)
+
+
+def test_a_three_way_cycle_stays_three_pairwise_entries() -> None:
+    """Task 4 never merges debts to shorten the list; that is task 5's job."""
+    result = derive_balances(
+        [
+            expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
+            expense("e2", payer=BO, total=1000, shares={CASS: 1000}, minute=1),
+            expense("e3", payer=CASS, total=1000, shares={ALI: 1000}, minute=2),
+        ],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert cents_of(result) == {ALI: 0, BO: 0, CASS: 0}
+    assert debts_of(result) == {
+        (ALI, CASS): 1000,
+        (BO, ALI): 1000,
+        (CASS, BO): 1000,
+    }
+    assert_consistent(result)
