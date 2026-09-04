@@ -57,7 +57,9 @@ MemberId = NewType("MemberId", str)
 
 GroupId = NewType("GroupId", str)
 """Identifies a group. Every event carries one, so folding two groups together is a
-detectable mistake rather than a silent one."""
+detectable mistake rather than a silent one, with one deliberate exception:
+``SettlementDecisionEvent`` inherits its group from the settlement it references. See
+"A settlement decision has no ``group_id`` of its own" in plans/spec.md."""
 
 ExpenseId = NewType("ExpenseId", str)
 """Identifies an expense event."""

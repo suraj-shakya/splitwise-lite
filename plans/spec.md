@@ -71,6 +71,15 @@ not to whoever happens to sort first.
 **Group currency is immutable** once the first expense lands. Otherwise historical
 amounts silently change meaning.
 
+**A settlement decision has no `group_id` of its own.** Every other event carries one,
+so folding events from two groups together is a detectable mistake rather than a silent
+one. A decision event carries only the id of the settlement it decides, and inherits
+that settlement's group: a decision whose settlement is absent from the log being read
+is not part of that group's events. That is the point of it, because an event that
+restates nothing about the settlement, neither amount nor group, cannot disagree with
+it. The cost is real and worth stating: this is the one event type whose group cannot
+be checked in isolation, so an orphaned decision is ignored rather than detected.
+
 ## Version one
 
 Ship:

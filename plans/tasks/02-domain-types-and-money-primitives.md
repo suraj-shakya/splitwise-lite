@@ -159,7 +159,11 @@ these types without reshaping them.
 - All domain exceptions subclass a single base error, so task 10 can map the whole family
   to one HTTP response without catching bare `Exception`.
 - Every event type carries `group_id`, so folding events from two groups together is a
-  detectable mistake rather than a silent one.
+  detectable mistake rather than a silent one, with one deliberate exception:
+  `SettlementDecisionEvent` carries only `settlement_id` and inherits its group from the
+  settlement it decides, so the field list above is correct as written. The rule and its
+  cost live in "A settlement decision has no `group_id` of its own" under Modelling notes
+  in `plans/spec.md`; read that before adding the field or restating this rule elsewhere.
 - A documented ordering key of `(created_at, id)` gives events a total order even when two
   timestamps are identical. Tasks 4, 11 and 16 all read events in order.
 - Constructing any invalid value raises. There is no "valid-ish" object that a later layer
