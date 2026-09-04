@@ -748,3 +748,199 @@ def test_the_two_sides_are_attributed_over_separate_books() -> None:
         receiver = sum(debt.amount.cents for debt in transfer.receiver_credits)
         assert payer == transfer.amount.cents
         assert receiver == transfer.amount.cents
+
+
+# --- Settling to zero, through task 4 ---------------------------------------
+
+
+def at(minute: int) -> datetime:
+    """A UTC timestamp ``minute`` minutes after a fixed instant.
+
+    Fixed rather than ``now()`` so the ordering key of every fixture is written down in
+    the test rather than depending on when the suite runs.
+    """
+    return EPOCH + timedelta(minutes=minute)
+
+
+def expense(
+    event_id: str,
+    *,
+    payer: MemberId,
+    total: int,
+    shares: dict[MemberId, int],
+    minute: int = 0,
+) -> ExpenseEvent:
+    """An expense event, with the boilerplate task 5 does not care about filled in."""
+    return ExpenseEvent(
+        id=ExpenseId(event_id),
+        group_id=GROUP,
+        currency=AUD,
+        payer_id=payer,
+        total_cents=total,
+        allocations=tuple(
+            Allocation(member_id, cents) for member_id, cents in shares.items()
+        ),
+        description="",
+        created_at=at(minute),
+        created_by=payer,
+    )
+
+
+def confirmed(
+    event_id: str, *, payer: MemberId, receiver: MemberId, amount: int, minute: int
+) -> list[LedgerEvent]:
+    """A settlement and the decision that makes it move money."""
+    return [
+        SettlementEvent(
+            id=SettlementId(event_id),
+            group_id=GROUP,
+            currency=AUD,
+            from_member_id=payer,
+            to_member_id=receiver,
+            amount_cents=amount,
+            created_at=at(minute),
+            created_by=payer,
+        ),
+        SettlementDecisionEvent(
+            id=f"d-{event_id}",
+            settlement_id=SettlementId(event_id),
+            decision=SettlementState.CONFIRMED,
+            decided_by=receiver,
+            created_at=at(minute),
+        ),
+    ]
+
+
+def ledger_for(pairwise: dict[Pair, int]) -> list[LedgerEvent]:
+    """A real event log that folds to exactly ``pairwise``.
+
+    One expense per debt: the creditor pays and the debtor is the only participant, so
+    the fold credits the creditor, debits the debtor and records the pair unchanged.
+    """
+    return [
+        expense(f"e{index}", payer=creditor, total=cents, shares={debtor: cents},
+                minute=index)
+        for index, ((debtor, creditor), cents) in enumerate(sorted(pairwise.items()))
+    ]
+
+
+def fold(events: list[LedgerEvent]) -> Balances:
+    return derive_balances(events, group_id=GROUP, currency=AUD)
+
+
+def paying_off(events: list[LedgerEvent], plan: TransferPlan) -> list[LedgerEvent]:
+    """The log plus one confirmed settlement per suggested transfer."""
+    settled = list(events)
+    for index, transfer in enumerate(plan.transfers):
+        settled += confirmed(
+            f"pay{index}",
+            payer=transfer.from_member_id,
+            receiver=transfer.to_member_id,
+            amount=transfer.amount.cents,
+            minute=1000 + index,
+        )
+    return settled
+
+
+@pytest.mark.parametrize(
+    "pairwise",
+    [CHAIN, OVERSIZED, CYCLE, NOT_MINIMAL, DIRECT_LAST],
+    ids=["chain", "oversized", "cycle", "not minimal", "direct last"],
+)
+def test_a_ledger_folds_to_the_hand_built_fixture_it_stands_for(
+    pairwise: dict,
+) -> None:
+    """The hand-built fixtures and the real fold agree, so the rest is comparable."""
+    assert fold(ledger_for(pairwise)) == from_debts(pairwise)
+
+
+@pytest.mark.parametrize(
+    "pairwise",
+    [CHAIN, OVERSIZED, CYCLE, NOT_MINIMAL, DIRECT_LAST],
+    ids=["chain", "oversized", "cycle", "not minimal", "direct last"],
+)
+def test_settling_every_suggested_transfer_zeroes_every_net_position(
+    pairwise: dict,
+) -> None:
+    """Checked through the real fold, never by re-implementing it."""
+    events = ledger_for(pairwise)
+    plan = simplify_debts(fold(events))
+    settled = fold(paying_off(events, plan))
+    assert set(cents(settled).values()) <= {0}
+
+
+def test_the_refold_leaves_live_debts_and_that_is_correct() -> None:
+    """Simplification converts a chain into a residual cycle.
+
+    ``pairwise`` is deliberately not asserted empty here or anywhere else in this file.
+    The three debts below cancel to zero in ``net``, which is the visible price of
+    netting, so an emptiness assertion would be asserting a bug.
+    """
+    events = ledger_for(CHAIN)
+    plan = simplify_debts(fold(events))
+    settled = fold(paying_off(events, plan))
+
+    assert {pair: money.cents for pair, money in settled.pairwise.items()} == {
+        (ALI, CASS): 400,
+        (BO, ALI): 400,
+        (CASS, BO): 400,
+    }
+    assert set(cents(settled).values()) == {0}
+
+
+@pytest.mark.parametrize(
+    "pairwise",
+    [CHAIN, OVERSIZED, CYCLE, NOT_MINIMAL, DIRECT_LAST],
+    ids=["chain", "oversized", "cycle", "not minimal", "direct last"],
+)
+def test_simplifying_the_refolded_balances_suggests_nothing_further(
+    pairwise: dict,
+) -> None:
+    """Zero net positions mean nothing left to suggest, live debts or not."""
+    events = ledger_for(pairwise)
+    settled = fold(paying_off(events, simplify_debts(fold(events))))
+    assert simplify_debts(settled).transfers == ()
+
+
+# --- The shapes that are easy to miss ---------------------------------------
+
+
+def flipped_by_an_over_payment() -> list[LedgerEvent]:
+    """Bo owes Ali 500 and settles 800, which task 4 documents as flipping the pair."""
+    return [
+        expense("e1", payer=ALI, total=500, shares={BO: 500}),
+        *confirmed("s1", payer=BO, receiver=ALI, amount=800, minute=1),
+    ]
+
+
+SHAPES: dict[str, list[LedgerEvent]] = {
+    "already settled": [],
+    "pure cycle": ledger_for(CYCLE),
+    "one debtor, several creditors": ledger_for(
+        {(BO, ALI): 300, (BO, CASS): 200, (BO, DEE): 100}
+    ),
+    "several debtors, one creditor": ledger_for(
+        {(ALI, DEE): 300, (BO, DEE): 200, (CASS, DEE): 100}
+    ),
+    "a zero net between two live debts": ledger_for(OVERSIZED),
+    "a settlement larger than the debt": flipped_by_an_over_payment(),
+}
+
+
+@pytest.mark.parametrize("shape", list(SHAPES), ids=list(SHAPES))
+def test_each_easily_missed_shape_holds_every_invariant(shape: str) -> None:
+    events = SHAPES[shape]
+    balances = fold(events)
+    plan = simplify_debts(balances)
+    assert_within_bounds(balances, plan)
+    assert_provenance_holds(balances, plan)
+    assert set(cents(fold(paying_off(events, plan))).values()) <= {0}
+
+
+def test_an_over_payment_flips_the_pair_and_the_plan_follows_it() -> None:
+    balances = fold(flipped_by_an_over_payment())
+    assert cents(balances) == {ALI: -300, BO: 300}
+    assert {pair: m.cents for pair, m in balances.pairwise.items()} == {(ALI, BO): 300}
+    only = simplify_debts(balances).transfers[0]
+    assert (only.from_member_id, only.to_member_id, only.amount.cents) == (ALI, BO, 300)
+    assert rows(only.payer_debts) == [((ALI, BO), 300, 300)]
