@@ -337,7 +337,9 @@ def _partition(
     )
 
 
-def _sorted_unique(events: list, label: str) -> tuple:
+def _sorted_unique[EventT: LedgerEvent](
+    events: list[EventT], label: str
+) -> tuple[EventT, ...]:
     """Return ``events`` sorted by ``ordering_key``, rejecting a repeated id.
 
     Sorting is by the total order ``events.py`` defines, never by list position and
