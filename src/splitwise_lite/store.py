@@ -60,10 +60,14 @@ __all__ = [
     "MIN_SQLITE_VERSION",
     "SCHEMA_VERSION",
     "CannotOpenStore",
+    "ConstraintViolated",
+    "DuplicateRecord",
     "EventStore",
     "Group",
     "InvalidRecord",
     "Member",
+    "RecordNotFound",
+    "StorageFailed",
     "StoreClosed",
     "StoreError",
     "UnsupportedSQLiteVersion",
@@ -147,6 +151,42 @@ class InvalidRecord(StoreError):
 
     The record equivalent of ``InvalidEvent``. A wrong Python type raises ``TypeError``
     instead: that is a programming error, not rejected input.
+    """
+
+
+class RecordNotFound(StoreError):
+    """Raised when a read names an id the store does not hold, naming that id.
+
+    A read never returns ``None``. A ``None`` folded into a balance is a wrong number
+    and travels a long way before anyone notices; an exception is a bug report. A list
+    read scoped to an unknown id raises this too, rather than returning an empty tuple,
+    so a typo cannot read as "this group has spent nothing".
+    """
+
+
+class DuplicateRecord(StoreError):
+    """Raised when a write would reuse an id, an email or a group's link to a user.
+
+    Appending an event whose id already exists lands here, and the existing row is left
+    exactly as it was. Nothing in this module upserts: an upsert on an event table is a
+    silent edit of history.
+    """
+
+
+class ConstraintViolated(StoreError):
+    """Raised when the database rejects a write, wrapping ``sqlite3.IntegrityError``.
+
+    A foreign key to another group's member, a cross-currency event, a description over
+    the column's cap, an attempt to update or delete an event: the database is what
+    catches these, and this is how the caller sees them.
+    """
+
+
+class StorageFailed(StoreError):
+    """Raised when SQLite fails for any other reason, wrapping ``sqlite3.Error``.
+
+    The catch-all that keeps the promise that no ``sqlite3`` exception escapes a public
+    method. The original is always attached as ``__cause__``.
     """
 
 
@@ -600,12 +640,50 @@ _FILE_PRAGMAS: Final[tuple[str, ...]] = (
     "PRAGMA journal_mode = WAL",
 )
 
+# Every statement the store issues, spelled out in full. No identifier and no value is
+# ever interpolated into one: the parameters are always bound, and always through
+# _params, which refuses anything that is not a str, an int or None.
+
+_INSERT_USER: Final[str] = (
+    "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, ?, ?)"
+)
+
+_INSERT_GROUP: Final[str] = (
+    "INSERT INTO groups (id, name, currency_code, created_at) VALUES (?, ?, ?, ?)"
+)
+
+_INSERT_MEMBER: Final[str] = (
+    "INSERT INTO members (id, group_id, display_name, user_id, created_at) "
+    "VALUES (?, ?, ?, ?, ?)"
+)
+
+_EXISTS_USER: Final[str] = "SELECT 1 FROM users WHERE id = ?"
+_EXISTS_USER_EMAIL: Final[str] = "SELECT 1 FROM users WHERE email = ?"
+_EXISTS_GROUP: Final[str] = "SELECT 1 FROM groups WHERE id = ?"
+_EXISTS_MEMBER: Final[str] = "SELECT 1 FROM members WHERE id = ?"
+_EXISTS_MEMBER_FOR_USER: Final[str] = (
+    "SELECT 1 FROM members WHERE group_id = ? AND user_id = ?"
+)
+
+_SELECT_USER: Final[str] = (
+    "SELECT id, email, display_name, created_at FROM users WHERE id = ?"
+)
+
 _SELECT_GROUP: Final[str] = (
     "SELECT id, name, currency_code, created_at FROM groups WHERE id = ?"
 )
 
 _SELECT_GROUPS: Final[str] = (
     "SELECT id, name, currency_code, created_at FROM groups ORDER BY created_at, id"
+)
+
+_SELECT_MEMBER: Final[str] = (
+    "SELECT id, group_id, display_name, user_id, created_at FROM members WHERE id = ?"
+)
+
+_SELECT_MEMBERS_BY_GROUP: Final[str] = (
+    "SELECT id, group_id, display_name, user_id, created_at FROM members "
+    "WHERE group_id = ? ORDER BY created_at, id"
 )
 
 
@@ -733,10 +811,188 @@ class EventStore:
         connection = self._require_open()
         try:
             yield connection
+        except sqlite3.IntegrityError as error:
+            raise ConstraintViolated(f"{what} failed: {error}") from error
         except sqlite3.Error as error:
-            raise StoreError(f"{what} failed: {error}") from error
+            raise StorageFailed(f"{what} failed: {error}") from error
 
-    # --- Reads --------------------------------------------------------------
+    @contextmanager
+    def _writing(self, what: str) -> Iterator[sqlite3.Connection]:
+        """Yield the connection inside one ``BEGIN IMMEDIATE`` transaction.
+
+        ``IMMEDIATE`` rather than the default deferred start, so the write lock is taken
+        before the first statement rather than part-way through: a duplicate check and
+        the insert it guards then see the same database, and a second writer waits out
+        its ``busy_timeout`` instead of failing at the moment it tries to upgrade.
+
+        Any exception rolls the whole transaction back, so a failed append leaves
+        nothing behind, and every ``sqlite3`` failure leaves as a ``StoreError``.
+        """
+        connection = self._require_open()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield connection
+        except sqlite3.IntegrityError as error:
+            connection.execute("ROLLBACK")
+            raise ConstraintViolated(f"{what} failed: {error}") from error
+        except sqlite3.Error as error:
+            connection.execute("ROLLBACK")
+            raise StorageFailed(f"{what} failed: {error}") from error
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
+        connection.execute("COMMIT")
+
+    @staticmethod
+    def _require_free(
+        connection: sqlite3.Connection, statement: str, values: tuple, message: str
+    ) -> None:
+        """Raise ``DuplicateRecord`` if ``statement`` already matches a row.
+
+        Called inside the write transaction, so between this check and the insert it
+        guards nothing else can write. The ``UNIQUE`` constraints in the schema are the
+        backstop; this is what turns them into a named error instead of a raw
+        ``IntegrityError``.
+        """
+        if connection.execute(statement, _params(*values)).fetchone() is not None:
+            raise DuplicateRecord(message)
+
+    @staticmethod
+    def _require_group(connection: sqlite3.Connection, group_id: str) -> None:
+        """Raise ``RecordNotFound`` unless ``group_id`` names a stored group."""
+        row = connection.execute(_EXISTS_GROUP, _params(group_id)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no group with id {group_id!r}")
+
+    # --- Writes: the reference tables ---------------------------------------
+
+    def add_user(self, user: User) -> None:
+        """Store a new user. Ids and email addresses are unique across the store.
+
+        Identity only, per task 6's scope: task 7 adds credentials, sessions and the
+        lookups that go with them as schema version 2.
+
+        Raises:
+            TypeError: if ``user`` is not a ``User``.
+            DuplicateRecord: if the id or the email address is already taken.
+        """
+        if not isinstance(user, User):
+            raise TypeError(f"add_user takes a User, got {type(user).__name__}")
+        with self._writing("adding a user") as connection:
+            self._require_free(
+                connection,
+                _EXISTS_USER,
+                (user.id,),
+                f"a user with id {user.id!r} already exists",
+            )
+            self._require_free(
+                connection,
+                _EXISTS_USER_EMAIL,
+                (user.email,),
+                f"a user with email {user.email!r} already exists",
+            )
+            connection.execute(
+                _INSERT_USER,
+                _params(
+                    user.id,
+                    user.email,
+                    user.display_name,
+                    _encode_timestamp(user.created_at),
+                ),
+            )
+
+    def add_group(self, group: Group) -> None:
+        """Store a new group, fixing its currency for the life of the group.
+
+        The currency is written once here and a trigger refuses every later change to
+        it, so an amount in the log can never quietly change meaning.
+
+        Raises:
+            TypeError: if ``group`` is not a ``Group``.
+            DuplicateRecord: if the id is already taken.
+        """
+        if not isinstance(group, Group):
+            raise TypeError(f"add_group takes a Group, got {type(group).__name__}")
+        with self._writing("adding a group") as connection:
+            self._require_free(
+                connection,
+                _EXISTS_GROUP,
+                (group.id,),
+                f"a group with id {group.id!r} already exists",
+            )
+            connection.execute(
+                _INSERT_GROUP,
+                _params(
+                    group.id,
+                    group.name,
+                    group.currency.code,
+                    _encode_timestamp(group.created_at),
+                ),
+            )
+
+    def add_member(self, member: Member) -> None:
+        """Store a new member of an existing group.
+
+        ``user_id`` may be ``None``, because task 9 seeds a member list before those
+        people have accounts. At most one member per group may point at a given user,
+        which a partial unique index enforces in the database as well as here. Two
+        members of one group may share a display name.
+
+        Raises:
+            TypeError: if ``member`` is not a ``Member``.
+            DuplicateRecord: if the id is taken, or the group already has a member
+                linked to that user.
+            ConstraintViolated: if the group or the linked user does not exist.
+        """
+        if not isinstance(member, Member):
+            raise TypeError(f"add_member takes a Member, got {type(member).__name__}")
+        with self._writing("adding a member") as connection:
+            self._require_free(
+                connection,
+                _EXISTS_MEMBER,
+                (member.id,),
+                f"a member with id {member.id!r} already exists",
+            )
+            if member.user_id is not None:
+                self._require_free(
+                    connection,
+                    _EXISTS_MEMBER_FOR_USER,
+                    (member.group_id, member.user_id),
+                    f"group {member.group_id!r} already has a member linked to user "
+                    f"{member.user_id!r}",
+                )
+            connection.execute(
+                _INSERT_MEMBER,
+                _params(
+                    member.id,
+                    member.group_id,
+                    member.display_name,
+                    member.user_id,
+                    _encode_timestamp(member.created_at),
+                ),
+            )
+
+    # --- Reads: the reference tables ----------------------------------------
+
+    def get_user(self, user_id: str) -> User:
+        """Return the user with ``user_id``, or raise ``RecordNotFound`` naming it."""
+        with self._reading("reading a user") as connection:
+            row = connection.execute(_SELECT_USER, _params(user_id)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no user with id {user_id!r}")
+        return _user_from_row(row)
+
+    def get_group(self, group_id: str) -> Group:
+        """Return the group with ``group_id``, or raise ``RecordNotFound`` naming it.
+
+        The returned ``currency`` is a ``Currency``, so it compares directly against the
+        currency on an event without either side reaching for a code string.
+        """
+        with self._reading("reading a group") as connection:
+            row = connection.execute(_SELECT_GROUP, _params(group_id)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no group with id {group_id!r}")
+        return _group_from_row(row)
 
     def list_groups(self) -> tuple[Group, ...]:
         """Every group, in ``(created_at, id)`` order.
@@ -747,6 +1003,49 @@ class EventStore:
         with self._reading("listing groups") as connection:
             rows = connection.execute(_SELECT_GROUPS).fetchall()
         return tuple(_group_from_row(row) for row in rows)
+
+    def get_member(self, member_id: str) -> Member:
+        """Return the member with ``member_id``, or raise ``RecordNotFound`` naming it.
+
+        Member ids are unique across the store, not only within a group, so no group id
+        is needed to resolve one.
+        """
+        with self._reading("reading a member") as connection:
+            row = connection.execute(_SELECT_MEMBER, _params(member_id)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no member with id {member_id!r}")
+        return _member_from_row(row)
+
+    def list_members(self, group_id: str) -> tuple[Member, ...]:
+        """Every member of ``group_id``, in ``(created_at, id)`` order.
+
+        A group with no members yet is legal and returns an empty tuple. An unknown
+        group id raises instead, so a typo is never read as an empty flat.
+        """
+        with self._reading("listing members") as connection:
+            self._require_group(connection, group_id)
+            rows = connection.execute(
+                _SELECT_MEMBERS_BY_GROUP, _params(group_id)
+            ).fetchall()
+        return tuple(_member_from_row(row) for row in rows)
+
+
+def _user_from_row(row: tuple[str, str, str, str]) -> User:
+    """Build a ``User`` from its row, re-checking every invariant on the way out."""
+    user_id, email, display_name, created_at = row
+    return User(UserId(user_id), email, display_name, _decode_timestamp(created_at))
+
+
+def _member_from_row(row: tuple[str, str, str, str | None, str]) -> Member:
+    """Build a ``Member`` from its row, re-checking every invariant on the way out."""
+    member_id, group_id, display_name, user_id, created_at = row
+    return Member(
+        MemberId(member_id),
+        GroupId(group_id),
+        display_name,
+        None if user_id is None else UserId(user_id),
+        _decode_timestamp(created_at),
+    )
 
 
 def _group_from_row(row: tuple[str, str, str, str]) -> Group:

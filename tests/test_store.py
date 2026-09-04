@@ -26,10 +26,14 @@ from splitwise_lite.store import (
     MIN_SQLITE_VERSION,
     SCHEMA_VERSION,
     CannotOpenStore,
+    ConstraintViolated,
+    DuplicateRecord,
     EventStore,
     Group,
     InvalidRecord,
     Member,
+    RecordNotFound,
+    StorageFailed,
     StoreClosed,
     StoreError,
     UnsupportedSchemaVersion,
@@ -43,6 +47,7 @@ AUD = Currency("AUD")
 NZD = Currency("NZD")
 
 T0 = datetime(2026, 9, 3, 10, 0, 0, tzinfo=timezone.utc)
+_STAMP = "2026-09-03T10:00:00.000000+00:00"
 
 
 def at(seconds: int = 0, *, microsecond: int = 0) -> datetime:
@@ -79,7 +84,11 @@ def test_store_error_is_a_domain_error() -> None:
     "error",
     [
         CannotOpenStore,
+        ConstraintViolated,
+        DuplicateRecord,
         InvalidRecord,
+        RecordNotFound,
+        StorageFailed,
         StoreClosed,
         UnsupportedSQLiteVersion,
         UnsupportedSchemaVersion,
@@ -284,3 +293,198 @@ def test_the_context_manager_closes_on_an_exception(tmp_path: Path) -> None:
             raise ZeroDivisionError
     with pytest.raises(StoreClosed):
         opened.list_groups()
+
+
+# --- Users, groups and members ----------------------------------------------
+
+
+def a_group(store: EventStore, group_id: str = "g1", currency: Currency = AUD) -> Group:
+    """Add and return a group."""
+    group = Group(group_id, f"Flat {group_id}", currency, at())
+    store.add_group(group)
+    return group
+
+
+def a_member(
+    store: EventStore,
+    member_id: str = "m1",
+    group_id: str = "g1",
+    user_id: str | None = None,
+) -> Member:
+    """Add and return a member of ``group_id``."""
+    member = Member(member_id, group_id, f"Name {member_id}", user_id, at())
+    store.add_member(member)
+    return member
+
+
+def test_a_user_round_trips(store: EventStore) -> None:
+    user = User(UserId("u1"), "sam@example.com", "Sam", at())
+    store.add_user(user)
+    assert store.get_user(UserId("u1")) == user
+
+
+def test_a_group_round_trips(store: EventStore) -> None:
+    group = a_group(store)
+    assert store.get_group("g1") == group
+    assert store.get_group("g1").currency == AUD
+
+
+def test_a_member_round_trips_with_and_without_a_user(store: EventStore) -> None:
+    a_group(store)
+    store.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+    unlinked = a_member(store, "m1")
+    linked = a_member(store, "m2", user_id="u1")
+    assert store.get_member("m1") == unlinked
+    assert store.get_member("m1").user_id is None
+    assert store.get_member("m2") == linked
+
+
+def test_list_groups_is_in_created_at_then_id_order(store: EventStore) -> None:
+    store.add_group(Group("g2", "Later", AUD, at(1)))
+    store.add_group(Group("g1", "Same time b", AUD, at()))
+    store.add_group(Group("g0", "Same time a", AUD, at()))
+    assert [group.id for group in store.list_groups()] == ["g0", "g1", "g2"]
+
+
+def test_list_members_is_empty_for_a_group_with_no_members(store: EventStore) -> None:
+    a_group(store)
+    assert store.list_members("g1") == ()
+
+
+def test_list_members_returns_only_that_groups_members(store: EventStore) -> None:
+    a_group(store, "g1")
+    a_group(store, "g2", NZD)
+    a_member(store, "m1", "g1")
+    a_member(store, "m2", "g2")
+    assert [member.id for member in store.list_members("g1")] == ["m1"]
+    assert [member.id for member in store.list_members("g2")] == ["m2"]
+
+
+def test_two_members_of_one_group_may_share_a_display_name(store: EventStore) -> None:
+    a_group(store)
+    store.add_member(Member("m1", "g1", "Sam", None, at()))
+    store.add_member(Member("m2", "g1", "Sam", None, at()))
+    assert [member.display_name for member in store.list_members("g1")] == ["Sam", "Sam"]
+
+
+def test_one_user_maps_to_at_most_one_member_per_group(store: EventStore) -> None:
+    a_group(store)
+    store.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+    a_member(store, "m1", "g1", "u1")
+    with pytest.raises(DuplicateRecord):
+        a_member(store, "m2", "g1", "u1")
+    assert len(store.list_members("g1")) == 1
+
+
+def test_the_same_user_may_be_a_member_of_two_groups(store: EventStore) -> None:
+    a_group(store, "g1")
+    a_group(store, "g2", NZD)
+    store.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+    a_member(store, "m1", "g1", "u1")
+    a_member(store, "m2", "g2", "u1")
+    assert store.get_member("m2").user_id == "u1"
+
+
+def test_a_raw_second_link_to_one_user_is_rejected_by_the_index(
+    store: EventStore,
+) -> None:
+    a_group(store)
+    store.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+    a_member(store, "m1", "g1", "u1")
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(
+            store,
+            "INSERT INTO members (id, group_id, display_name, user_id, created_at) "
+            "VALUES ('m2', 'g1', 'Sam', 'u1', ?)",
+            (_STAMP,),
+        )
+
+
+# --- Duplicates and missing rows --------------------------------------------
+
+
+def test_a_duplicate_user_id_is_rejected_and_leaves_the_row_alone(
+    store: EventStore,
+) -> None:
+    original = User(UserId("u1"), "sam@example.com", "Sam", at())
+    store.add_user(original)
+    with pytest.raises(DuplicateRecord) as caught:
+        store.add_user(User(UserId("u1"), "other@example.com", "Other", at(5)))
+    assert "u1" in str(caught.value)
+    assert store.get_user(UserId("u1")) == original
+    assert count(store, "users") == 1
+
+
+def test_a_duplicate_email_is_rejected(store: EventStore) -> None:
+    store.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+    with pytest.raises(DuplicateRecord) as caught:
+        store.add_user(User(UserId("u2"), "sam@example.com", "Sam Again", at()))
+    assert "sam@example.com" in str(caught.value)
+    assert count(store, "users") == 1
+
+
+def test_a_duplicate_group_id_is_rejected(store: EventStore) -> None:
+    a_group(store)
+    with pytest.raises(DuplicateRecord):
+        store.add_group(Group("g1", "Another flat", NZD, at()))
+    assert store.get_group("g1").currency == AUD
+
+
+def test_a_duplicate_member_id_is_rejected(store: EventStore) -> None:
+    a_group(store)
+    a_member(store, "m1")
+    with pytest.raises(DuplicateRecord):
+        a_member(store, "m1")
+    assert count(store, "members") == 1
+
+
+@pytest.mark.parametrize(
+    "read", ["get_user", "get_group", "get_member", "list_members"]
+)
+def test_reading_an_unknown_id_raises_not_found_naming_it(
+    store: EventStore, read: str
+) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        getattr(store, read)("nope")
+    assert "nope" in str(caught.value)
+
+
+def test_a_member_of_an_unknown_group_is_rejected_as_a_store_error(
+    store: EventStore,
+) -> None:
+    with pytest.raises(StoreError) as caught:
+        a_member(store, "m1", "ghost")
+    assert not isinstance(caught.value, sqlite3.Error)
+
+
+def test_a_member_linked_to_an_unknown_user_is_rejected(store: EventStore) -> None:
+    a_group(store)
+    with pytest.raises(StoreError):
+        a_member(store, "m1", "g1", "ghost")
+    assert count(store, "members") == 0
+
+
+# --- Currency immutability --------------------------------------------------
+
+
+def test_a_raw_update_of_a_groups_currency_is_rejected(store: EventStore) -> None:
+    a_group(store, "g1", AUD)
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        raw(store, "UPDATE groups SET currency_code = 'NZD' WHERE id = 'g1'")
+    assert "currency" in str(caught.value)
+    assert store.get_group("g1").currency == AUD
+
+
+def test_the_currency_trigger_fires_even_for_a_group_with_no_expenses(
+    store: EventStore,
+) -> None:
+    a_group(store, "g1", AUD)
+    assert count(store, "expense_events") == 0
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, "UPDATE groups SET currency_code = 'AUD' WHERE id = 'g1'")
+
+
+def test_a_groups_name_is_not_trigger_locked(store: EventStore) -> None:
+    a_group(store, "g1")
+    raw(store, "UPDATE groups SET name = 'Renamed' WHERE id = 'g1'")
+    assert store.get_group("g1").name == "Renamed"
