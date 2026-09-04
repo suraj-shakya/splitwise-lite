@@ -2053,6 +2053,7 @@ def a_session(
 
 def test_session_is_frozen_slotted_and_compares_by_value() -> None:
     assert Session.__dataclass_params__.frozen is True
+    assert Session.__slots__
     assert a_session() == a_session()
     assert a_session() != a_session(OTHER_TOKEN_HASH)
 
