@@ -1645,3 +1645,25 @@ def test_a_busy_database_surfaces_as_a_store_error(tmp_path: Path) -> None:
             raw(holder, "ROLLBACK")
         blocked.append_expense(an_expense())
         assert blocked.get_expense("e1").total_cents == 1000
+
+
+def test_a_float_in_any_field_is_refused_before_it_is_bound(store: EventStore) -> None:
+    """The bind guard, not the cents check: description is never checked as a number."""
+    a_flat(store)
+    corrupted = an_expense()
+    object.__setattr__(corrupted, "description", 12.5)
+    with pytest.raises(TypeError):
+        store.append_expense(corrupted)
+    assert count(store, "expense_events") == 0
+
+
+@pytest.mark.parametrize("value", [12.5, 12.0, b"bytes", at(), SettlementState.CONFIRMED])
+def test_only_text_integers_and_null_may_be_bound(value: object) -> None:
+    with pytest.raises(TypeError):
+        store_module._params("ok", 1, None, value)
+    assert store_module._params("ok", 1, None) == ("ok", 1, None)
+
+
+def test_a_bool_is_not_bound_as_an_integer() -> None:
+    with pytest.raises(TypeError):
+        store_module._params(True)
