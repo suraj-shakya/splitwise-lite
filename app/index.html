@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Feed - Splitwise Lite</title>
+<meta name="description" content="Shared expense ledger for small groups.">
+<meta name="theme-color" content="#0f766e">
+<meta name="mobile-web-app-capable" content="yes">
+<!-- Chrome warns about the Apple meta alone, and older iOS needs it, so both stay. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Splitwise">
+<!-- manifest.json, not .webmanifest: Python's mimetypes has no mapping for
+     .webmanifest, so a standard library static server would hand it back as
+     application/octet-stream. Browsers accept application/json for a manifest. -->
+<link rel="manifest" href="manifest.json">
+<!-- An explicit icon, so no route ever 404s asking for /favicon.ico. -->
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<!-- iOS prefers this over the manifest icons, and older iOS ignores them entirely. -->
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- An installed app has no browser chrome, so this header is the only thing
+     telling the user what they are looking at. -->
+<header class="topbar">
+  <p class="wordmark">Splitwise Lite</p>
+</header>
+
+<main class="content">
+
+  <noscript class="noscript">
+    This app needs JavaScript. The three screens are switched inside the browser, so
+    without it you would see an empty frame.
+  </noscript>
+
+  <section class="screen screen--feed" id="screen-feed" aria-labelledby="title-feed">
+    <h1 class="screen-title" id="title-feed" tabindex="-1">Feed</h1>
+    <p class="lede">Every expense the group has recorded, newest first.</p>
+    <div class="card">
+      <p class="marker">Placeholder. Task 11 fills this with the expense feed.</p>
+      <ul class="notes">
+        <li>Each entry says who paid and how the cost was shared.</li>
+        <li>Nothing is recorded yet, so there is nothing to show.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="screen screen--add" id="screen-add" aria-labelledby="title-add" hidden>
+    <h1 class="screen-title" id="title-add" tabindex="-1">Add</h1>
+    <p class="lede">Record a new expense and choose how it is shared.</p>
+    <div class="card">
+      <p class="marker">Placeholder. Task 10 fills this with expense entry.</p>
+      <ul class="notes">
+        <li>Entry has to be quick, so this screen sits in the middle of the nav.</li>
+        <li>There is no form here yet, and no data behind it.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="screen screen--balances" id="screen-balances" aria-labelledby="title-balances" hidden>
+    <h1 class="screen-title" id="title-balances" tabindex="-1">Balances</h1>
+    <p class="lede">Who owes who, and the trail of confirmed payments behind it.</p>
+    <div class="card">
+      <p class="marker">Placeholder. Task 12 fills this with balances and settle up.</p>
+      <ul class="notes">
+        <li>Figures will be derived from recorded events, never stored.</li>
+        <li>Nothing is derived yet, so no figures appear.</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<!-- Plain anchors: routing is anchors plus a hashchange listener, with no click
+     handler, so Back, forward, reload and deep links work without any code. Add
+     sits in the middle because it is the most frequent action and the easiest
+     thumb reach. -->
+<nav class="tabbar" aria-label="Screens">
+  <a class="tab" href="#/feed" aria-current="page">Feed</a>
+  <a class="tab" href="#/add">Add</a>
+  <a class="tab" href="#/balances">Balances</a>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
