@@ -26,6 +26,10 @@ from splitwise_lite.events import (
     GroupId,
     InvalidEvent,
     MemberId,
+    SettlementDecisionEvent,
+    SettlementEvent,
+    SettlementId,
+    SettlementState,
     ordering_key,
 )
 from splitwise_lite.money import MAX_CENTS, Currency, CurrencyMismatch, DomainError
@@ -913,3 +917,328 @@ def test_each_group_reads_back_only_its_own_expenses(store: EventStore) -> None:
     assert [expense.id for expense in store.list_expenses("g1")] == ["e1"]
     assert [expense.id for expense in store.list_expenses("g2")] == ["e2"]
     assert store.list_expenses("g2")[0].currency == NZD
+
+
+# --- Settlements and decisions ----------------------------------------------
+
+
+def a_settlement(
+    settlement_id: str = "s1",
+    group_id: str = "g1",
+    currency: Currency = AUD,
+    from_member_id: str = "g1m1",
+    to_member_id: str = "g1m2",
+    amount_cents: int = 4000,
+    created_at: datetime | None = None,
+    created_by: str = "g1m1",
+) -> SettlementEvent:
+    """A settlement event, defaulting to $40 from the first member to the second."""
+    return SettlementEvent(
+        SettlementId(settlement_id),
+        GroupId(group_id),
+        currency,
+        MemberId(from_member_id),
+        MemberId(to_member_id),
+        amount_cents,
+        created_at if created_at is not None else at(),
+        MemberId(created_by),
+    )
+
+
+def a_decision(
+    decision_id: str = "d1",
+    settlement_id: str = "s1",
+    decision: SettlementState = SettlementState.CONFIRMED,
+    decided_by: str = "g1m2",
+    created_at: datetime | None = None,
+) -> SettlementDecisionEvent:
+    """A decision event, defaulting to the receiver confirming."""
+    return SettlementDecisionEvent(
+        decision_id,
+        SettlementId(settlement_id),
+        decision,
+        MemberId(decided_by),
+        created_at if created_at is not None else at(1),
+    )
+
+
+def test_a_settlement_round_trips_equal(store: EventStore) -> None:
+    a_flat(store)
+    settlement = a_settlement()
+    store.append_settlement(settlement)
+    assert store.list_settlements("g1") == (settlement,)
+
+
+def test_a_settlement_in_the_wrong_currency_raises_currency_mismatch(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    with pytest.raises(CurrencyMismatch) as caught:
+        store.append_settlement(a_settlement(currency=NZD))
+    assert "AUD" in str(caught.value)
+    assert "NZD" in str(caught.value)
+    assert count(store, "settlement_events") == 0
+
+
+@pytest.mark.parametrize("field", ["from_member_id", "to_member_id", "created_by"])
+def test_a_settlement_naming_another_groups_member_is_rejected(
+    store: EventStore, field: str
+) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    with pytest.raises(ConstraintViolated):
+        store.append_settlement(a_settlement(**{field: "g2m1"}))
+    assert count(store, "settlement_events") == 0
+
+
+def test_a_duplicate_settlement_id_leaves_the_stored_row_untouched(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    before = raw(store, "SELECT * FROM settlement_events")
+    with pytest.raises(DuplicateRecord) as caught:
+        store.append_settlement(a_settlement(amount_cents=9999))
+    assert "s1" in str(caught.value)
+    assert raw(store, "SELECT * FROM settlement_events") == before
+
+
+def test_a_settlement_amount_above_the_bound_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    with pytest.raises(AmountTooLarge) as caught:
+        store.append_settlement(a_settlement(amount_cents=MAX_CENTS + 1))
+    assert "amount_cents" in str(caught.value)
+    assert str(MAX_CENTS) in str(caught.value)
+    assert count(store, "settlement_events") == 0
+
+
+def test_the_largest_storable_settlement_round_trips(store: EventStore) -> None:
+    a_flat(store)
+    settlement = a_settlement(amount_cents=MAX_CENTS)
+    store.append_settlement(settlement)
+    assert store.list_settlements("g1")[0].amount_cents == MAX_CENTS
+
+
+def test_list_settlements_is_scoped_and_ordered(store: EventStore) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    written = [
+        a_settlement("s3", created_at=at(1)),
+        a_settlement("s2", created_at=at()),
+        a_settlement("s1", created_at=at()),
+    ]
+    for settlement in written:
+        store.append_settlement(settlement)
+    store.append_settlement(
+        a_settlement("s9", "g2", NZD, "g2m1", "g2m2", created_by="g2m1")
+    )
+    assert list(store.list_settlements("g1")) == sorted(written, key=ordering_key)
+    assert [event.id for event in store.list_settlements("g2")] == ["s9"]
+
+
+def test_list_settlements_is_empty_for_a_group_with_none(store: EventStore) -> None:
+    a_flat(store)
+    assert store.list_settlements("g1") == ()
+
+
+def test_list_settlements_for_an_unknown_group_raises_not_found(
+    store: EventStore,
+) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.list_settlements("ghost")
+    assert "ghost" in str(caught.value)
+
+
+def test_a_decision_round_trips_equal(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    decision = a_decision()
+    store.append_settlement_decision(decision)
+    assert store.list_settlement_decisions("s1") == (decision,)
+
+
+def test_two_decisions_for_one_settlement_both_come_back_in_order(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    second = a_decision("d2", decision=SettlementState.REJECTED, created_at=at(3))
+    first = a_decision("d1", decision=SettlementState.CONFIRMED, created_at=at(2))
+    store.append_settlement_decision(second)
+    store.append_settlement_decision(first)
+    assert store.list_settlement_decisions("s1") == (first, second)
+
+
+def test_a_decision_for_an_unknown_settlement_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    with pytest.raises(StoreError):
+        store.append_settlement_decision(a_decision(settlement_id="ghost"))
+    assert count(store, "settlement_decision_events") == 0
+
+
+def test_a_decision_earlier_than_its_settlement_is_accepted(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement(created_at=at(10)))
+    early = a_decision(created_at=at())
+    store.append_settlement_decision(early)
+    assert store.list_settlement_decisions("s1") == (early,)
+
+
+def test_a_pending_decision_cannot_be_constructed_or_stored(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    with pytest.raises(InvalidEvent):
+        a_decision(decision=SettlementState.PENDING)
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(
+            store,
+            "INSERT INTO settlement_decision_events (id, settlement_id, decision, "
+            "decided_by, created_at) VALUES ('d9', 's1', 'PENDING', 'g1m2', ?)",
+            (_STAMP,),
+        )
+
+
+def test_the_store_does_not_police_who_may_decide(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement(from_member_id="g1m1", to_member_id="g1m2"))
+    by_a_bystander = a_decision(decided_by="g1m3")
+    store.append_settlement_decision(by_a_bystander)
+    assert store.list_settlement_decisions("s1") == (by_a_bystander,)
+
+
+def test_a_duplicate_decision_id_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    store.append_settlement_decision(a_decision())
+    with pytest.raises(DuplicateRecord):
+        store.append_settlement_decision(a_decision(decision=SettlementState.REJECTED))
+    assert count(store, "settlement_decision_events") == 1
+
+
+def test_list_settlement_decisions_is_empty_for_an_undecided_settlement(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    assert store.list_settlement_decisions("s1") == ()
+
+
+def test_list_settlement_decisions_for_an_unknown_settlement_raises_not_found(
+    store: EventStore,
+) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.list_settlement_decisions("ghost")
+    assert "ghost" in str(caught.value)
+
+
+def test_a_raw_update_or_delete_of_a_settlement_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    with pytest.raises(sqlite3.IntegrityError) as updated:
+        raw(store, "UPDATE settlement_events SET amount_cents = 1 WHERE id = 's1'")
+    assert "settlement_events" in str(updated.value)
+    with pytest.raises(sqlite3.IntegrityError) as deleted:
+        raw(store, "DELETE FROM settlement_events WHERE id = 's1'")
+    assert "settlement_events" in str(deleted.value)
+    assert count(store, "settlement_events") == 1
+
+
+def test_a_raw_update_or_delete_of_a_decision_is_rejected(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    store.append_settlement_decision(a_decision())
+    with pytest.raises(sqlite3.IntegrityError) as updated:
+        raw(store, "UPDATE settlement_decision_events SET decision = 'REJECTED'")
+    assert "settlement_decision_events" in str(updated.value)
+    with pytest.raises(sqlite3.IntegrityError) as deleted:
+        raw(store, "DELETE FROM settlement_decision_events")
+    assert "settlement_decision_events" in str(deleted.value)
+    assert count(store, "settlement_decision_events") == 1
+
+
+# --- The whole log ----------------------------------------------------------
+
+
+def test_list_events_returns_all_three_kinds_in_ordering_key_order(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    expense = an_expense("e1", created_at=at(4))
+    settlement = a_settlement("s1", created_at=at(2))
+    decision = a_decision("d1", created_at=at(3))
+    later_expense = an_expense("e2", created_at=at(4))
+    store.append_expense(expense)
+    store.append_settlement(settlement)
+    store.append_settlement_decision(decision)
+    store.append_expense(later_expense)
+    written = [expense, settlement, decision, later_expense]
+    assert list(store.list_events("g1")) == sorted(written, key=ordering_key)
+
+
+def test_list_events_orders_a_shared_timestamp_by_id(store: EventStore) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement("s5", created_at=at()))
+    store.append_expense(an_expense("e3", created_at=at()))
+    store.append_settlement_decision(a_decision("d7", "s5", created_at=at()))
+    assert [event.id for event in store.list_events("g1")] == ["d7", "e3", "s5"]
+
+
+def test_list_events_reaches_decisions_through_their_settlement(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    store.append_settlement(a_settlement("s1", "g1", AUD))
+    store.append_settlement(
+        a_settlement("s2", "g2", NZD, "g2m1", "g2m2", created_by="g2m1")
+    )
+    store.append_settlement_decision(a_decision("d1", "s1", decided_by="g1m2"))
+    store.append_settlement_decision(a_decision("d2", "s2", decided_by="g2m2"))
+    assert [event.id for event in store.list_events("g1")] == ["s1", "d1"]
+    assert [event.id for event in store.list_events("g2")] == ["s2", "d2"]
+
+
+def test_list_events_is_empty_for_a_group_with_no_events(store: EventStore) -> None:
+    a_flat(store)
+    assert store.list_events("g1") == ()
+
+
+def test_list_events_for_an_unknown_group_raises_not_found(store: EventStore) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.list_events("ghost")
+    assert "ghost" in str(caught.value)
+
+
+def test_two_groups_keep_their_events_and_members_apart(store: EventStore) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    store.append_expense(an_expense("e1", "g1", AUD))
+    store.append_expense(an_expense("e2", "g2", NZD, "g2m1", created_by="g2m1"))
+    store.append_settlement(a_settlement("s1", "g1", AUD))
+    store.append_settlement(
+        a_settlement("s2", "g2", NZD, "g2m1", "g2m2", created_by="g2m1")
+    )
+    assert [event.id for event in store.list_events("g1")] == ["e1", "s1"]
+    assert [event.id for event in store.list_events("g2")] == ["e2", "s2"]
+    assert [member.id for member in store.list_members("g1")] == [
+        "g1m1",
+        "g1m2",
+        "g1m3",
+    ]
+    assert store.get_group("g1").currency == AUD
+    assert store.get_group("g2").currency == NZD
+
+
+def test_every_read_returns_domain_objects_not_rows(store: EventStore) -> None:
+    a_flat(store)
+    store.append_expense(an_expense())
+    store.append_settlement(a_settlement())
+    store.append_settlement_decision(a_decision())
+    assert isinstance(store.get_group("g1"), Group)
+    assert isinstance(store.get_member("g1m1"), Member)
+    assert isinstance(store.get_expense("e1"), ExpenseEvent)
+    for event in store.list_events("g1"):
+        assert isinstance(
+            event, (ExpenseEvent, SettlementEvent, SettlementDecisionEvent)
+        )
+        assert not isinstance(event, (tuple, dict, sqlite3.Row))

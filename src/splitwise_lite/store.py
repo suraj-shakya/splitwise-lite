@@ -56,7 +56,13 @@ from .events import (
     ExpenseEvent,
     ExpenseId,
     GroupId,
+    LedgerEvent,
     MemberId,
+    SettlementDecisionEvent,
+    SettlementEvent,
+    SettlementId,
+    SettlementState,
+    ordering_key,
 )
 from .money import MAX_CENTS, Currency, CurrencyMismatch, DomainError
 
@@ -760,6 +766,41 @@ _SELECT_ALLOCATIONS_BY_GROUP: Final[str] = (
     "ORDER BY a.expense_id, a.position"
 )
 
+_INSERT_SETTLEMENT: Final[str] = (
+    "INSERT INTO settlement_events (id, group_id, currency_code, from_member_id, "
+    "to_member_id, amount_cents, created_at, created_by) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+_EXISTS_SETTLEMENT: Final[str] = "SELECT 1 FROM settlement_events WHERE id = ?"
+
+_SELECT_SETTLEMENTS_BY_GROUP: Final[str] = (
+    "SELECT id, group_id, currency_code, from_member_id, to_member_id, amount_cents, "
+    "created_at, created_by FROM settlement_events WHERE group_id = ? "
+    "ORDER BY created_at, id"
+)
+
+_INSERT_DECISION: Final[str] = (
+    "INSERT INTO settlement_decision_events (id, settlement_id, decision, decided_by, "
+    "created_at) VALUES (?, ?, ?, ?, ?)"
+)
+
+_EXISTS_DECISION: Final[str] = "SELECT 1 FROM settlement_decision_events WHERE id = ?"
+
+_SELECT_DECISIONS_BY_SETTLEMENT: Final[str] = (
+    "SELECT id, settlement_id, decision, decided_by, created_at "
+    "FROM settlement_decision_events WHERE settlement_id = ? ORDER BY created_at, id"
+)
+
+# A decision carries no group_id of its own, so it reaches its group through the
+# settlement it references. That join is the reason settlement ids are unique.
+_SELECT_DECISIONS_BY_GROUP: Final[str] = (
+    "SELECT d.id, d.settlement_id, d.decision, d.decided_by, d.created_at "
+    "FROM settlement_decision_events AS d "
+    "JOIN settlement_events AS s ON s.id = d.settlement_id "
+    "WHERE s.group_id = ? ORDER BY d.created_at, d.id"
+)
+
 
 def open_store(path: str | Path) -> EventStore:
     """Open, and create if necessary, the store at ``path``.
@@ -1135,6 +1176,97 @@ class EventStore:
                     ),
                 )
 
+    def append_settlement(self, settlement: SettlementEvent) -> None:
+        """Append one claimed payment from one member of a group to another.
+
+        A settlement is born pending and carries no state column, because a mutable
+        state on an immutable event is a contradiction. Its state is derived from the
+        decision events that reference it, by tasks 4 and 15.
+
+        Raises:
+            TypeError: if ``settlement`` is not a ``SettlementEvent``.
+            AmountTooLarge: if the amount is above ``MAX_CENTS``.
+            RecordNotFound: if the group does not exist.
+            CurrencyMismatch: if the event's currency is not the group's currency.
+            DuplicateRecord: if a settlement with this id has already been appended.
+            ConstraintViolated: if either member or the author belongs to another
+                group, or any other database constraint refuses it.
+        """
+        if not isinstance(settlement, SettlementEvent):
+            raise TypeError(
+                f"append_settlement takes a SettlementEvent, got "
+                f"{type(settlement).__name__}"
+            )
+        _require_storable_cents(settlement.amount_cents, "settlement amount_cents")
+
+        with self._writing("appending a settlement") as connection:
+            self._require_group_currency(
+                connection, settlement.group_id, settlement.currency
+            )
+            self._require_free(
+                connection,
+                _EXISTS_SETTLEMENT,
+                (settlement.id,),
+                f"a settlement with id {settlement.id!r} has already been appended",
+            )
+            connection.execute(
+                _INSERT_SETTLEMENT,
+                _params(
+                    settlement.id,
+                    settlement.group_id,
+                    settlement.currency.code,
+                    settlement.from_member_id,
+                    settlement.to_member_id,
+                    settlement.amount_cents,
+                    _encode_timestamp(settlement.created_at),
+                    settlement.created_by,
+                ),
+            )
+
+    def append_settlement_decision(self, decision: SettlementDecisionEvent) -> None:
+        """Append one answer to one settlement. The log keeps every answer it is given.
+
+        Two decisions for the same settlement are both stored and both come back:
+        ``events.py`` documents that the earliest wins, and applying that rule is a
+        read-model concern owned by tasks 4 and 15. A unique constraint here would turn
+        a documented race into a crash and lose the second answer.
+
+        ``created_at`` earlier than the settlement's is accepted. Phone clocks disagree,
+        and refusing a payment that really happened because of clock skew is worse than
+        storing it. That is a decision, not an oversight.
+
+        Who is entitled to confirm is not checked here either. A decision event cannot
+        see the settlement it references, and the receiver-only rule belongs to task 15,
+        which can load both.
+
+        Raises:
+            TypeError: if ``decision`` is not a ``SettlementDecisionEvent``.
+            DuplicateRecord: if a decision with this id has already been appended.
+            ConstraintViolated: if the settlement or the deciding member does not exist.
+        """
+        if not isinstance(decision, SettlementDecisionEvent):
+            raise TypeError(
+                f"append_settlement_decision takes a SettlementDecisionEvent, got "
+                f"{type(decision).__name__}"
+            )
+        with self._writing("appending a settlement decision") as connection:
+            self._require_free(
+                connection,
+                _EXISTS_DECISION,
+                (decision.id,),
+                f"a decision with id {decision.id!r} has already been appended",
+            )
+            connection.execute(
+                _INSERT_DECISION,
+                _params(
+                    decision.id,
+                    decision.settlement_id,
+                    decision.decision.value,
+                    decision.decided_by,
+                    _encode_timestamp(decision.created_at),
+                ),
+            )
+
     # --- Reads: the reference tables ----------------------------------------
 
     def get_user(self, user_id: str) -> User:
@@ -1241,6 +1373,71 @@ class EventStore:
             _expense_from_rows(row, by_expense.get(row[0], [])) for row in rows
         )
 
+    def list_settlements(self, group_id: str) -> tuple[SettlementEvent, ...]:
+        """Every settlement in ``group_id``, in ascending ``ordering_key`` order.
+
+        Raises:
+            RecordNotFound: if the group does not exist. A group with no settlements
+                returns an empty tuple.
+        """
+        with self._reading("listing settlements") as connection:
+            self._require_group(connection, group_id)
+            rows = connection.execute(
+                _SELECT_SETTLEMENTS_BY_GROUP, _params(group_id)
+            ).fetchall()
+        return tuple(_settlement_from_row(row) for row in rows)
+
+    def list_settlement_decisions(
+        self, settlement_id: str
+    ) -> tuple[SettlementDecisionEvent, ...]:
+        """Every decision on ``settlement_id``, in ascending ``ordering_key`` order.
+
+        All of them, in order, with no rule applied: if the log holds two answers it
+        hands back two answers, and the earliest-wins fold happens in the read model.
+
+        Raises:
+            RecordNotFound: if the settlement does not exist. A settlement nobody has
+                answered yet returns an empty tuple, which is the pending state.
+        """
+        with self._reading("listing settlement decisions") as connection:
+            if (
+                connection.execute(
+                    _EXISTS_SETTLEMENT, _params(settlement_id)
+                ).fetchone()
+                is None
+            ):
+                raise RecordNotFound(f"no settlement with id {settlement_id!r}")
+            rows = connection.execute(
+                _SELECT_DECISIONS_BY_SETTLEMENT, _params(settlement_id)
+            ).fetchall()
+        return tuple(_decision_from_row(row) for row in rows)
+
+    def list_events(self, group_id: str) -> tuple[LedgerEvent, ...]:
+        """Every event in ``group_id`` in one sequence, in ``ordering_key`` order.
+
+        Expenses, settlements and decisions in the one total order, which is what a
+        replay and a feed both need. The three reads are already ordered by
+        ``(created_at, id)`` in SQL; merging them uses ``ordering_key`` itself rather
+        than a re-derived rule, so the store cannot drift from ``events.py``.
+
+        Decisions reach this group through the settlement they reference, since they
+        carry no group of their own.
+
+        Raises:
+            RecordNotFound: if the group does not exist.
+        """
+        with self._reading("listing events") as connection:
+            self._require_group(connection, group_id)
+            decision_rows = connection.execute(
+                _SELECT_DECISIONS_BY_GROUP, _params(group_id)
+            ).fetchall()
+        events: list[LedgerEvent] = [
+            *self.list_expenses(group_id),
+            *self.list_settlements(group_id),
+            *(_decision_from_row(row) for row in decision_rows),
+        ]
+        return tuple(sorted(events, key=ordering_key))
+
 
 def _expense_from_rows(
     row: tuple[str, str, str, str, int, str, str, str],
@@ -1275,6 +1472,52 @@ def _expense_from_rows(
         description,
         _decode_timestamp(created_at),
         MemberId(created_by),
+    )
+
+
+def _settlement_from_row(
+    row: tuple[str, str, str, str, str, int, str, str],
+) -> SettlementEvent:
+    """Build a ``SettlementEvent`` from its row, re-checking every invariant."""
+    (
+        settlement_id,
+        group_id,
+        currency_code,
+        from_member_id,
+        to_member_id,
+        amount_cents,
+        created_at,
+        created_by,
+    ) = row
+    return SettlementEvent(
+        SettlementId(settlement_id),
+        GroupId(group_id),
+        Currency(currency_code),
+        MemberId(from_member_id),
+        MemberId(to_member_id),
+        amount_cents,
+        _decode_timestamp(created_at),
+        MemberId(created_by),
+    )
+
+
+def _decision_from_row(
+    row: tuple[str, str, str, str, str],
+) -> SettlementDecisionEvent:
+    """Build a ``SettlementDecisionEvent`` from its row.
+
+    ``SettlementState(decision)`` cannot fail on stored data, because the column has a
+    ``CHECK`` that admits only ``CONFIRMED`` and ``REJECTED``. ``PENDING`` is the
+    absence of a decision, so it is unconstructible in ``events.py`` and unstorable
+    here.
+    """
+    decision_id, settlement_id, decision, decided_by, created_at = row
+    return SettlementDecisionEvent(
+        decision_id,
+        SettlementId(settlement_id),
+        SettlementState(decision),
+        MemberId(decided_by),
+        _decode_timestamp(created_at),
     )
 
 
