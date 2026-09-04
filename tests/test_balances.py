@@ -392,6 +392,24 @@ def test_a_repeated_decision_id_is_a_domain_error_naming_the_id() -> None:
         settlement_states(events)
 
 
+def test_both_public_functions_refuse_a_log_that_double_counts_an_expense() -> None:
+    """settlement_states ignores expenses for state, but not for the id check.
+
+    The alternative would let a caller render settlement rows for a ledger whose
+    balances ``derive_balances`` refuses to compute, which is the disagreement between
+    two readers of one log that this module exists to rule out.
+    """
+    events = [
+        expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
+        expense("e1", payer=ALI, total=1000, shares={BO: 1000}, minute=1),
+        settlement("s1", payer=BO, receiver=ALI, amount=100, minute=2),
+    ]
+    with pytest.raises(InvalidLedger, match="e1"):
+        derive_balances(events, group_id=GROUP, currency=AUD)
+    with pytest.raises(InvalidLedger, match="e1"):
+        settlement_states(events)
+
+
 def test_two_distinct_events_with_equal_amounts_are_fine() -> None:
     events = [
         expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
@@ -576,7 +594,13 @@ def test_debts_that_cancel_exactly_leave_no_entry() -> None:
 
 
 def test_the_fold_credits_the_total_not_the_sum_of_the_allocations() -> None:
-    """The two are equal by construction, so the payer's credit is the whole total."""
+    """A documentation test rather than a discriminating one.
+
+    ``ExpenseEvent`` enforces that the allocations sum to the total, so no input can
+    tell the two readings apart and this assertion would hold either way. It is here to
+    record which one the fold takes, because the fold deliberately re-checks none of
+    task 2's construction invariants.
+    """
     result = derive_balances(
         [expense("e1", payer=ALI, total=999, shares={ALI: 333, BO: 333, CASS: 333})],
         group_id=GROUP,
@@ -1047,6 +1071,17 @@ def _names(tree: ast.Module) -> set[str]:
 @pytest.mark.parametrize("forbidden", ["float", "round", "Decimal", "divmod"])
 def test_the_balance_module_never_names_a_rounding_tool(forbidden: str) -> None:
     assert forbidden not in _names(_module_tree(balances_module))
+
+
+def test_the_balance_module_holds_no_float_literal() -> None:
+    """The name check above would miss ``0.5``; this catches the literal itself."""
+    tree = _module_tree(balances_module)
+    literals = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, float)
+    ]
+    assert literals == []
 
 
 @pytest.mark.parametrize(

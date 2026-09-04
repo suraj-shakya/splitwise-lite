@@ -255,6 +255,11 @@ def settlement_states(
     key to the result: it cannot be attributed to a group on its own, so rejecting it
     would make a caller's query window a source of errors.
 
+    Expenses are ignored for state but still id-checked, so a log that double-counts an
+    expense is refused by both public functions rather than by only one of them. A
+    caller must never be able to render settlement rows for a ledger whose balances
+    ``derive_balances`` would refuse to compute.
+
     Whether ``decided_by`` is entitled to decide is not checked. A decision cannot see
     the settlement it references, so the rule that only the receiver may confirm belongs
     to the layer that can load both records.
@@ -304,12 +309,9 @@ def _partition(
     of its keys, so both are rejected outright rather than read as an event list,
     following the precedent the split resolver set.
     """
-    if isinstance(events, (str, bytes, bytearray, Mapping)):
-        raise TypeError(
-            f"events must be an iterable of ledger events, got "
-            f"{type(events).__name__}: {events!r}"
-        )
-    if not isinstance(events, Iterable):
+    if isinstance(events, (str, bytes, bytearray, Mapping)) or not isinstance(
+        events, Iterable
+    ):
         raise TypeError(
             f"events must be an iterable of ledger events, got "
             f"{type(events).__name__}: {events!r}"
