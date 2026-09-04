@@ -47,10 +47,10 @@ in separate books and attributed over separate remaining maps.
 
 Two consequences of netting, stated here so nobody files them as bugs: a single pairwise
 debt may be **split across two transfers**, each row carrying the whole debt as
-``debt_total`` so a drill-down can say "400 of the 1000 you owe Ali"; and a pairwise debt
-may be **absorbed by nothing at all**, which is what a pure cycle looks like. Cents left
-unattributed on a debt are exactly the cents netting cancelled against something the
-payer was owed. That leftover is a fact about the group, not a gap.
+``debt_total`` so a drill-down can say "400 of the 1000 you owe Ali"; and a pairwise
+debt may be **absorbed by nothing at all**, which is what a pure cycle looks like. Cents
+left unattributed on a debt are exactly the cents netting cancelled against something
+the payer was owed. That leftover is a fact about the group, not a gap.
 
 Dependency direction: this module imports from ``money``, ``events`` and ``balances``;
 none of them knows it exists, and the split resolver and the store are modules it never
@@ -472,8 +472,8 @@ def _fullest(
     """Return ``member_id``'s live debt with the most left in it.
 
     Outgoing debts on the payer side, incoming debts on the receiver side. Candidates
-    share the member's own end of the key, so ordering by ``(-remaining, pair)`` breaks a
-    tie on the counterparty's id ascending, which is the same rule read from either
+    share the member's own end of the key, so ordering by ``(-remaining, pair)`` breaks
+    a tie on the counterparty's id ascending, which is the same rule read from either
     side.
 
     The map is sorted before it is walked, so no dict insertion order and no per-process

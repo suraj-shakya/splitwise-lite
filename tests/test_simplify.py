@@ -18,7 +18,10 @@ import ast
 import dataclasses
 import inspect
 import itertools
+import os
 import random
+import subprocess
+import sys
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +49,7 @@ from splitwise_lite.events import (
     SettlementState,
 )
 from splitwise_lite.money import (
+    MAX_CENTS,
     Currency,
     CurrencyMismatch,
     DomainError,
@@ -185,7 +189,7 @@ def test_the_plan_carries_the_group_and_currency_off_the_balances() -> None:
 
 
 def test_every_money_in_the_plan_carries_the_currency_of_the_balances() -> None:
-    plan = simplify_debts(from_debts({(BO, ALI): 300, (BO, CASS): 300, (CASS, ALI): 300}, currency=NZD))
+    plan = simplify_debts(from_debts(OVERSIZED, currency=NZD))
     for transfer in plan.transfers:
         assert transfer.amount.currency == NZD
         for debt in transfer.payer_debts + transfer.receiver_credits:
@@ -944,3 +948,340 @@ def test_an_over_payment_flips_the_pair_and_the_plan_follows_it() -> None:
     only = simplify_debts(balances).transfers[0]
     assert (only.from_member_id, only.to_member_id, only.amount.cents) == (ALI, BO, 300)
     assert rows(only.payer_debts) == [((ALI, BO), 300, 300)]
+
+
+# --- Property: every invariant, over generated ledgers ----------------------
+
+
+ROSTER = [MemberId(f"m{index}") for index in range(5)]
+
+
+def assert_plan_holds(balances: Balances, plan: TransferPlan) -> None:
+    """Every criterion expressible as an invariant, asserted on one plan."""
+    assert plan.group_id == balances.group_id
+    assert plan.currency == balances.currency
+
+    keys = [(t.from_member_id, t.to_member_id) for t in plan.transfers]
+    assert keys == sorted(keys)
+    assert len(set(keys)) == len(keys)
+    for from_member_id, to_member_id in keys:
+        assert from_member_id != to_member_id
+        assert (to_member_id, from_member_id) not in set(keys)
+
+    for transfer in plan.transfers:
+        assert transfer.amount.cents > 0
+        assert transfer.amount.currency == balances.currency
+
+    positions = cents(balances)
+    for member_id, position in positions.items():
+        received = sum(
+            t.amount.cents for t in plan.transfers if t.to_member_id == member_id
+        )
+        paid = sum(
+            t.amount.cents for t in plan.transfers if t.from_member_id == member_id
+        )
+        assert position + paid - received == 0
+        if position == 0:
+            assert paid == 0 and received == 0
+
+    assert_within_bounds(balances, plan)
+    assert_provenance_holds(balances, plan)
+
+
+def random_ledger(rng: random.Random, size: int) -> list[LedgerEvent]:
+    """A ledger of ``size`` entries mixing expenses with settlements in every state.
+
+    Ids are unique by construction, timestamps ascend, and every amount is a whole
+    number of cents, so the only thing that varies is the shape of the ledger. A
+    settlement is sized to reach past the debt it clears often enough that the
+    pair-flipping case task 4 documents shows up here too.
+    """
+    events: list[LedgerEvent] = []
+    for index in range(size):
+        minute = index + 1
+        if rng.choice((True, True, False)):
+            participants = rng.sample(ROSTER, rng.randint(1, len(ROSTER)))
+            shares = {member_id: rng.randint(0, 500) for member_id in participants}
+            if sum(shares.values()) == 0:
+                shares[participants[0]] = 1
+            events.append(
+                expense(
+                    f"e{index}",
+                    payer=rng.choice(ROSTER),
+                    total=sum(shares.values()),
+                    shares=shares,
+                    minute=minute,
+                )
+            )
+            continue
+
+        payer, receiver = rng.sample(ROSTER, 2)
+        settlement = SettlementEvent(
+            id=SettlementId(f"s{index}"),
+            group_id=GROUP,
+            currency=AUD,
+            from_member_id=payer,
+            to_member_id=receiver,
+            amount_cents=rng.randint(1, 1200),
+            created_at=at(minute),
+            created_by=payer,
+        )
+        events.append(settlement)
+        outcome = rng.choice(
+            (None, SettlementState.CONFIRMED, SettlementState.REJECTED)
+        )
+        if outcome is not None:
+            events.append(
+                SettlementDecisionEvent(
+                    id=f"d{index}",
+                    settlement_id=SettlementId(f"s{index}"),
+                    decision=outcome,
+                    decided_by=receiver,
+                    created_at=at(minute),
+                )
+            )
+    return events
+
+
+def test_every_random_ledger_produces_a_plan_holding_every_invariant() -> None:
+    rng = random.Random(SEED)
+    for _ in range(200):
+        balances = fold(random_ledger(rng, rng.randint(0, 20)))
+        assert_plan_holds(balances, simplify_debts(balances))
+
+
+def test_every_random_plan_settles_the_group_through_the_real_fold() -> None:
+    rng = random.Random(SEED + 1)
+    for _ in range(100):
+        events = random_ledger(rng, rng.randint(0, 20))
+        plan = simplify_debts(fold(events))
+        assert set(cents(fold(paying_off(events, plan))).values()) <= {0}
+
+
+def test_every_random_ledger_simplifies_to_nothing_once_it_is_paid_off() -> None:
+    rng = random.Random(SEED + 2)
+    for _ in range(50):
+        events = random_ledger(rng, rng.randint(0, 20))
+        settled = fold(paying_off(events, simplify_debts(fold(events))))
+        assert simplify_debts(settled).transfers == ()
+
+
+# --- Exhaustive where the domain is small enough ----------------------------
+
+
+def expense_pool() -> list[ExpenseEvent]:
+    """Six hand-written expenses over four members, covering the shapes that matter."""
+    return [
+        expense("p0", payer=ALI, total=900, shares={ALI: 300, BO: 300, CASS: 300},
+                minute=0),
+        expense("p1", payer=BO, total=400, shares={ALI: 400}, minute=1),
+        expense("p2", payer=CASS, total=1000, shares={BO: 500, DEE: 500}, minute=2),
+        expense("p3", payer=DEE, total=250, shares={ALI: 100, CASS: 150}, minute=3),
+        expense("p4", payer=ALI, total=7, shares={BO: 3, CASS: 3, DEE: 1}, minute=4),
+        expense("p5", payer=BO, total=1200, shares={BO: 600, DEE: 600}, minute=5),
+    ]
+
+
+def test_every_ledger_of_up_to_three_of_six_expenses_holds_every_invariant() -> None:
+    """42 ledgers: one empty, six of one expense, fifteen of two, twenty of three."""
+    pool = expense_pool()
+    ledgers = [
+        list(chosen)
+        for size in range(4)
+        for chosen in itertools.combinations(pool, size)
+    ]
+    assert len(ledgers) == 42
+
+    for events in ledgers:
+        balances = fold(events)
+        plan = simplify_debts(balances)
+        assert_plan_holds(balances, plan)
+        assert set(cents(fold(paying_off(events, plan))).values()) <= {0}
+
+
+# --- Determinism ------------------------------------------------------------
+
+
+def test_shuffling_the_log_never_changes_the_plan() -> None:
+    rng = random.Random(SEED + 3)
+    for _ in range(50):
+        events = random_ledger(rng, rng.randint(1, 20))
+        ordered = sorted(events, key=lambda event: (event.created_at, event.id))
+        expected = simplify_debts(fold(ordered))
+        for _ in range(3):
+            shuffled = list(events)
+            rng.shuffle(shuffled)
+            assert simplify_debts(fold(shuffled)) == expected
+
+
+def test_two_calls_on_one_balances_do_not_drift() -> None:
+    balances = from_debts(NOT_MINIMAL)
+    first = simplify_debts(balances)
+    second = simplify_debts(balances)
+    assert first == second
+    assert moves(first) == moves(second)
+    assert [rows(t.payer_debts) for t in first.transfers] == [
+        rows(t.payer_debts) for t in second.transfers
+    ]
+
+
+def test_the_plan_is_the_same_in_a_process_with_a_different_string_hash() -> None:
+    """String hashing is salted per process, so two readers would otherwise differ."""
+    script = (
+        "from splitwise_lite import derive_balances, simplify_debts;"
+        "import sys; sys.path.insert(0, 'tests');"
+        "from test_simplify import NOT_MINIMAL, from_debts, moves;"
+        "print(moves(simplify_debts(from_debts(NOT_MINIMAL))))"
+    )
+    answers = set()
+    for seed in ("0", "1", "12345"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        assert result.returncode == 0, result.stderr
+        answers.add(result.stdout.strip())
+    assert len(answers) == 1
+
+
+# --- Arithmetic: integer cents, and no division at all ----------------------
+
+
+def _module_tree(module) -> ast.Module:
+    return ast.parse(Path(inspect.getfile(module)).read_text(encoding="utf-8"))
+
+
+def _names(tree: ast.Module) -> set[str]:
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    return names | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+
+@pytest.mark.parametrize("forbidden", ["float", "round", "Decimal", "divmod"])
+def test_the_module_never_names_a_rounding_tool(forbidden: str) -> None:
+    assert forbidden not in _names(_module_tree(simplify_module))
+
+
+def test_the_module_holds_no_float_literal() -> None:
+    """The name check above would miss ``0.5``; this catches the literal itself."""
+    tree = _module_tree(simplify_module)
+    literals = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, float)
+    ]
+    assert literals == []
+
+
+@pytest.mark.parametrize(
+    "operator",
+    [ast.Div, ast.FloorDiv, ast.Mod],
+    ids=["true division", "floor division", "modulo"],
+)
+def test_the_module_never_divides(operator: type[ast.operator]) -> None:
+    """Only comparison, addition and subtraction, so no remainder can arise."""
+    tree = _module_tree(simplify_module)
+    divisions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.BinOp, ast.AugAssign))
+        and isinstance(node.op, operator)
+    ]
+    assert divisions == []
+
+
+@pytest.mark.parametrize("forbidden", ["hash", "random", "time", "uuid", "datetime"])
+def test_the_module_is_a_pure_function_of_its_input(forbidden: str) -> None:
+    """No clock, no randomness, and nothing salted per process deciding an answer."""
+    assert forbidden not in _names(_module_tree(simplify_module))
+
+
+def test_the_module_keeps_no_mutable_state_to_memoise_into() -> None:
+    mutable = {
+        name: value
+        for name, value in vars(simplify_module).items()
+        if not name.startswith("__")
+        and isinstance(value, (dict, list, set, bytearray))
+    }
+    assert mutable == {}
+
+
+def test_no_stored_amount_bound_is_applied_to_a_derived_plan() -> None:
+    """A plan is derived and never stored, so there is no column to overflow."""
+    huge = MAX_CENTS + MAX_CENTS
+    balances = from_debts({(BO, ALI): huge, (ALI, CASS): huge})
+    plan = simplify_debts(balances)
+    assert moves(plan) == [(BO, CASS, huge)]
+    assert rows(plan.transfers[0].payer_debts) == [((BO, ALI), huge, huge)]
+    assert_plan_holds(balances, plan)
+
+
+# --- Dependency direction ---------------------------------------------------
+
+
+def _imported(tree: ast.Module) -> set[str]:
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    return imported
+
+
+def test_simplify_imports_only_money_events_and_balances() -> None:
+    """Nothing here divides a total and nothing here touches a database."""
+    imported = _imported(_module_tree(simplify_module))
+    assert {
+        name
+        for name in imported
+        if name in {"money", "events", "balances", "split", "store"}
+    } == {"money", "events", "balances"}
+    assert not any("splitwise_lite" in name for name in imported)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [money_module, events_module, split_module, balances_module, store_module],
+    ids=["money", "events", "split", "balances", "store"],
+)
+def test_no_earlier_module_learns_that_this_one_exists(module) -> None:
+    assert "simplify" not in _imported(_module_tree(module))
+
+
+def test_only_public_names_are_imported_from_the_modules_below() -> None:
+    """The underscore-prefixed helpers in ``balances.py`` are not its contract."""
+    tree = _module_tree(simplify_module)
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert not any(name.startswith("_") for name in imported)
+
+
+def test_the_public_names_are_re_exported_from_the_package_root() -> None:
+    assert splitwise_lite.simplify_debts is simplify_debts
+    assert splitwise_lite.AbsorbedDebt is AbsorbedDebt
+    assert splitwise_lite.Transfer is Transfer
+    assert splitwise_lite.TransferPlan is TransferPlan
+    assert splitwise_lite.InvalidBalances is InvalidBalances
+    assert set(simplify_module.__all__) <= set(splitwise_lite.__all__)
+
+
+def test_the_package_version_is_untouched() -> None:
+    """``tests/test_smoke.py`` asserts it, so adding a module must not move it."""
+    assert splitwise_lite.__version__ == "0.1.0"
+
+
+def test_everything_public_carries_a_docstring() -> None:
+    for name in simplify_module.__all__:
+        assert getattr(simplify_module, name).__doc__
+    assert simplify_module.__doc__
+    assert AbsorbedDebt.pair.__doc__
