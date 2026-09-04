@@ -198,8 +198,12 @@ Two consequences worth stating so nobody files them as bugs:
 
 * Pass two never consumes a debt that a later transfer needs as its direct match,
   because every direct match has already been claimed by the time pass two runs at all.
-  A transfer reaching for a substitute can therefore only take a debt no transfer will
-  claim directly, which costs a little readability and never costs honesty. Accepted.
+  A transfer reaching for a substitute can therefore only take capacity that no
+  transfer's direct claim needs. It may well take that capacity out of a debt another
+  transfer *does* claim directly: in the chain fixture above, `bo -> ali` claims 600 of
+  the 1000 Bo owes Ali in pass one, and `bo -> cass` takes the remaining 400 of that
+  same debt in pass two. The bound is on capacity, not on which debts get claimed. It
+  costs a little readability and never costs honesty. Accepted.
   **Corrected 2026-09-05, during implementation.** This bullet previously said the
   opposite, that pass two *can* eat a later transfer's direct match, and accepted it.
   That cannot hold alongside "Direct debt first" in the acceptance criteria below, which
@@ -210,6 +214,11 @@ Two consequences worth stating so nobody files them as bugs:
   `(ali, cass)`, leaving `ali -> cass` with no direct row at all. Sweeping the whole
   transfer list once per pass is the only reading under which the criterion holds
   universally, so that is the reading, and this consequence is its mirror image.
+  **Amended the same day, in review.** The replacement first said a substitute could
+  only take "a debt no transfer will claim directly", which is false of the chain
+  fixture: `(bo, ali)` is claimed directly by `bo -> ali` and still gives its remaining
+  400 to `bo -> cass`, as `test_the_chain_splits_one_debt_across_two_transfers`
+  asserts. The claim is about capacity, not about debts, and now says so.
 * Cents left unattributed on a pairwise debt are exactly the cents that netting cancelled
   against something the payer was owed. That leftover is a fact about the group, not a
   gap, and the criteria below pin its size exactly.
@@ -501,7 +510,20 @@ holds three live debts, and every one of those debts is absorbed by nothing.
   `tests/test_smoke.py` asserts it.
 - **`src/splitwise_lite/balances.py`, `events.py`, `money.py`, `split.py` and `store.py`
   must not be modified.** Their types are consumed here, never reshaped. The same goes for
-  `plans/backlog.md`, `plans/spec.md`, this file and `CLAUDE.md`.
+  `plans/backlog.md`, `plans/spec.md` and `CLAUDE.md`.
+- **This file must not be modified either, with one exception: a statement in it that is
+  provably wrong may be corrected.** Sharpening a criterion, re-scoping one or softening
+  one to suit an implementation is not covered and stays forbidden. The exception is only
+  for a statement that cannot be satisfied as written or that contradicts another, and
+  the correction is raised and accepted before it is made, never applied unilaterally.
+  Every such correction carries a dated marker saying what the file used to say, what it
+  says now and why, so the next reader inherits the reasoning instead of a choice between
+  two contradictory lines. Two were made on 2026-09-05 during implementation, both marked
+  in place: the settle-to-zero identity under "The transfer set", which had `paid` and
+  `received` swapped and gave -800 for a debtor who settles in full; and the first
+  consequence under "How cents are attributed to debts", which contradicted the "Direct
+  debt first" criterion. Without this exception the file would forbid the corrections it
+  now contains, which is the contradiction it exists to stop.
 - Public names: `AbsorbedDebt`, `Transfer`, `TransferPlan`, `InvalidBalances` and
   `simplify_debts`. Everything else in the module is private, underscore prefixed.
 - Dependency direction stays one way. `simplify.py` imports `Balances` from `balances.py`,
