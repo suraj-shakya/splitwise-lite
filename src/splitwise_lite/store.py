@@ -462,7 +462,8 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (length(email) > 0),
     CHECK (email = lower(email)),
     CHECK (length(display_name) BETWEEN 1 AND 100),
-    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00')
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS groups (
@@ -474,7 +475,8 @@ CREATE TABLE IF NOT EXISTS groups (
     CHECK (length(id) > 0),
     CHECK (length(name) BETWEEN 1 AND 100),
     CHECK (currency_code GLOB '[A-Z][A-Z][A-Z]'),
-    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00')
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS members (
@@ -488,7 +490,8 @@ CREATE TABLE IF NOT EXISTS members (
     CHECK (length(group_id) > 0),
     CHECK (length(display_name) BETWEEN 1 AND 100),
     CHECK (user_id IS NULL OR length(user_id) > 0),
-    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00')
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS expense_events (
@@ -503,7 +506,8 @@ CREATE TABLE IF NOT EXISTS expense_events (
     CHECK (length(id) > 0),
     CHECK (total_cents > 0),
     CHECK (length(description) <= 500),
-    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T'),
     FOREIGN KEY (group_id, currency_code) REFERENCES groups (id, currency_code),
     FOREIGN KEY (group_id, payer_id) REFERENCES members (group_id, id),
     FOREIGN KEY (group_id, created_by) REFERENCES members (group_id, id)
@@ -532,7 +536,8 @@ CREATE TABLE IF NOT EXISTS settlement_events (
     CHECK (length(id) > 0),
     CHECK (from_member_id <> to_member_id),
     CHECK (amount_cents > 0),
-    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T'),
     FOREIGN KEY (group_id, currency_code) REFERENCES groups (id, currency_code),
     FOREIGN KEY (group_id, from_member_id) REFERENCES members (group_id, id),
     FOREIGN KEY (group_id, to_member_id) REFERENCES members (group_id, id),
@@ -547,7 +552,8 @@ CREATE TABLE IF NOT EXISTS settlement_decision_events (
     created_at    TEXT NOT NULL,
     CHECK (length(id) > 0),
     CHECK (decision IN ('CONFIRMED', 'REJECTED')),
-    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00')
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_members_group_user
@@ -907,10 +913,23 @@ class EventStore:
         self.close()
 
     def close(self) -> None:
-        """Close the connection. Idempotent: closing a closed store does nothing."""
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None  # type: ignore[assignment]
+        """Close the connection. Idempotent: closing a closed store does nothing.
+
+        The store is marked closed before the connection is asked to close, so a store
+        whose close failed is still closed rather than left in a half state, and a
+        second ``close()`` is a no-op either way. A ``sqlite3`` failure on the way out
+        leaves as ``StorageFailed`` like every other one.
+        """
+        connection = self._connection
+        if connection is None:
+            return
+        self._connection = None  # type: ignore[assignment]
+        try:
+            connection.close()
+        except sqlite3.Error as error:
+            raise StorageFailed(
+                f"closing the store at {self._path} failed: {error}"
+            ) from error
 
     # --- Internals ----------------------------------------------------------
 

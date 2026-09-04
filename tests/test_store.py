@@ -467,7 +467,18 @@ def test_a_duplicate_member_id_is_rejected(store: EventStore) -> None:
 
 
 @pytest.mark.parametrize(
-    "read", ["get_user", "get_group", "get_member", "list_members"]
+    "read",
+    [
+        "get_user",
+        "get_group",
+        "get_member",
+        "list_members",
+        "get_expense",
+        "list_expenses",
+        "list_settlements",
+        "list_settlement_decisions",
+        "list_events",
+    ],
 )
 def test_reading_an_unknown_id_raises_not_found_naming_it(
     store: EventStore, read: str
@@ -1589,10 +1600,6 @@ def test_every_statement_the_store_issues_is_a_constant_with_bound_parameters() 
             assert argument.func.id == "_params", ast.dump(call)
 
 
-def test_appends_open_an_immediate_transaction() -> None:
-    assert "BEGIN IMMEDIATE" in store_source()
-
-
 def test_the_user_id_type_lives_here_and_not_in_events() -> None:
     assert not hasattr(events_module, "UserId")
     assert "UserId" not in events_module.__all__
@@ -1671,7 +1678,9 @@ def test_a_float_in_any_field_is_refused_before_it_is_bound(store: EventStore) -
     assert count(store, "expense_events") == 0
 
 
-@pytest.mark.parametrize("value", [12.5, 12.0, b"bytes", at(), SettlementState.CONFIRMED])
+@pytest.mark.parametrize(
+    "value", [12.5, 12.0, b"bytes", at(), SettlementState.CONFIRMED]
+)
 def test_only_text_integers_and_null_may_be_bound(value: object) -> None:
     with pytest.raises(TypeError):
         store_module._params("ok", 1, None, value)
@@ -1681,3 +1690,235 @@ def test_only_text_integers_and_null_may_be_bound(value: object) -> None:
 def test_a_bool_is_not_bound_as_an_integer() -> None:
     with pytest.raises(TypeError):
         store_module._params(True)
+
+
+# --- Gaps the audit found ---------------------------------------------------
+
+
+class _FailingConnection:
+    """A connection stand-in whose close() fails, which a real one rarely does."""
+
+    def close(self) -> None:
+        raise sqlite3.OperationalError("unable to close due to unfinalized statements")
+
+
+def test_a_failure_to_close_is_a_store_error_and_still_closes(tmp_path: Path) -> None:
+    opened = open_store(tmp_path / "ledger.sqlite3")
+    opened._connection = _FailingConnection()
+    with pytest.raises(StorageFailed) as caught:
+        opened.close()
+    assert isinstance(caught.value.__cause__, sqlite3.Error)
+    with pytest.raises(StoreClosed):
+        opened.list_groups()
+    opened.close()
+
+
+def test_an_append_runs_inside_one_immediate_transaction(store: EventStore) -> None:
+    """Traced statements, not a grep: the append really opens BEGIN IMMEDIATE."""
+    a_flat(store)
+    traced: list[str] = []
+    store._connection.set_trace_callback(traced.append)
+    try:
+        store.append_expense(an_expense(total_cents=999))
+    finally:
+        store._connection.set_trace_callback(None)
+    assert traced[0] == "BEGIN IMMEDIATE"
+    assert traced[-1] == "COMMIT"
+    assert traced.count("BEGIN IMMEDIATE") == 1
+    assert traced.count("COMMIT") == 1
+    assert any("INSERT INTO expense_events" in line for line in traced)
+    assert any("INSERT INTO expense_allocations" in line for line in traced)
+    assert count(store, "expense_allocations") == 2
+
+
+def test_a_rolled_back_append_traces_a_rollback_and_no_commit(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    a_flat(store, "g2", NZD)
+    traced: list[str] = []
+    store._connection.set_trace_callback(traced.append)
+    try:
+        with pytest.raises(StoreError):
+            store.append_expense(
+                an_expense(
+                    allocations=(
+                        Allocation(MemberId("g1m1"), 999),
+                        Allocation(MemberId("g2m1"), 1),
+                    )
+                )
+            )
+    finally:
+        store._connection.set_trace_callback(None)
+    assert traced[0] == "BEGIN IMMEDIATE"
+    assert traced[-1] == "ROLLBACK"
+    assert "COMMIT" not in traced
+
+
+def test_the_currency_trigger_fires_for_a_group_that_has_expenses(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    store.append_expense(an_expense())
+    assert count(store, "expense_events") == 1
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, "UPDATE groups SET currency_code = 'NZD' WHERE id = 'g1'")
+    assert store.get_group("g1").currency == AUD
+    assert store.get_expense("e1").currency == AUD
+
+
+def test_a_raw_settlement_in_the_wrong_currency_is_rejected_by_the_foreign_key(
+    store: EventStore,
+) -> None:
+    a_flat(store, "g1", AUD)
+    with pytest.raises(sqlite3.IntegrityError) as caught:
+        raw(
+            store,
+            "INSERT INTO settlement_events (id, group_id, currency_code, "
+            "from_member_id, to_member_id, amount_cents, created_at, created_by) "
+            "VALUES ('s9', 'g1', 'NZD', 'g1m1', 'g1m2', 4000, ?, 'g1m1')",
+            (_STAMP,),
+        )
+    assert "FOREIGN KEY" in str(caught.value)
+
+
+def test_a_duplicate_decision_leaves_the_stored_row_untouched(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    store.append_settlement(a_settlement())
+    store.append_settlement_decision(a_decision(decision=SettlementState.CONFIRMED))
+    before = raw(store, "SELECT * FROM settlement_decision_events")
+    with pytest.raises(DuplicateRecord) as caught:
+        store.append_settlement_decision(
+            a_decision(decision=SettlementState.REJECTED, decided_by="g1m3")
+        )
+    assert "d1" in str(caught.value)
+    assert raw(store, "SELECT * FROM settlement_decision_events") == before
+    stored = store.list_settlement_decisions("s1")
+    assert stored[0].decision is SettlementState.CONFIRMED
+
+
+EXPECTED_COLUMNS = {
+    "users": ["id", "email", "display_name", "created_at"],
+    "groups": ["id", "name", "currency_code", "created_at"],
+    "members": ["id", "group_id", "display_name", "user_id", "created_at"],
+    "expense_events": [
+        "id",
+        "group_id",
+        "currency_code",
+        "payer_id",
+        "total_cents",
+        "description",
+        "created_at",
+        "created_by",
+    ],
+    "expense_allocations": ["expense_id", "position", "member_id", "cents"],
+    "settlement_events": [
+        "id",
+        "group_id",
+        "currency_code",
+        "from_member_id",
+        "to_member_id",
+        "amount_cents",
+        "created_at",
+        "created_by",
+    ],
+    "settlement_decision_events": [
+        "id",
+        "settlement_id",
+        "decision",
+        "decided_by",
+        "created_at",
+    ],
+}
+
+
+@pytest.mark.parametrize("table", sorted(EXPECTED_COLUMNS))
+def test_each_table_holds_exactly_the_columns_the_schema_names(
+    store: EventStore, table: str
+) -> None:
+    """Exact columns, in order, so any added column fails rather than any named one.
+
+    This is what keeps "no stored balance", "no updated_at" and "no dated membership"
+    honest: a column called total_owed or cached_sum would slip past a substring scan.
+    """
+    columns = [row[1] for row in raw(store, f"PRAGMA table_info({table})")]
+    assert columns == EXPECTED_COLUMNS[table]
+
+
+BADLY_SHAPED_TIMESTAMPS = [
+    "2026-09-03T10:00:00+00:00",
+    "2026-09-03T10:00:00.000000+10:00",
+    "2026-09-03T10:00:00.00+00:00",
+    "2026-09-03 10:00:00.000000+00:00",
+]
+
+
+@pytest.mark.parametrize("bad", BADLY_SHAPED_TIMESTAMPS)
+def test_the_timestamp_check_rejects_a_shape_that_would_not_sort(
+    store: EventStore, bad: str
+) -> None:
+    a_group(store, "g1")
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(
+            store,
+            "INSERT INTO members (id, group_id, display_name, user_id, created_at) "
+            "VALUES ('mx', 'g1', 'Sam', NULL, ?)",
+            (bad,),
+        )
+    assert count(store, "members") == 0
+
+
+def test_no_deprecation_warning_from_any_public_method(tmp_path: Path) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with open_store(tmp_path / "ledger.sqlite3") as opened:
+            a_flat(opened)
+            opened.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+            opened.append_expense(an_expense())
+            opened.append_settlement(a_settlement())
+            opened.append_settlement_decision(a_decision())
+            opened.get_user(UserId("u1"))
+            opened.get_group("g1")
+            opened.list_groups()
+            opened.get_member("g1m1")
+            opened.list_members("g1")
+            opened.get_expense("e1")
+            opened.list_expenses("g1")
+            opened.list_settlements("g1")
+            opened.list_settlement_decisions("s1")
+            opened.list_events("g1")
+
+
+def test_the_store_does_not_create_the_directory_it_was_pointed_at(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nope" / "ledger.sqlite3"
+    with pytest.raises(CannotOpenStore):
+        open_store(path)
+    assert not path.parent.exists()
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "documented",
+    [
+        User,
+        Group,
+        Member,
+        StoreError,
+        CannotOpenStore,
+        UnsupportedSQLiteVersion,
+        UnsupportedSchemaVersion,
+        StoreClosed,
+        InvalidRecord,
+        RecordNotFound,
+        DuplicateRecord,
+        ConstraintViolated,
+        StorageFailed,
+        AmountTooLarge,
+    ],
+)
+def test_every_public_class_has_a_docstring(documented: type) -> None:
+    assert documented.__doc__
