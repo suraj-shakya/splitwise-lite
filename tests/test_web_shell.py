@@ -543,3 +543,53 @@ def test_the_worker_precaches_exactly_the_shell() -> None:
 def test_every_precache_entry_resolves_to_a_file() -> None:
     for entry in precache_entries():
         assert resolve_app_url(entry).is_file(), entry
+
+
+# --- Docs ------------------------------------------------------------------
+
+RUN_COMMAND = "uv run python scripts/serve.py"
+
+
+def claude_md() -> str:
+    return (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def readme() -> str:
+    return (REPO / "README.md").read_text(encoding="utf-8")
+
+
+def test_claude_md_names_the_real_run_command() -> None:
+    text = claude_md()
+    assert RUN_COMMAND in text
+    assert "nothing to run yet" not in text
+    assert "http://localhost:8000" in text
+    assert "no build step" in text
+
+
+def test_claude_md_no_longer_says_the_front_end_is_missing() -> None:
+    assert "not built yet" not in claude_md()
+
+
+def test_claude_md_says_where_the_shell_and_the_scripts_live() -> None:
+    text = claude_md()
+    assert "`app/`" in text
+    assert "`scripts/`" in text
+
+
+def test_the_readme_documents_how_to_run_the_app() -> None:
+    text = readme()
+    assert "## Run the app" in text
+    assert RUN_COMMAND in text
+    assert "no product code yet" not in text
+
+
+def test_one_document_says_how_to_clear_a_stuck_service_worker() -> None:
+    # The first person to hit a stale shell would otherwise lose an hour to it.
+    combined = claude_md() + readme()
+    assert "Service Workers" in combined
+    assert "Unregister" in combined
+
+
+def test_no_document_claims_the_shell_shows_real_data() -> None:
+    combined = claude_md() + readme()
+    assert "placeholder" in combined.lower()
