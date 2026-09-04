@@ -284,6 +284,13 @@ def test_the_module_names_neither_add_member_nor_the_table_it_writes() -> None:
 
 
 def test_the_dependency_direction_stays_one_way() -> None:
+    tree = ast.parse(accounts_source())
+    within_the_package = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 1
+    }
+    assert within_the_package == {"events", "money", "store"}
     for module in (store_module, events_module, money_module):
         tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
