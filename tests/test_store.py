@@ -1247,9 +1247,23 @@ def test_every_read_returns_domain_objects_not_rows(store: EventStore) -> None:
     store.append_expense(an_expense())
     store.append_settlement(a_settlement())
     store.append_settlement_decision(a_decision())
+    store.add_user(User(UserId("u1"), "sam@example.com", "Sam", at()))
+    assert isinstance(store.get_user(UserId("u1")), User)
     assert isinstance(store.get_group("g1"), Group)
     assert isinstance(store.get_member("g1m1"), Member)
     assert isinstance(store.get_expense("e1"), ExpenseEvent)
+    for reader, expected in [
+        (store.list_groups(), Group),
+        (store.list_members("g1"), Member),
+        (store.list_expenses("g1"), ExpenseEvent),
+        (store.list_settlements("g1"), SettlementEvent),
+        (store.list_settlement_decisions("s1"), SettlementDecisionEvent),
+    ]:
+        assert isinstance(reader, tuple)
+        assert reader
+        for item in reader:
+            assert isinstance(item, expected)
+            assert not isinstance(item, (tuple, dict, list, sqlite3.Row))
     for event in store.list_events("g1"):
         assert isinstance(
             event, (ExpenseEvent, SettlementEvent, SettlementDecisionEvent)
