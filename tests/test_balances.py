@@ -303,8 +303,7 @@ def test_a_currency_that_is_not_a_currency_raises_type_error() -> None:
         derive_balances([], group_id=GROUP, currency="AUD")
 
 
-def test_a_foreign_group_names_the_event_the_group_asked_for_and_the_one_found(
-) -> None:
+def test_a_foreign_group_names_the_event_and_both_groups() -> None:
     foreign = expense(
         "e-foreign", payer=ALI, total=1000, shares={BO: 1000}, group_id=OTHER_GROUP
     )
