@@ -13,12 +13,17 @@ in the database, so it must hold for a statement the store's own methods never w
 
 from __future__ import annotations
 
+import ast
+import re
 import sqlite3
+import tomllib
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from splitwise_lite import store as store_module
 from splitwise_lite.events import (
     Allocation,
     ExpenseEvent,
@@ -1242,3 +1247,242 @@ def test_every_read_returns_domain_objects_not_rows(store: EventStore) -> None:
             event, (ExpenseEvent, SettlementEvent, SettlementDecisionEvent)
         )
         assert not isinstance(event, (tuple, dict, sqlite3.Row))
+
+
+# --- Indexes and query plans ------------------------------------------------
+
+
+def plan(store: EventStore, sql: str, params: tuple[object, ...]) -> str:
+    """The EXPLAIN QUERY PLAN detail lines for ``sql``, joined into one string."""
+    return "\n".join(row[3] for row in raw(store, "EXPLAIN QUERY PLAN " + sql, params))
+
+
+def test_the_named_indexes_all_exist(store: EventStore) -> None:
+    names = {
+        row[0]
+        for row in raw(store, "SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert {
+        "idx_expense_events_group_order",
+        "idx_settlement_events_group_order",
+        "idx_settlement_decisions_settlement_order",
+        "idx_expense_allocations_member",
+        "idx_members_group",
+    } <= names
+
+
+def test_the_ordered_expense_read_is_served_by_its_index(store: EventStore) -> None:
+    a_flat(store)
+    detail = plan(store, store_module._SELECT_EXPENSES_BY_GROUP, ("g1",))
+    assert "idx_expense_events_group_order" in detail
+    assert "USE TEMP B-TREE FOR ORDER BY" not in detail
+
+
+def test_the_ordered_settlement_read_is_served_by_its_index(store: EventStore) -> None:
+    a_flat(store)
+    detail = plan(store, store_module._SELECT_SETTLEMENTS_BY_GROUP, ("g1",))
+    assert "idx_settlement_events_group_order" in detail
+    assert "USE TEMP B-TREE FOR ORDER BY" not in detail
+
+
+def test_the_ordered_decision_read_is_served_by_its_index(store: EventStore) -> None:
+    a_flat(store)
+    detail = plan(store, store_module._SELECT_DECISIONS_BY_SETTLEMENT, ("s1",))
+    assert "idx_settlement_decisions_settlement_order" in detail
+    assert "USE TEMP B-TREE FOR ORDER BY" not in detail
+
+
+# --- Durability and concurrency ---------------------------------------------
+
+
+def test_data_survives_close_and_reopen(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    expense = an_expense()
+    settlement = a_settlement()
+    decision = a_decision()
+    with open_store(path) as writer:
+        a_flat(writer)
+        writer.append_expense(expense)
+        writer.append_settlement(settlement)
+        writer.append_settlement_decision(decision)
+    with open_store(path) as reader:
+        assert reader.get_expense("e1") == expense
+        assert reader.list_events("g1") == (expense, settlement, decision)
+        assert [member.id for member in reader.list_members("g1")] == [
+            "g1m1",
+            "g1m2",
+            "g1m3",
+        ]
+
+
+def test_reopening_does_not_re_run_destructive_ddl(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    with open_store(path) as writer:
+        a_flat(writer)
+        writer.append_expense(an_expense())
+        tables = raw(
+            writer, "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
+        )[0][0]
+    for _ in range(3):
+        with open_store(path) as reopened:
+            assert count(reopened, "expense_events") == 1
+            assert (
+                raw(reopened, "SELECT count(*) FROM sqlite_master WHERE type = 'table'")[
+                    0
+                ][0]
+                == tables
+            )
+            assert raw(reopened, "PRAGMA user_version")[0][0] == SCHEMA_VERSION
+
+
+def test_two_stores_on_one_file_can_both_append(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    with open_store(path) as one, open_store(path) as two:
+        a_flat(one)
+        one.append_expense(an_expense("e1", created_at=at()))
+        two.append_expense(an_expense("e2", created_at=at(1)))
+        two.append_settlement(a_settlement("s1", created_at=at(2)))
+        assert [event.id for event in one.list_events("g1")] == ["e1", "e2", "s1"]
+        assert [event.id for event in two.list_events("g1")] == ["e1", "e2", "s1"]
+
+
+def test_opening_one_fresh_file_from_two_stores_leaves_one_valid_schema(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    with open_store(path) as one, open_store(path) as two:
+        assert raw(one, "PRAGMA integrity_check")[0][0] == "ok"
+        assert raw(two, "PRAGMA user_version")[0][0] == SCHEMA_VERSION
+        tables = raw(
+            two, "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
+        )[0][0]
+        assert tables == 7
+        a_flat(two)
+        assert [member.id for member in one.list_members("g1")] == [
+            "g1m1",
+            "g1m2",
+            "g1m3",
+        ]
+
+
+def test_two_identical_runs_produce_byte_identical_databases(tmp_path: Path) -> None:
+    def build(name: str) -> Path:
+        path = tmp_path / name
+        with open_store(path) as writer:
+            a_flat(writer)
+            writer.append_expense(an_expense())
+            writer.append_settlement(a_settlement())
+            writer.append_settlement_decision(a_decision())
+        return path
+
+    assert build("one.sqlite3").read_bytes() == build("two.sqlite3").read_bytes()
+
+
+def test_no_column_takes_its_value_from_the_clock(store: EventStore) -> None:
+    schema = " ".join(
+        row[0] for row in raw(store, "SELECT sql FROM sqlite_master WHERE sql NOT NULL")
+    ).upper()
+    assert "DEFAULT" not in schema
+    assert "CURRENT_TIMESTAMP" not in schema
+
+
+# --- What the module itself may contain -------------------------------------
+
+
+def store_source() -> str:
+    return Path(store_module.__file__).read_text(encoding="utf-8")
+
+
+def sql_literals() -> list[str]:
+    """Every string literal in store.py that is not a docstring.
+
+    Docstrings are the string constants that stand alone as an expression statement,
+    which is also how the module documents its constants. Everything else is either a
+    statement the store issues or a message it raises, and those are what the rules
+    below are about.
+    """
+    tree = ast.parse(store_source())
+    documentation = {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+    }
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in documentation
+    ]
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        r"\bUPDATE\s+(expense_events|expense_allocations|settlement_events"
+        r"|settlement_decision_events)\b",
+        r"\bDELETE\s+FROM\b",
+        r"\bINSERT\s+OR\s+(REPLACE|IGNORE)\b",
+        r"\bREPLACE\s+INTO\b",
+        r"\bON\s+CONFLICT\b",
+    ],
+)
+def test_the_module_issues_no_statement_that_could_rewrite_history(
+    forbidden: str,
+) -> None:
+    for literal in sql_literals():
+        assert re.search(forbidden, literal, re.IGNORECASE) is None, literal
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    ["register_adapter", "register_converter", "detect_types", "PARSE_DECLTYPES"],
+)
+def test_the_module_registers_no_type_adapters(forbidden: str) -> None:
+    assert forbidden not in store_source()
+
+
+@pytest.mark.parametrize("forbidden", ["now(", "utcnow(", "time.time", "today("])
+def test_the_module_never_reads_the_clock(forbidden: str) -> None:
+    assert forbidden not in store_source()
+
+
+def test_the_module_does_no_floating_point_arithmetic() -> None:
+    tree = ast.parse(store_source())
+    for node in ast.walk(tree):
+        assert not isinstance(node, ast.Constant) or not isinstance(
+            node.value, float
+        ), ast.dump(node)
+        if isinstance(node, ast.BinOp):
+            assert not isinstance(node.op, ast.Div), ast.dump(node)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in {"float", "round"}, ast.dump(node)
+
+
+def test_a_round_trip_raises_no_deprecation_warning(tmp_path: Path) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with open_store(tmp_path / "ledger.sqlite3") as opened:
+            a_flat(opened)
+            opened.append_expense(an_expense())
+            opened.append_settlement(a_settlement())
+            opened.append_settlement_decision(a_decision())
+            opened.get_expense("e1")
+            opened.list_events("g1")
+
+
+def test_the_project_still_declares_no_runtime_dependency() -> None:
+    root = Path(store_module.__file__).parents[2]
+    manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert manifest["project"]["dependencies"] == []
+    assert manifest["dependency-groups"] == {"dev": ["pytest>=8.0"]}
+
+
+def test_the_store_is_re_exported_from_the_package_root() -> None:
+    import splitwise_lite
+
+    assert splitwise_lite.open_store is open_store
+    assert splitwise_lite.EventStore is EventStore
+    assert splitwise_lite.__version__ == "0.1.0"
+    for name in ("User", "Group", "Member", "UserId", "StoreError"):
+        assert name in splitwise_lite.__all__

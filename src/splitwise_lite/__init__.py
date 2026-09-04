@@ -7,6 +7,8 @@ The domain vocabulary lives in three modules and is re-exported here:
 * ``events``: the immutable ledger events, their ids and their allocations.
 * ``split``: the resolver that turns a total and a split mode into the explicit
   allocations an expense event stores.
+* ``store``: the durable, append-only SQLite store those events are written to and
+  read back from, and the user, group and member records they reference.
 """
 
 from .events import (
@@ -43,34 +45,78 @@ from .split import (
     split_equally,
     split_exact,
 )
+from .store import (
+    BUSY_TIMEOUT_MS,
+    IN_MEMORY,
+    MIN_SQLITE_VERSION,
+    SCHEMA_VERSION,
+    AmountTooLarge,
+    CannotOpenStore,
+    ConstraintViolated,
+    DuplicateRecord,
+    EventStore,
+    Group,
+    InvalidRecord,
+    Member,
+    RecordNotFound,
+    StorageFailed,
+    StoreClosed,
+    StoreError,
+    UnsupportedSchemaVersion,
+    UnsupportedSQLiteVersion,
+    User,
+    UserId,
+    open_store,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "BUSY_TIMEOUT_MS",
+    "IN_MEMORY",
     "MAX_CENTS",
     "MINOR_UNITS",
+    "MIN_SQLITE_VERSION",
+    "SCHEMA_VERSION",
     "Allocation",
+    "AmountTooLarge",
+    "CannotOpenStore",
+    "ConstraintViolated",
     "Currency",
     "CurrencyMismatch",
     "DomainError",
+    "DuplicateRecord",
+    "EventStore",
     "ExpenseEvent",
     "ExpenseId",
+    "Group",
     "GroupId",
     "InvalidAllocation",
     "InvalidAmount",
     "InvalidCurrency",
     "InvalidEvent",
+    "InvalidRecord",
     "InvalidSplit",
     "LedgerEvent",
+    "Member",
     "MemberId",
     "Money",
+    "RecordNotFound",
     "SettlementDecisionEvent",
     "SettlementEvent",
     "SettlementId",
     "SettlementState",
+    "StorageFailed",
+    "StoreClosed",
+    "StoreError",
+    "UnsupportedSQLiteVersion",
+    "UnsupportedSchemaVersion",
+    "User",
+    "UserId",
     "__version__",
     "format_amount",
     "new_id",
+    "open_store",
     "ordering_key",
     "parse_amount",
     "split_by_weight",
