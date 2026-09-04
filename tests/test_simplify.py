@@ -1285,3 +1285,20 @@ def test_everything_public_carries_a_docstring() -> None:
         assert getattr(simplify_module, name).__doc__
     assert simplify_module.__doc__
     assert AbsorbedDebt.pair.__doc__
+
+
+def test_nothing_public_is_defined_beyond_the_five_names() -> None:
+    """Everything else in the module is private, underscore prefixed."""
+    tree = _module_tree(simplify_module)
+    defined = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined.add(node.target.id)
+        elif isinstance(node, ast.Assign):
+            defined |= {
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            }
+    public = {name for name in defined if not name.startswith("_")}
+    assert public == set(simplify_module.__all__)
