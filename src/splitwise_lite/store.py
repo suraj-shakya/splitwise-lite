@@ -45,11 +45,12 @@ knows a store exists.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final, Iterator, NewType
+from typing import Final, NewType
 
 from .events import (
     Allocation,
@@ -116,9 +117,6 @@ test asserts the pragma reads back equal to this constant, so the two cannot dri
 IN_MEMORY: Final[str] = ":memory:"
 """Path value for a private in-memory database. Used by the test suite, which needs no
 fixture teardown, and never by the application, which always names a real file."""
-
-_TIMESTAMP_LENGTH: Final[int] = 32
-"""Characters in an encoded timestamp: ``2026-09-03T10:00:00.000000+00:00``."""
 
 _MAX_NAME_LENGTH: Final[int] = 100
 """Cap on ``display_name`` and group ``name``, matching the schema's ``CHECK``."""
@@ -941,22 +939,47 @@ class EventStore:
         its ``busy_timeout`` instead of failing at the moment it tries to upgrade.
 
         Any exception rolls the whole transaction back, so a failed append leaves
-        nothing behind, and every ``sqlite3`` failure leaves as a ``StoreError``.
+        nothing behind, and every ``sqlite3`` failure leaves as a ``StoreError`` --
+        including a failure to take the lock in the first place, which is what a second
+        writer sees when it waits out its ``busy_timeout``.
         """
         connection = self._require_open()
-        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as error:
+            raise StorageFailed(
+                f"{what} failed: the database would not start a transaction: {error}"
+            ) from error
         try:
             yield connection
         except sqlite3.IntegrityError as error:
-            connection.execute("ROLLBACK")
+            self._rollback(connection)
             raise ConstraintViolated(f"{what} failed: {error}") from error
         except sqlite3.Error as error:
-            connection.execute("ROLLBACK")
+            self._rollback(connection)
             raise StorageFailed(f"{what} failed: {error}") from error
         except BaseException:
-            connection.execute("ROLLBACK")
+            self._rollback(connection)
             raise
-        connection.execute("COMMIT")
+        try:
+            connection.execute("COMMIT")
+        except sqlite3.Error as error:
+            self._rollback(connection)
+            raise StorageFailed(f"{what} failed to commit: {error}") from error
+
+    @staticmethod
+    def _rollback(connection: sqlite3.Connection) -> None:
+        """Undo the transaction in flight, swallowing any failure to do so.
+
+        The exception already on its way out is the one that says what went wrong, and
+        the only way ``ROLLBACK`` itself fails is that there is no longer a transaction
+        to undo. Letting that second failure replace the first would hide the real
+        cause and break the promise that no ``sqlite3`` exception escapes.
+        """
+        try:
+            connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
 
     @staticmethod
     def _require_free(

@@ -14,6 +14,7 @@ in the database, so it must hold for a statement the store's own methods never w
 from __future__ import annotations
 
 import ast
+import inspect
 import re
 import sqlite3
 import tomllib
@@ -23,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from splitwise_lite import events as events_module
 from splitwise_lite import store as store_module
 from splitwise_lite.events import (
     Allocation,
@@ -1486,3 +1488,164 @@ def test_the_store_is_re_exported_from_the_package_root() -> None:
     assert splitwise_lite.__version__ == "0.1.0"
     for name in ("User", "Group", "Member", "UserId", "StoreError"):
         assert name in splitwise_lite.__all__
+
+
+# --- The shape of the public surface ----------------------------------------
+
+
+WRITES = [
+    "add_user",
+    "add_group",
+    "add_member",
+    "append_expense",
+    "append_settlement",
+    "append_settlement_decision",
+]
+
+READS = [
+    "get_user",
+    "get_group",
+    "list_groups",
+    "get_member",
+    "list_members",
+    "get_expense",
+    "list_expenses",
+    "list_settlements",
+    "list_settlement_decisions",
+    "list_events",
+]
+
+
+def test_the_public_surface_is_exactly_the_named_methods() -> None:
+    public = {name for name in dir(EventStore) if not name.startswith("_")}
+    assert public == set(WRITES) | set(READS) | {"close"}
+
+
+def test_every_public_method_has_a_docstring() -> None:
+    for name in WRITES + READS + ["close"]:
+        assert getattr(EventStore, name).__doc__, name
+    assert EventStore.__doc__
+    assert open_store.__doc__
+
+
+def test_open_store_has_no_default_path() -> None:
+    parameters = inspect.signature(open_store).parameters
+    assert list(parameters) == ["path"]
+    assert parameters["path"].default is inspect.Parameter.empty
+
+
+def test_every_public_method_refuses_a_closed_store(tmp_path: Path) -> None:
+    opened = open_store(tmp_path / "ledger.sqlite3")
+    a_flat(opened)
+    opened.close()
+    for name in READS:
+        with pytest.raises(StoreClosed):
+            getattr(opened, name)(*([] if name == "list_groups" else ["g1"]))
+    for name, argument in zip(
+        WRITES,
+        [
+            User(UserId("u1"), "sam@example.com", "Sam", at()),
+            Group("g9", "Flat", AUD, at()),
+            Member("m9", "g1", "Sam", None, at()),
+            an_expense(),
+            a_settlement(),
+            a_decision(),
+        ],
+        strict=True,
+    ):
+        with pytest.raises(StoreClosed):
+            getattr(opened, name)(argument)
+
+
+def test_every_statement_the_store_issues_is_a_constant_with_bound_parameters() -> None:
+    """No SQL is assembled at the call site, so no value can be interpolated into it."""
+    tree = ast.parse(store_source())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"execute", "executescript", "executemany"}
+    ]
+    assert calls
+    for call in calls:
+        statement = call.args[0]
+        assert isinstance(statement, (ast.Name, ast.Constant)), ast.dump(call)
+        if isinstance(statement, ast.Constant):
+            assert isinstance(statement.value, str)
+        for argument in call.args[1:]:
+            assert isinstance(argument, ast.Call), ast.dump(call)
+            assert isinstance(argument.func, ast.Name)
+            assert argument.func.id == "_params", ast.dump(call)
+
+
+def test_appends_open_an_immediate_transaction() -> None:
+    assert "BEGIN IMMEDIATE" in store_source()
+
+
+def test_the_user_id_type_lives_here_and_not_in_events() -> None:
+    assert not hasattr(events_module, "UserId")
+    assert "UserId" not in events_module.__all__
+    assert UserId("u1") == "u1"
+
+
+def test_membership_is_a_flat_list_with_no_dates(store: EventStore) -> None:
+    columns = {row[1] for row in raw(store, "PRAGMA table_info(members)")}
+    assert columns == {"id", "group_id", "display_name", "user_id", "created_at"}
+    assert not columns & {"joined_at", "left_at", "is_active", "until", "since"}
+    tables = {
+        row[0]
+        for row in raw(
+            store,
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%'",
+        )
+    }
+    assert tables == {
+        "users",
+        "groups",
+        "members",
+        "expense_events",
+        "expense_allocations",
+        "settlement_events",
+        "settlement_decision_events",
+    }
+
+
+def test_a_sqlite_failure_leaves_a_public_method_as_a_store_error(
+    store: EventStore,
+) -> None:
+    a_flat(store)
+    raw(store, "DROP TABLE expense_events")
+    with pytest.raises(StorageFailed) as caught:
+        store.list_expenses("g1")
+    assert isinstance(caught.value.__cause__, sqlite3.Error)
+    assert not isinstance(caught.value, sqlite3.Error)
+
+
+def test_open_store_rejects_a_path_that_is_not_a_path(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        open_store(1)
+
+
+def test_a_busy_database_surfaces_as_a_store_error(tmp_path: Path) -> None:
+    """A second writer that cannot get the lock still leaves through StoreError."""
+    path = tmp_path / "ledger.sqlite3"
+    with open_store(path) as holder, open_store(path) as blocked:
+        a_flat(holder)
+        raw(blocked, "PRAGMA busy_timeout = 0")
+        raw(holder, "BEGIN IMMEDIATE")
+        raw(
+            holder,
+            "INSERT INTO groups (id, name, currency_code, created_at) "
+            "VALUES ('g2', 'Trip', 'NZD', ?)",
+            (_STAMP,),
+        )
+        try:
+            with pytest.raises(StorageFailed) as caught:
+                blocked.append_expense(an_expense())
+            assert isinstance(caught.value.__cause__, sqlite3.Error)
+        finally:
+            raw(holder, "ROLLBACK")
+        blocked.append_expense(an_expense())
+        assert blocked.get_expense("e1").total_cents == 1000
