@@ -423,12 +423,13 @@ def test_the_transfers_total_the_positive_net_and_the_negative_net() -> None:
 def test_the_plan_settles_every_member_to_zero_on_the_plan_itself() -> None:
     """The backlog asks that simplified transfers settle the group to zero.
 
-    The identity is ``net[m] + paid(m) - received(m) == 0``. The acceptance criteria
-    write it with ``paid`` and ``received`` the other way round, which cannot hold under
-    the sign convention ``balances.py`` states and the next criterion repeats: ``net``
-    is negative for a member who owes the group, a confirmed settlement moves its payer
-    *up* by what they paid, and a debtor at -400 who pays 400 and receives nothing lands
-    on zero only this way round. Raised rather than quietly reversed.
+    The identity is ``net[m] + paid(m) - received(m) == 0``. ``net`` is negative for a
+    member who owes the group, and a confirmed settlement moves its payer *up* by what
+    they handed over, so a debtor at -400 who pays 400 and receives nothing lands on
+    zero only this way round. The criteria first stated it with ``paid`` and
+    ``received`` the other way round, which gives -800 for that member; that was raised
+    during implementation and corrected at the source on 2026-09-05, so the task file
+    and this test now agree.
     """
     balances = from_debts(NOT_MINIMAL)
     plan = simplify_debts(balances)

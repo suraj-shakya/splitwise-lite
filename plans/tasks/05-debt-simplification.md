@@ -174,10 +174,14 @@ creditor `c` receives `net[c] == in(c) - out(c)`, at most `in(c)`.
 Run once for the payer side and once for the receiver side, over **separate** remaining
 maps, both initialised from `Balances.pairwise`.
 
-Payer side, with transfers taken in `(from_member_id, to_member_id)` order:
+Payer side. Each pass is a full sweep over the transfer list, taken in
+`(from_member_id, to_member_id)` order: pass one finishes for **every** transfer before
+pass two begins for any of them. Two sweeps, not two steps per transfer.
 
 1. **Pass one, the direct debt.** For a transfer `d -> c`, if `(d, c)` is a pairwise key
-   with remaining capacity, absorb `min(transfer amount, remaining)` of it first.
+   with remaining capacity, absorb `min(transfer amount, remaining)` of it first. Each
+   `(d, c)` names one transfer at most, so no other transfer has touched that key yet
+   and the remaining capacity here is always the whole debt.
 2. **Pass two, the rest.** While the transfer still has unattributed cents, take `d`'s
    outgoing key with the largest remaining capacity, ties broken by ascending creditor id,
    and absorb `min(still needed, remaining)`. Repeat.
@@ -192,8 +196,20 @@ remaining capacity, ties broken by ascending debtor id.
 
 Two consequences worth stating so nobody files them as bugs:
 
-* Pass two can consume a debt that a later transfer would have preferred as its direct
-  match, which costs a little readability and never costs honesty. Accepted.
+* Pass two never consumes a debt that a later transfer needs as its direct match,
+  because every direct match has already been claimed by the time pass two runs at all.
+  A transfer reaching for a substitute can therefore only take a debt no transfer will
+  claim directly, which costs a little readability and never costs honesty. Accepted.
+  **Corrected 2026-09-05, during implementation.** This bullet previously said the
+  opposite, that pass two *can* eat a later transfer's direct match, and accepted it.
+  That cannot hold alongside "Direct debt first" in the acceptance criteria below, which
+  requires the direct key to appear for `min(transfer amount, that debt)` of the whole
+  debt rather than of whatever is left of it. The discriminating case: `pairwise` of
+  `{(ali, cass): 100, (ali, dee): 100, (dee, bo): 100}` plans `ali -> bo 100` then
+  `ali -> cass 100`, and running both passes per transfer lets `ali -> bo` take
+  `(ali, cass)`, leaving `ali -> cass` with no direct row at all. Sweeping the whole
+  transfer list once per pass is the only reading under which the criterion holds
+  universally, so that is the reading, and this consequence is its mirror image.
 * Cents left unattributed on a pairwise debt are exactly the cents that netting cancelled
   against something the payer was owed. That leftover is a fact about the group, not a
   gap, and the criteria below pin its size exactly.
@@ -280,9 +296,16 @@ holds three live debts, and every one of those debts is absorbed by nothing.
   a debtor and a creditor.
 - The sum of transfer amounts equals the sum of the positive `net` values, which equals
   the negation of the sum of the negative ones.
-- For every member `m`, `net[m] + received(m) - paid(m) == 0` in exact cents, where
+- For every member `m`, `net[m] + paid(m) - received(m) == 0` in exact cents, where
   `paid` and `received` are sums over `transfers`. This is the backlog's "verify that
   simplified transfers settle the group to zero", checked directly on the plan.
+  **Corrected 2026-09-05, during implementation.** This criterion previously read
+  `net[m] + received(m) - paid(m) == 0`, which is provably wrong and contradicted the
+  next criterion. The signs run this way because a confirmed settlement moves its
+  **payer up**: the payer has handed over real money, so `derive_balances` adds the
+  amount to their `net` and subtracts it from the receiver's. A debtor at -400 who pays
+  400 and receives nothing lands on 0 only as written here; the old form gives -800 for
+  that same member. Verified against the real fold on `master` before correcting.
 - A member with `net[m] < 0` pays exactly `-net[m]` in total and receives nothing. A
   member with `net[m] > 0` receives exactly `net[m]` and pays nothing.
 - A member with a `net` of zero appears in no transfer, as neither payer nor receiver. A
