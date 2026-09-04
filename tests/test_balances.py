@@ -10,12 +10,22 @@ seeded from a fixed constant so any failure reproduces from the test alone.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
+import inspect
+import itertools
+import random
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+import splitwise_lite
+from splitwise_lite import balances as balances_module
+from splitwise_lite import events as events_module
+from splitwise_lite import money as money_module
+from splitwise_lite import split as split_module
 from splitwise_lite.balances import (
     Balances,
     InvalidLedger,
@@ -34,7 +44,14 @@ from splitwise_lite.events import (
     SettlementId,
     SettlementState,
 )
-from splitwise_lite.money import Currency, CurrencyMismatch, DomainError, Money
+from splitwise_lite.money import (
+    MAX_CENTS,
+    Currency,
+    CurrencyMismatch,
+    DomainError,
+    Money,
+    format_amount,
+)
 
 AUD = Currency("AUD")
 NZD = Currency("NZD")
@@ -51,13 +68,16 @@ THIRDS = {ALI: 1000, BO: 1000, CASS: 1000}
 SEED = 20260904
 
 
+EPOCH = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+
 def at(minute: int) -> datetime:
-    """A UTC timestamp ``minute`` minutes into a fixed hour.
+    """A UTC timestamp ``minute`` minutes after a fixed instant.
 
     Fixed rather than ``now()`` so the ordering key of every fixture is written down in
     the test rather than depending on when the suite runs.
     """
-    return datetime(2026, 1, 1, 12, minute, tzinfo=timezone.utc)
+    return EPOCH + timedelta(minutes=minute)
 
 
 def expense(
@@ -842,3 +862,297 @@ def test_the_balances_and_the_rendered_state_can_never_disagree() -> None:
     assert cents_of(result) == {ALI: 1000, BO: 0, CASS: -1000}
     assert debts_of(result) == {(CASS, ALI): 1000}
     assert_consistent(result)
+
+
+# --- Display edge -----------------------------------------------------------
+
+
+def test_every_public_figure_is_money_in_the_group_currency() -> None:
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=1250, shares={BO: 1250})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert all(money.currency == AUD for money in result.net.values())
+    assert all(money.currency == AUD for money in result.pairwise.values())
+    assert result.net_for(CASS).currency == AUD
+    assert result.owed_between(ALI, CASS).currency == AUD
+
+
+def test_a_negative_net_renders_straight_through_format_amount() -> None:
+    result = derive_balances(
+        [expense("e1", payer=ALI, total=1250, shares={BO: 1250})],
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert format_amount(result.net_for(BO)) == "-12.50"
+    assert format_amount(result.net_for(ALI)) == "12.50"
+
+
+# --- Order independence -----------------------------------------------------
+
+
+def six_event_ledger() -> list[LedgerEvent]:
+    """One expense, two settlements, and two decisions that conflict over one of them.
+
+    Six events, so every one of the 720 orderings can be folded in the test below.
+    """
+    return [
+        expense("e1", payer=ALI, total=3000, shares=THIRDS),
+        settlement("s1", payer=BO, receiver=ALI, amount=1000, minute=1),
+        settlement("s2", payer=CASS, receiver=ALI, amount=1000, minute=2),
+        decision("d1", settlement_id="s1", state=SettlementState.CONFIRMED, minute=3),
+        decision("d2", settlement_id="s2", state=SettlementState.REJECTED, minute=4),
+        decision("d3", settlement_id="s2", state=SettlementState.CONFIRMED, minute=5),
+    ]
+
+
+def test_every_permutation_of_six_events_folds_to_one_identical_answer() -> None:
+    """Exhaustive where it can be: 720 orderings, one balance and one state map."""
+    ledger = six_event_ledger()
+    expected = derive_balances(ledger, group_id=GROUP, currency=AUD)
+    expected_states = settlement_states(ledger)
+
+    for ordering in itertools.permutations(ledger):
+        shuffled = list(ordering)
+        assert derive_balances(shuffled, group_id=GROUP, currency=AUD) == expected
+        assert settlement_states(shuffled) == expected_states
+
+
+def test_every_permutation_agrees_on_iteration_order_too() -> None:
+    """Equality ignores order, so the rendered rows are compared as lists as well."""
+    ledger = six_event_ledger()
+    expected = derive_balances(ledger, group_id=GROUP, currency=AUD)
+
+    for ordering in itertools.permutations(ledger):
+        result = derive_balances(list(ordering), group_id=GROUP, currency=AUD)
+        assert list(result.net.items()) == list(expected.net.items())
+        assert list(result.pairwise.items()) == list(expected.pairwise.items())
+        assert list(settlement_states(list(ordering))) == ["s1", "s2"]
+
+
+# --- Property: randomly generated ledgers -----------------------------------
+
+
+ROSTER = [MemberId(f"m{index}") for index in range(5)]
+
+
+def random_ledger(rng: random.Random, size: int) -> list[LedgerEvent]:
+    """A ledger of ``size`` entries mixing expenses with settlements in every state.
+
+    Ids are unique by construction, timestamps ascend, and every amount is a whole
+    number of cents, so the only thing that varies is the shape of the ledger.
+    """
+    events: list[LedgerEvent] = []
+    for index in range(size):
+        minute = index + 1
+        if rng.choice((True, True, False)):
+            participants = rng.sample(ROSTER, rng.randint(1, len(ROSTER)))
+            shares = {member_id: rng.randint(0, 500) for member_id in participants}
+            if sum(shares.values()) == 0:
+                shares[participants[0]] = 1
+            events.append(
+                expense(
+                    f"e{index}",
+                    payer=rng.choice(ROSTER),
+                    total=sum(shares.values()),
+                    shares=shares,
+                    minute=minute,
+                )
+            )
+            continue
+
+        payer, receiver = rng.sample(ROSTER, 2)
+        events.append(
+            settlement(
+                f"s{index}",
+                payer=payer,
+                receiver=receiver,
+                amount=rng.randint(1, 1000),
+                minute=minute,
+            )
+        )
+        outcome = rng.choice(
+            (None, SettlementState.CONFIRMED, SettlementState.REJECTED)
+        )
+        if outcome is not None:
+            events.append(
+                decision(
+                    f"d{index}",
+                    settlement_id=f"s{index}",
+                    state=outcome,
+                    minute=minute,
+                )
+            )
+    return events
+
+
+def test_every_random_ledger_holds_every_invariant() -> None:
+    """Net sums to zero, debts are positive and one-directional, and the two agree."""
+    rng = random.Random(SEED)
+    for _ in range(200):
+        events = random_ledger(rng, rng.randint(0, 20))
+        assert_consistent(derive_balances(events, group_id=GROUP, currency=AUD))
+
+
+def test_shuffling_a_random_ledger_never_changes_the_answer() -> None:
+    rng = random.Random(SEED + 1)
+    for _ in range(100):
+        events = random_ledger(rng, rng.randint(1, 20))
+        expected = derive_balances(events, group_id=GROUP, currency=AUD)
+        expected_states = settlement_states(events)
+        for _ in range(3):
+            shuffled = list(events)
+            rng.shuffle(shuffled)
+            assert derive_balances(shuffled, group_id=GROUP, currency=AUD) == expected
+            assert settlement_states(shuffled) == expected_states
+
+
+def test_settling_every_outstanding_debt_closes_the_group() -> None:
+    """The closure property task 5 leans on: one confirmed settlement per debt."""
+    rng = random.Random(SEED + 2)
+    for _ in range(50):
+        events = random_ledger(rng, rng.randint(1, 20))
+        outstanding = derive_balances(events, group_id=GROUP, currency=AUD).pairwise
+
+        closing = list(events)
+        for index, (pair, owed) in enumerate(outstanding.items()):
+            debtor, creditor = pair
+            closing += confirmed(
+                f"close-{index}",
+                payer=debtor,
+                receiver=creditor,
+                amount=owed.cents,
+                minute=1000 + index,
+            )
+
+        settled = derive_balances(closing, group_id=GROUP, currency=AUD)
+        assert dict(settled.pairwise) == {}
+        assert set(cents_of(settled).values()) <= {0}
+
+
+# --- Arithmetic: integer cents, and no division at all ----------------------
+
+
+def _module_tree(module) -> ast.Module:
+    return ast.parse(Path(inspect.getfile(module)).read_text(encoding="utf-8"))
+
+
+def _names(tree: ast.Module) -> set[str]:
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    return names | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+
+@pytest.mark.parametrize("forbidden", ["float", "round", "Decimal", "divmod"])
+def test_the_balance_module_never_names_a_rounding_tool(forbidden: str) -> None:
+    assert forbidden not in _names(_module_tree(balances_module))
+
+
+@pytest.mark.parametrize(
+    "operator",
+    [ast.Div, ast.FloorDiv, ast.Mod],
+    ids=["true division", "floor division", "modulo"],
+)
+def test_the_balance_module_never_divides(operator: type[ast.operator]) -> None:
+    """The fold only adds and subtracts, so no remainder can arise to be assigned."""
+    tree = _module_tree(balances_module)
+    divisions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.BinOp, ast.AugAssign))
+        and isinstance(node.op, operator)
+    ]
+    assert divisions == []
+
+
+def test_the_fold_sorts_with_the_ordering_key_events_py_defines() -> None:
+    """Not re-derived here: one tie-break rule, shared by every consumer of the log."""
+    assert "ordering_key" in _names(_module_tree(balances_module))
+    assert balances_module.ordering_key is events_module.ordering_key
+
+
+def test_no_stored_amount_bound_is_applied_to_a_derived_balance() -> None:
+    """Balances are derived and never stored, so there is no column to overflow."""
+    events = [
+        expense("e1", payer=ALI, total=MAX_CENTS, shares={BO: MAX_CENTS}),
+        expense("e2", payer=ALI, total=MAX_CENTS, shares={BO: MAX_CENTS}, minute=1),
+    ]
+    result = derive_balances(events, group_id=GROUP, currency=AUD)
+    assert result.net_for(ALI) == Money(MAX_CENTS + MAX_CENTS, AUD)
+    assert result.owed_between(BO, ALI) == Money(MAX_CENTS + MAX_CENTS, AUD)
+    assert_consistent(result)
+
+
+@pytest.mark.parametrize("forbidden", ["hash", "random", "time", "uuid", "datetime"])
+def test_the_fold_is_a_pure_function_of_its_inputs(forbidden: str) -> None:
+    """No clock, no randomness, and nothing salted per process deciding an answer."""
+    assert forbidden not in _names(_module_tree(balances_module))
+
+
+def test_the_module_keeps_no_mutable_state_to_memoise_into() -> None:
+    mutable = {
+        name: value
+        for name, value in vars(balances_module).items()
+        if not name.startswith("__")
+        and isinstance(value, (dict, list, set, bytearray))
+    }
+    assert mutable == {}
+
+
+def test_two_folds_in_a_row_do_not_drift() -> None:
+    events = six_event_ledger()
+    first = derive_balances(events, group_id=GROUP, currency=AUD)
+    second = derive_balances(events, group_id=GROUP, currency=AUD)
+    assert first == second
+    assert list(first.net.items()) == list(second.net.items())
+    assert list(first.pairwise.items()) == list(second.pairwise.items())
+
+
+# --- Dependency direction ---------------------------------------------------
+
+
+def _imported(tree: ast.Module) -> set[str]:
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    return imported
+
+
+def test_balances_imports_only_money_and_events_from_the_package() -> None:
+    imported = _imported(_module_tree(balances_module))
+    assert {name for name in imported if name in {"money", "events", "split"}} == {
+        "money",
+        "events",
+    }
+    assert not any("splitwise_lite" in name for name in imported)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [money_module, events_module, split_module],
+    ids=["money", "events", "split"],
+)
+def test_the_earlier_modules_never_learn_about_the_fold(module) -> None:
+    assert "balances" not in _imported(_module_tree(module))
+
+
+def test_the_fold_is_re_exported_from_the_package_root() -> None:
+    assert splitwise_lite.derive_balances is derive_balances
+    assert splitwise_lite.settlement_states is settlement_states
+    assert splitwise_lite.Balances is Balances
+    assert splitwise_lite.InvalidLedger is InvalidLedger
+    assert {
+        "Balances",
+        "InvalidLedger",
+        "derive_balances",
+        "settlement_states",
+    } <= set(splitwise_lite.__all__)
+
+
+def test_the_package_version_is_untouched() -> None:
+    assert splitwise_lite.__version__ == "0.1.0"
