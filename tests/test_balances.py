@@ -45,6 +45,8 @@ ALI = MemberId("ali")
 BO = MemberId("bo")
 CASS = MemberId("cass")
 
+THIRDS = {ALI: 1000, BO: 1000, CASS: 1000}
+
 SEED = 20260904
 
 
@@ -168,14 +170,14 @@ def test_both_mappings_are_read_only_views() -> None:
     assert isinstance(result.net, types.MappingProxyType)
     assert isinstance(result.pairwise, types.MappingProxyType)
     with pytest.raises(TypeError):
-        result.net[CASS] = Money(1, AUD)  # type: ignore[index]
+        result.net[CASS] = Money(1, AUD)
     with pytest.raises(TypeError):
-        result.pairwise[(CASS, ALI)] = Money(1, AUD)  # type: ignore[index]
+        result.pairwise[(CASS, ALI)] = Money(1, AUD)
 
 
 def test_two_folds_of_the_same_events_compare_equal() -> None:
     events = [
-        expense("e1", payer=ALI, total=3000, shares={ALI: 1000, BO: 1000, CASS: 1000}),
+        expense("e1", payer=ALI, total=3000, shares=THIRDS),
         settlement("s1", payer=BO, receiver=ALI, amount=1000, minute=1),
         decision("d1", settlement_id="s1", state=SettlementState.CONFIRMED, minute=2),
     ]
@@ -200,11 +202,11 @@ def test_balances_of_different_ledgers_are_not_equal() -> None:
 
 def test_group_id_and_currency_are_keyword_only_and_required() -> None:
     with pytest.raises(TypeError):
-        derive_balances([], GROUP, AUD)  # type: ignore[misc]
+        derive_balances([], GROUP, AUD)
     with pytest.raises(TypeError):
-        derive_balances([], group_id=GROUP)  # type: ignore[call-arg]
+        derive_balances([], group_id=GROUP)
     with pytest.raises(TypeError):
-        derive_balances([], currency=AUD)  # type: ignore[call-arg]
+        derive_balances([], currency=AUD)
 
 
 def test_an_empty_ledger_keeps_the_group_and_currency_it_was_given() -> None:
@@ -252,21 +254,22 @@ def test_the_callers_list_is_neither_mutated_nor_reordered() -> None:
 
 def test_events_that_is_not_iterable_raises_type_error() -> None:
     with pytest.raises(TypeError):
-        derive_balances(7, group_id=GROUP, currency=AUD)  # type: ignore[arg-type]
+        derive_balances(7, group_id=GROUP, currency=AUD)
     with pytest.raises(TypeError):
-        settlement_states(7)  # type: ignore[arg-type]
+        settlement_states(7)
 
 
 def test_an_element_that_is_not_a_ledger_event_raises_type_error_naming_it() -> None:
+    not_an_event = {"total": 1000}
     with pytest.raises(TypeError, match="dict"):
-        derive_balances([{"total": 1000}], group_id=GROUP, currency=AUD)  # type: ignore[list-item]
+        derive_balances([not_an_event], group_id=GROUP, currency=AUD)
     with pytest.raises(TypeError, match="NoneType"):
-        settlement_states([None])  # type: ignore[list-item]
+        settlement_states([None])
 
 
 def test_a_group_id_that_is_not_a_str_raises_type_error() -> None:
     with pytest.raises(TypeError, match="int"):
-        derive_balances([], group_id=7, currency=AUD)  # type: ignore[arg-type]
+        derive_balances([], group_id=7, currency=AUD)
 
 
 def test_an_empty_group_id_is_a_domain_error() -> None:
@@ -276,7 +279,7 @@ def test_an_empty_group_id_is_a_domain_error() -> None:
 
 def test_a_currency_that_is_not_a_currency_raises_type_error() -> None:
     with pytest.raises(TypeError, match="str"):
-        derive_balances([], group_id=GROUP, currency="AUD")  # type: ignore[arg-type]
+        derive_balances([], group_id=GROUP, currency="AUD")
 
 
 def test_a_foreign_group_names_the_event_the_group_asked_for_and_the_one_found(
@@ -422,7 +425,7 @@ def assert_consistent(balances: Balances) -> None:
 
 def test_a_positive_net_means_the_group_owes_the_member() -> None:
     result = derive_balances(
-        [expense("e1", payer=ALI, total=3000, shares={ALI: 1000, BO: 1000, CASS: 1000})],
+        [expense("e1", payer=ALI, total=3000, shares=THIRDS)],
         group_id=GROUP,
         currency=AUD,
     )
@@ -466,7 +469,7 @@ def test_iteration_ascends_by_member_and_by_pair() -> None:
 def test_payer_is_a_participant() -> None:
     """Ali pays 3000 for a dinner she also ate: her own share is no debt to herself."""
     result = derive_balances(
-        [expense("e1", payer=ALI, total=3000, shares={ALI: 1000, BO: 1000, CASS: 1000})],
+        [expense("e1", payer=ALI, total=3000, shares=THIRDS)],
         group_id=GROUP,
         currency=AUD,
     )
@@ -476,7 +479,7 @@ def test_payer_is_a_participant() -> None:
 
 
 def test_payer_is_not_a_participant() -> None:
-    """Ali pays for a meal she did not eat, and holds a net entry without a share of her own."""
+    """Ali pays for a meal she did not eat, and holds a net entry all the same."""
     result = derive_balances(
         [expense("e1", payer=ALI, total=3000, shares={BO: 1500, CASS: 1500})],
         group_id=GROUP,

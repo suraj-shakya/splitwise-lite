@@ -23,9 +23,9 @@ consumer gets the same answer:
   ignored, a later ``CONFIRMED`` after an earlier ``REJECTED`` included. A retry or a
   race can put two answers in the log, and picking the first keeps every reader on one.
 * *Only confirmed settlements move money.* A ``PENDING`` or ``REJECTED`` settlement is
-  inert: it changes no net position, creates no pairwise entry, and does not even put its
-  two members into ``net``. Until the receiver confirms, the claimed payment is a row on
-  a screen, not money that has moved.
+  inert: it changes no net position, creates no pairwise entry, and does not even
+  put its two members into ``net``. Until the receiver confirms, the claimed payment
+  is a row on a screen, not money that has moved.
 
 **How a decision finds its group.** ``SettlementDecisionEvent`` carries no ``group_id``,
 so the group is stated by the caller instead of inferred from whichever event sorts
@@ -163,15 +163,15 @@ def derive_balances(
     * ``net`` sums to zero, ``pairwise`` values are strictly positive, and the two agree
     * the result depends on the set of events, never on the order they arrived in
 
-    Arithmetic is integer cents throughout, accumulated in plain ``int`` and wrapped into
-    ``Money`` once, when the result is built. There is no division anywhere in this
+    Arithmetic is integer cents throughout, accumulated in plain ``int`` and wrapped
+    into ``Money`` once, when the result is built. There is no division anywhere in this
     module: the fold only adds and subtracts, so no remainder can arise and no rounding
     rule may be invented here. Dividing a total across people is the split resolver's
     job and has already happened by the time an expense reaches this function.
 
     No bound is applied to a balance. Balances are derived and never stored, so there is
-    no 64-bit column to overflow and Python integers do not wrap; the stored-amount bound
-    belongs on the amounts, not on a sum of them.
+    no 64-bit column to overflow and Python integers do not wrap; the stored-amount
+    bound belongs on the amounts, not on a sum of them.
 
     Raises:
         TypeError: if ``events`` is not an iterable of ledger events, if ``group_id`` is
@@ -300,9 +300,9 @@ def _partition(
     Consumes ``events`` exactly once, so a generator is as acceptable as a list, and
     sorts copies, so a caller's list comes back in the order they built it.
 
-    A ``str`` is an iterable of one-character strings and a ``Mapping`` is an iterable of
-    its keys, so both are rejected outright rather than read as an event list, following
-    the precedent the split resolver set.
+    A ``str`` is an iterable of one-character strings and a ``Mapping`` is an iterable
+    of its keys, so both are rejected outright rather than read as an event list,
+    following the precedent the split resolver set.
     """
     if isinstance(events, (str, bytes, bytearray, Mapping)):
         raise TypeError(
@@ -340,13 +340,13 @@ def _partition(
 def _sorted_unique(events: list, label: str) -> tuple:
     """Return ``events`` sorted by ``ordering_key``, rejecting a repeated id.
 
-    Sorting is by the total order ``events.py`` defines, never by list position and never
-    by ``created_at`` alone: identical timestamps are the case the id tie-break exists
-    for, and they decide which of two conflicting decisions wins.
+    Sorting is by the total order ``events.py`` defines, never by list position and
+    never by ``created_at`` alone: identical timestamps are the case the id tie-break
+    exists for, and they decide which of two conflicting decisions wins.
 
-    A repeated id is rejected because double-counting an expense is a money bug: a caller
-    who concatenates two overlapping queries would otherwise get a plausible wrong
-    answer. Two distinct events with equal amounts are untouched by this.
+    A repeated id is rejected because double-counting an expense is a money bug: a
+    caller who concatenates two overlapping queries would otherwise get a plausible
+    wrong answer. Two distinct events with equal amounts are untouched by this.
     """
     ordered = tuple(sorted(events, key=ordering_key))
     seen: set[str] = set()
@@ -362,8 +362,8 @@ def _sorted_unique(events: list, label: str) -> tuple:
 def _add(net: dict[MemberId, int], member_id: MemberId, cents: int) -> None:
     """Move ``member_id``'s net position by ``cents``, creating the entry if needed.
 
-    Zero is a real move: it puts a member who was on an expense for nothing into the map,
-    which is how a zero-cent allocation stays visible.
+    Zero is a real move: it puts a member who was on an expense for nothing into the
+    map, which is how a zero-cent allocation stays visible.
     """
     net[member_id] = net.get(member_id, 0) + cents
 
@@ -394,11 +394,11 @@ def _add_debt(
 def _directed(
     debts: dict[tuple[MemberId, MemberId], int], currency: Currency
 ) -> dict[tuple[MemberId, MemberId], Money]:
-    """Turn canonical signed pairs into ``(debtor, creditor)`` entries in ascending order.
+    """Turn canonical signed pairs into ``(debtor, creditor)`` entries, key ascending.
 
     A pair that has netted to zero is dropped: zero is not a debt, and storing it would
-    put a settled pair on the balances screen. A negative canonical amount means the debt
-    runs the other way, so the key is flipped and the amount made positive.
+    put a settled pair on the balances screen. A negative canonical amount means the
+    debt runs the other way, so the key is flipped and the amount made positive.
     """
     entries = []
     for (first, second), amount in debts.items():
