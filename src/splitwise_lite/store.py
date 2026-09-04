@@ -305,7 +305,9 @@ def _require_storable_cents(value: object, field: str) -> int:
     transaction opens, so a rejected amount never starts a write.
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field} must be an int, got {type(value).__name__}: {value!r}")
+        raise TypeError(
+            f"{field} must be an int, got {type(value).__name__}: {value!r}"
+        )
     if value > MAX_CENTS:
         raise AmountTooLarge(
             f"{field} is {value}, above MAX_CENTS ({MAX_CENTS}), the largest value the "
@@ -920,7 +922,7 @@ class EventStore:
 
     @contextmanager
     def _reading(self, what: str) -> Iterator[sqlite3.Connection]:
-        """Yield the connection, translating any ``sqlite3`` failure into a store error."""
+        """Yield the connection, turning any ``sqlite3`` failure into a store error."""
         connection = self._require_open()
         try:
             yield connection

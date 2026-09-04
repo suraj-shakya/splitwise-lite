@@ -94,6 +94,11 @@ def count(store: EventStore, table: str) -> int:
     return raw(store, f"SELECT count(*) FROM {table}")[0][0]
 
 
+def count_tables(store: EventStore) -> int:
+    """How many tables the schema holds, read with raw SQL."""
+    return raw(store, "SELECT count(*) FROM sqlite_master WHERE type = 'table'")[0][0]
+
+
 # --- Error family -----------------------------------------------------------
 
 
@@ -386,7 +391,8 @@ def test_two_members_of_one_group_may_share_a_display_name(store: EventStore) ->
     a_group(store)
     store.add_member(Member("m1", "g1", "Sam", None, at()))
     store.add_member(Member("m2", "g1", "Sam", None, at()))
-    assert [member.display_name for member in store.list_members("g1")] == ["Sam", "Sam"]
+    names = [member.display_name for member in store.list_members("g1")]
+    assert names == ["Sam", "Sam"]
 
 
 def test_one_user_maps_to_at_most_one_member_per_group(store: EventStore) -> None:
@@ -1322,18 +1328,11 @@ def test_reopening_does_not_re_run_destructive_ddl(tmp_path: Path) -> None:
     with open_store(path) as writer:
         a_flat(writer)
         writer.append_expense(an_expense())
-        tables = raw(
-            writer, "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
-        )[0][0]
+        tables = count_tables(writer)
     for _ in range(3):
         with open_store(path) as reopened:
             assert count(reopened, "expense_events") == 1
-            assert (
-                raw(reopened, "SELECT count(*) FROM sqlite_master WHERE type = 'table'")[
-                    0
-                ][0]
-                == tables
-            )
+            assert count_tables(reopened) == tables
             assert raw(reopened, "PRAGMA user_version")[0][0] == SCHEMA_VERSION
 
 
@@ -1355,10 +1354,7 @@ def test_opening_one_fresh_file_from_two_stores_leaves_one_valid_schema(
     with open_store(path) as one, open_store(path) as two:
         assert raw(one, "PRAGMA integrity_check")[0][0] == "ok"
         assert raw(two, "PRAGMA user_version")[0][0] == SCHEMA_VERSION
-        tables = raw(
-            two, "SELECT count(*) FROM sqlite_master WHERE type = 'table'"
-        )[0][0]
-        assert tables == 7
+        assert count_tables(two) == 7
         a_flat(two)
         assert [member.id for member in one.list_members("g1")] == [
             "g1m1",
