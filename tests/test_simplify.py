@@ -237,3 +237,326 @@ def test_anything_that_is_not_a_balances_is_a_type_error(value: object) -> None:
     with pytest.raises(TypeError) as raised:
         simplify_debts(value)
     assert type(value).__name__ in str(raised.value)
+
+
+# --- Input validation -------------------------------------------------------
+
+
+def test_a_net_that_does_not_sum_to_zero_is_refused_by_its_residue() -> None:
+    """Money only moves between members, so a residue means this was not derived."""
+    with pytest.raises(InvalidBalances) as raised:
+        simplify_debts(balances_of({ALI: 700, BO: -400}, {(BO, ALI): 400}))
+    assert "300" in str(raised.value)
+
+
+@pytest.mark.parametrize("cents", [0, -100], ids=["zero", "negative"])
+def test_a_pairwise_debt_that_is_not_strictly_positive_is_refused(cents: int) -> None:
+    with pytest.raises(InvalidBalances) as raised:
+        simplify_debts(balances_of({ALI: cents, BO: -cents}, {(BO, ALI): cents}))
+    message = str(raised.value)
+    assert "bo" in message and "ali" in message
+
+
+def test_a_pair_stored_in_both_directions_is_refused_naming_both() -> None:
+    with pytest.raises(InvalidBalances) as raised:
+        simplify_debts(
+            balances_of({ALI: 0, BO: 0}, {(BO, ALI): 100, (ALI, BO): 100})
+        )
+    message = str(raised.value)
+    assert "('ali', 'bo')" in message
+    assert "('bo', 'ali')" in message
+
+
+def test_a_member_owing_themselves_is_refused() -> None:
+    """Checked before the both-directions rule: ``(m, m)`` is its own reverse."""
+    with pytest.raises(InvalidBalances) as raised:
+        simplify_debts(balances_of({ALI: 0}, {(ALI, ALI): 100}))
+    message = str(raised.value)
+    assert "('ali', 'ali')" in message
+    assert "themselves" in message
+
+
+def test_net_and_pairwise_disagreeing_is_refused_naming_both_figures() -> None:
+    """The provenance feasibility proof rests on the identity, so it is checked."""
+    with pytest.raises(InvalidBalances) as raised:
+        simplify_debts(balances_of({ALI: 50, BO: -50}, {(BO, ALI): 100}))
+    message = str(raised.value)
+    assert "ali" in message
+    assert "50" in message
+    assert "100" in message
+
+
+def test_a_member_in_pairwise_but_absent_from_net_still_has_to_agree() -> None:
+    with pytest.raises(InvalidBalances) as raised:
+        simplify_debts(balances_of({}, {(BO, ALI): 100}))
+    assert "100" in str(raised.value)
+
+
+@pytest.mark.parametrize("field", ["net", "pairwise"], ids=["net", "pairwise"])
+def test_a_money_in_another_currency_raises_currency_mismatch(field: str) -> None:
+    """No second name is invented for it: this is what ``money.py`` already has."""
+    net = {ALI: Money(100, AUD), BO: Money(-100, AUD)}
+    pairwise = {(BO, ALI): Money(100, AUD)}
+    if field == "net":
+        net[ALI] = Money(100, NZD)
+    else:
+        pairwise[(BO, ALI)] = Money(100, NZD)
+    balances = Balances(group_id=GROUP, currency=AUD, net=net, pairwise=pairwise)
+
+    with pytest.raises(CurrencyMismatch) as raised:
+        simplify_debts(balances)
+    assert "NZD" in str(raised.value) and "AUD" in str(raised.value)
+
+
+def test_currency_mismatch_is_a_domain_error_like_the_rest() -> None:
+    assert issubclass(CurrencyMismatch, DomainError)
+
+
+def test_validation_is_eager_so_a_rejected_input_yields_no_partial_plan() -> None:
+    """The bad member sits alongside a pair that would otherwise produce a transfer."""
+    with pytest.raises(InvalidBalances):
+        simplify_debts(
+            balances_of(
+                {ALI: 100, BO: -100, CASS: 0, DEE: 0},
+                {(BO, ALI): 100, (DEE, CASS): 0},
+            )
+        )
+
+
+# --- The four worked fixtures -----------------------------------------------
+
+# Bo owes Ali 1000 and Ali owes Cass 400, so one debt splits across two transfers.
+CHAIN = {(BO, ALI): 1000, (ALI, CASS): 400}
+
+# Bo owes Ali 300, Bo owes Cass 300, Cass owes Ali 300: one transfer twice the size of
+# any debt on either provenance list, and Cass nets to zero.
+OVERSIZED = {(BO, ALI): 300, (BO, CASS): 300, (CASS, ALI): 300}
+
+# Ali owes Bo, Bo owes Cass, Cass owes Ali, all 500: three live debts, no transfers.
+CYCLE = {(ALI, BO): 500, (BO, CASS): 500, (CASS, ALI): 500}
+
+# net: ali -400, bo -200, cass +500, dee +400, eve -300.
+NOT_MINIMAL = {(ALI, CASS): 400, (BO, DEE): 200, (EVE, CASS): 100, (EVE, DEE): 200}
+
+
+def cents(balances: Balances) -> dict[str, int]:
+    """The net map as plain cents, for exact integer comparison."""
+    return {member_id: money.cents for member_id, money in balances.net.items()}
+
+
+def test_the_chain_fixture_nets_to_two_transfers_from_one_debtor() -> None:
+    """Two transfers with one debtor is the lower bound ``max(1, 2)``, so minimal."""
+    balances = from_debts(CHAIN)
+    assert cents(balances) == {ALI: 600, BO: -1000, CASS: 400}
+    assert moves(simplify_debts(balances)) == [(BO, ALI, 600), (BO, CASS, 400)]
+
+
+def test_the_oversized_fixture_is_one_transfer_past_a_zero_net_bystander() -> None:
+    balances = from_debts(OVERSIZED)
+    assert cents(balances) == {ALI: 600, BO: -600, CASS: 0}
+    assert moves(simplify_debts(balances)) == [(BO, ALI, 600)]
+
+
+def test_a_pure_cycle_needs_no_transfers_even_though_debts_are_live() -> None:
+    balances = from_debts(CYCLE)
+    assert set(cents(balances).values()) == {0}
+    assert len(balances.pairwise) == 3
+    assert simplify_debts(balances).transfers == ()
+
+
+def test_the_greedy_takes_four_transfers_where_three_exist() -> None:
+    """Five members, and the greedy does not find the shorter plan.
+
+    Three transfers settle this group: ``ali -> dee 400``, ``bo -> cass 200`` and
+    ``eve -> cass 300``. The greedy finds four, because it pairs the largest debtor with
+    the largest creditor and never looks for a zero-sum block. That is the documented
+    behaviour, not a defect, and this test asserts nothing about optimality: the module
+    claims a bound, never a minimum.
+    """
+    balances = from_debts(NOT_MINIMAL)
+    assert cents(balances) == {ALI: -400, BO: -200, CASS: 500, DEE: 400, EVE: -300}
+    assert moves(simplify_debts(balances)) == [
+        (ALI, CASS, 400),
+        (BO, CASS, 100),
+        (BO, DEE, 100),
+        (EVE, DEE, 300),
+    ]
+
+
+# --- The transfer set -------------------------------------------------------
+
+
+def test_every_transfer_amount_is_positive_and_nobody_pays_themselves() -> None:
+    plan = simplify_debts(from_debts(NOT_MINIMAL))
+    for transfer in plan.transfers:
+        assert transfer.amount.cents > 0
+        assert transfer.from_member_id != transfer.to_member_id
+
+
+def test_transfers_are_sorted_by_payer_then_receiver() -> None:
+    plan = simplify_debts(from_debts(NOT_MINIMAL))
+    keys = [(t.from_member_id, t.to_member_id) for t in plan.transfers]
+    assert keys == sorted(keys)
+
+
+def test_a_pair_appears_once_and_never_alongside_its_reverse() -> None:
+    """No member is both a debtor and a creditor, and every round retires one."""
+    plan = simplify_debts(from_debts(NOT_MINIMAL))
+    keys = [(t.from_member_id, t.to_member_id) for t in plan.transfers]
+    assert len(set(keys)) == len(keys)
+    assert not any((to, frm) in set(keys) for frm, to in keys)
+
+
+def test_the_transfers_total_the_positive_net_and_the_negative_net() -> None:
+    balances = from_debts(NOT_MINIMAL)
+    plan = simplify_debts(balances)
+    positions = cents(balances)
+    paid = sum(transfer.amount.cents for transfer in plan.transfers)
+    assert paid == sum(c for c in positions.values() if c > 0)
+    assert paid == -sum(c for c in positions.values() if c < 0)
+
+
+def test_the_plan_settles_every_member_to_zero_on_the_plan_itself() -> None:
+    """The backlog asks that simplified transfers settle the group to zero.
+
+    The identity is ``net[m] + paid(m) - received(m) == 0``. The acceptance criteria
+    write it with ``paid`` and ``received`` the other way round, which cannot hold under
+    the sign convention ``balances.py`` states and the next criterion repeats: ``net``
+    is negative for a member who owes the group, a confirmed settlement moves its payer
+    *up* by what they paid, and a debtor at -400 who pays 400 and receives nothing lands
+    on zero only this way round. Raised rather than quietly reversed.
+    """
+    balances = from_debts(NOT_MINIMAL)
+    plan = simplify_debts(balances)
+    for member_id, position in cents(balances).items():
+        received = sum(
+            t.amount.cents for t in plan.transfers if t.to_member_id == member_id
+        )
+        paid = sum(
+            t.amount.cents for t in plan.transfers if t.from_member_id == member_id
+        )
+        assert position + paid - received == 0
+
+
+def test_a_debtor_pays_what_they_owe_and_receives_nothing() -> None:
+    balances = from_debts(NOT_MINIMAL)
+    plan = simplify_debts(balances)
+    for member_id, position in cents(balances).items():
+        if position >= 0:
+            continue
+        paid = sum(
+            t.amount.cents for t in plan.transfers if t.from_member_id == member_id
+        )
+        assert paid == -position
+        assert [t for t in plan.transfers if t.to_member_id == member_id] == []
+
+
+def test_a_creditor_receives_what_they_are_owed_and_pays_nothing() -> None:
+    balances = from_debts(NOT_MINIMAL)
+    plan = simplify_debts(balances)
+    for member_id, position in cents(balances).items():
+        if position <= 0:
+            continue
+        received = sum(
+            t.amount.cents for t in plan.transfers if t.to_member_id == member_id
+        )
+        assert received == position
+        assert [t for t in plan.transfers if t.from_member_id == member_id] == []
+
+
+def test_a_zero_net_member_is_in_no_transfer_but_still_in_provenance() -> None:
+    plan = simplify_debts(from_debts(OVERSIZED))
+    assert CASS not in {t.from_member_id for t in plan.transfers}
+    assert CASS not in {t.to_member_id for t in plan.transfers}
+    counterparties = {
+        member
+        for transfer in plan.transfers
+        for debt in transfer.payer_debts + transfer.receiver_credits
+        for member in debt.pair
+    }
+    assert CASS in counterparties
+
+
+def test_a_member_absent_from_net_entirely_appears_in_no_transfer() -> None:
+    balances = from_debts(CHAIN)
+    assert DEE not in balances.net
+    plan = simplify_debts(balances)
+    assert DEE not in {t.from_member_id for t in plan.transfers}
+    assert DEE not in {t.to_member_id for t in plan.transfers}
+
+
+# --- The transfer count -----------------------------------------------------
+
+
+def assert_within_bounds(balances: Balances, plan: TransferPlan) -> None:
+    """The two bounds the module claims, and never a claim of minimality."""
+    positions = cents(balances)
+    debtors = len([c for c in positions.values() if c < 0])
+    creditors = len([c for c in positions.values() if c > 0])
+    assert max(debtors, creditors) <= len(plan.transfers)
+    assert len(plan.transfers) <= max(0, debtors + creditors - 1)
+
+
+@pytest.mark.parametrize(
+    "pairwise",
+    [CHAIN, OVERSIZED, CYCLE, NOT_MINIMAL],
+    ids=["chain", "oversized", "cycle", "not minimal"],
+)
+def test_every_worked_fixture_sits_inside_both_bounds(pairwise: dict) -> None:
+    balances = from_debts(pairwise)
+    assert_within_bounds(balances, simplify_debts(balances))
+
+
+@pytest.mark.parametrize(
+    ("net", "pairwise"),
+    [
+        ({}, {}),
+        ({ALI: 0, BO: 0}, {}),
+        (None, CYCLE),
+    ],
+    ids=["empty net", "all-zero net", "pure cycle"],
+)
+def test_an_already_settled_group_produces_an_empty_tuple(
+    net: dict | None, pairwise: dict
+) -> None:
+    """Empty is a real answer: not an error, and never ``None``."""
+    balances = from_debts(pairwise) if net is None else balances_of(net, pairwise)
+    plan = simplify_debts(balances)
+    assert isinstance(plan, TransferPlan)
+    assert plan.transfers == ()
+
+
+def test_one_debtor_and_many_creditors_is_minimal_because_the_bounds_meet() -> None:
+    """``max(1, 3) == 3 == 1 + 3 - 1``, so the greedy result is the smallest plan."""
+    balances = from_debts({(BO, ALI): 300, (BO, CASS): 200, (BO, DEE): 100})
+    plan = simplify_debts(balances)
+    assert moves(plan) == [(BO, ALI, 300), (BO, CASS, 200), (BO, DEE, 100)]
+    positions = cents(balances)
+    for transfer in plan.transfers:
+        assert transfer.amount.cents == positions[transfer.to_member_id]
+    assert len(plan.transfers) == 3
+    assert_within_bounds(balances, plan)
+
+
+def test_many_debtors_and_one_creditor_is_minimal_by_the_same_argument() -> None:
+    """``max(3, 1) == 3 == 3 + 1 - 1``, so the bounds meet here too."""
+    balances = from_debts({(ALI, DEE): 300, (BO, DEE): 200, (CASS, DEE): 100})
+    plan = simplify_debts(balances)
+    assert moves(plan) == [(ALI, DEE, 300), (BO, DEE, 200), (CASS, DEE, 100)]
+    positions = cents(balances)
+    for transfer in plan.transfers:
+        assert transfer.amount.cents == -positions[transfer.from_member_id]
+    assert len(plan.transfers) == 3
+    assert_within_bounds(balances, plan)
+
+
+def test_ties_go_to_the_smaller_member_id_on_both_sides() -> None:
+    """Two debtors holding 100 each and two creditors owed 100 each.
+
+    The debts run ali to dee and bo to cass, so a plan that crosses them into ali to
+    cass and bo to dee shows the tie-break deciding who pays whom, never how much: each
+    member's outlay was fixed by their ``net`` before any matching happened.
+    """
+    balances = from_debts({(ALI, DEE): 100, (BO, CASS): 100})
+    assert cents(balances) == {ALI: -100, BO: -100, CASS: 100, DEE: 100}
+    assert moves(simplify_debts(balances)) == [(ALI, CASS, 100), (BO, DEE, 100)]
