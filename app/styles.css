@@ -1,0 +1,200 @@
+/* Splitwise Lite shell styles. One hand-written file: no preprocessor, no utility
+   framework, no reset library, and no downloaded font. The colours live in custom
+   properties so the manifest, the theme-color meta tag and the icon generator
+   cannot drift apart. */
+
+:root {
+  --bg: #f4f6f5;
+  --theme: #0f766e;
+  --theme-add: #115e59;
+  --theme-balances: #0e7490;
+  --surface: #ffffff;
+  --text: #16211f;
+  --muted: #3a4a47;
+  --line: #d6dedb;
+  --tint: #eaf2f0;
+  --gutter: 16px;
+  --column: 480px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  /* A system font stack: nothing is downloaded. */
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;  /* fallback for browsers without dvh */
+  height: 100dvh; /* so a collapsing mobile URL bar never cuts the nav off */
+  overflow: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.topbar {
+  flex: 0 0 auto;
+  background: var(--theme);
+  color: #ffffff;
+  padding: 14px calc(var(--gutter) + env(safe-area-inset-right, 0px)) 14px calc(var(--gutter) + env(safe-area-inset-left, 0px));
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
+}
+
+.wordmark {
+  margin: 0 auto;
+  max-width: var(--column);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+/* Screens ----------------------------------------------------------------- */
+
+/* The scrolling area is a flex sibling of the fixed nav rather than sitting under
+   it, so the last line of content can never hide behind the tab bar. */
+.content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 20px calc(var(--gutter) + env(safe-area-inset-right, 0px)) 28px calc(var(--gutter) + env(safe-area-inset-left, 0px));
+}
+
+.screen,
+.noscript {
+  max-width: var(--column); /* past roughly 480px the column caps and centres */
+  margin: 0 auto;
+}
+
+.noscript {
+  display: block;
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
+}
+
+.screen-title {
+  margin: 0 0 6px;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.screen-title:focus-visible {
+  outline: 3px solid var(--theme);
+  outline-offset: 4px;
+}
+
+.lede {
+  margin: 0 0 20px;
+  font-size: 17px;
+  color: var(--muted);
+}
+
+/* Each screen carries its own accent, so a route change is obviously working. */
+.screen--feed {
+  --accent: var(--theme);
+}
+
+.screen--add {
+  --accent: var(--theme-add);
+}
+
+.screen--balances {
+  --accent: var(--theme-balances);
+}
+
+.card {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.marker {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.notes {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.notes li + li {
+  margin-top: 6px;
+}
+
+/* Bottom nav -------------------------------------------------------------- */
+
+.tabbar {
+  flex: 0 0 auto;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 56px; /* comfortably past the 44px minimum hit area */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 6px;
+  border-top: 3px solid transparent;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  touch-action: manipulation; /* no double-tap zoom delay */
+}
+
+/* The active tab is marked by a bar and a tint as well as by colour, never by
+   colour alone. */
+.tab[aria-current="page"] {
+  border-top-color: var(--theme);
+  background: var(--tint);
+  color: var(--theme);
+}
+
+.tab:focus-visible {
+  outline: 3px solid var(--theme);
+  outline-offset: -3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
