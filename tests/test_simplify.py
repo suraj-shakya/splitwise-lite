@@ -560,3 +560,191 @@ def test_ties_go_to_the_smaller_member_id_on_both_sides() -> None:
     balances = from_debts({(ALI, DEE): 100, (BO, CASS): 100})
     assert cents(balances) == {ALI: -100, BO: -100, CASS: 100, DEE: 100}
     assert moves(simplify_debts(balances)) == [(ALI, CASS, 100), (BO, DEE, 100)]
+
+
+# --- Provenance -------------------------------------------------------------
+
+# Ali owes Cass and Dee 100 each, and Dee owes Bo 100, so Dee nets to zero. The greedy
+# sends Ali to Bo before Ali to Cass, and Ali to Bo has no direct debt to draw on, so
+# this is the fixture where an earlier transfer could eat the later one's direct match.
+DIRECT_LAST = {(ALI, CASS): 100, (ALI, DEE): 100, (DEE, BO): 100}
+
+
+def absorbed_by_pair(plan: TransferPlan, *, payer_side: bool) -> dict[Pair, int]:
+    """Total cents absorbed per pairwise key, on one side of the plan."""
+    totals: dict[Pair, int] = {}
+    for transfer in plan.transfers:
+        debts = transfer.payer_debts if payer_side else transfer.receiver_credits
+        for debt in debts:
+            totals[debt.pair] = totals.get(debt.pair, 0) + debt.amount.cents
+    return totals
+
+
+def assert_provenance_holds(balances: Balances, plan: TransferPlan) -> None:
+    """Every provenance criterion that is expressible as an invariant.
+
+    Exact integer comparison throughout: provenance that is one cent out is wrong, and
+    an approximate assertion would not notice.
+    """
+    positions = cents(balances)
+    debts = {pair: money.cents for pair, money in balances.pairwise.items()}
+    owed_to: dict[str, int] = {}
+    owes: dict[str, int] = {}
+    for (debtor, creditor), amount in debts.items():
+        owes[debtor] = owes.get(debtor, 0) + amount
+        owed_to[creditor] = owed_to.get(creditor, 0) + amount
+
+    for transfer in plan.transfers:
+        sides = (
+            (transfer.payer_debts, 0, transfer.from_member_id),
+            (transfer.receiver_credits, 1, transfer.to_member_id),
+        )
+        for side_rows, end, owner in sides:
+            assert side_rows != ()
+            assert sum(row.amount.cents for row in side_rows) == transfer.amount.cents
+            pairs = [row.pair for row in side_rows]
+            assert pairs == sorted(pairs)
+            assert len(set(pairs)) == len(pairs)
+            for row in side_rows:
+                assert row.pair[end] == owner
+                assert row.pair in balances.pairwise
+                assert row.debt_total == balances.pairwise[row.pair]
+                assert 0 < row.amount.cents <= row.debt_total.cents
+
+        direct = (transfer.from_member_id, transfer.to_member_id)
+        if direct in debts:
+            expected = min(transfer.amount.cents, debts[direct])
+            for side_rows, _, _ in sides:
+                taken = {row.pair: row.amount.cents for row in side_rows}
+                assert taken[direct] == expected
+
+    payer = absorbed_by_pair(plan, payer_side=True)
+    receiver = absorbed_by_pair(plan, payer_side=False)
+    for pair, amount in debts.items():
+        assert payer.get(pair, 0) <= amount
+        assert receiver.get(pair, 0) <= amount
+
+    for pair in payer:
+        assert positions.get(pair[0], 0) < 0
+    for pair in receiver:
+        assert positions.get(pair[1], 0) > 0
+
+    for member_id, position in positions.items():
+        if position < 0:
+            taken = sum(c for pair, c in payer.items() if pair[0] == member_id)
+            unabsorbed = sum(
+                amount - payer.get(pair, 0)
+                for pair, amount in debts.items()
+                if pair[0] == member_id
+            )
+            assert taken == -position
+            assert unabsorbed == owed_to.get(member_id, 0)
+        if position > 0:
+            given = sum(c for pair, c in receiver.items() if pair[1] == member_id)
+            unabsorbed = sum(
+                amount - receiver.get(pair, 0)
+                for pair, amount in debts.items()
+                if pair[1] == member_id
+            )
+            assert given == position
+            assert unabsorbed == owes.get(member_id, 0)
+
+
+@pytest.mark.parametrize(
+    "pairwise",
+    [CHAIN, OVERSIZED, CYCLE, NOT_MINIMAL, DIRECT_LAST],
+    ids=["chain", "oversized", "cycle", "not minimal", "direct last"],
+)
+def test_every_worked_fixture_holds_every_provenance_invariant(pairwise: dict) -> None:
+    balances = from_debts(pairwise)
+    assert_provenance_holds(balances, simplify_debts(balances))
+
+
+def test_the_chain_splits_one_debt_across_two_transfers() -> None:
+    """600 and 400 of the same 1000, each row carrying the whole 1000."""
+    balances = from_debts(CHAIN)
+    first, second = simplify_debts(balances).transfers
+
+    assert rows(first.payer_debts) == [((BO, ALI), 600, 1000)]
+    assert rows(first.receiver_credits) == [((BO, ALI), 600, 1000)]
+    assert rows(second.payer_debts) == [((BO, ALI), 400, 1000)]
+    assert rows(second.receiver_credits) == [((ALI, CASS), 400, 400)]
+    assert 600 + 400 == 1000
+
+
+def test_the_chain_reads_end_to_end_on_the_second_transfer() -> None:
+    """Bo pays Cass because Bo owes Ali, and Ali owes Cass."""
+    second = simplify_debts(from_debts(CHAIN)).transfers[1]
+    assert (second.from_member_id, second.to_member_id) == (BO, CASS)
+    assert [debt.pair for debt in second.payer_debts] == [(BO, ALI)]
+    assert [debt.pair for debt in second.receiver_credits] == [(ALI, CASS)]
+
+
+def test_a_debt_may_be_absorbed_by_nothing_on_a_side_or_at_all() -> None:
+    """Neither is an error: no criterion requires every debt to be absorbed."""
+    cycle = simplify_debts(from_debts(CYCLE))
+    assert absorbed_by_pair(cycle, payer_side=True) == {}
+    assert absorbed_by_pair(cycle, payer_side=False) == {}
+
+    chain = simplify_debts(from_debts(CHAIN))
+    assert (ALI, CASS) not in absorbed_by_pair(chain, payer_side=True)
+    assert absorbed_by_pair(chain, payer_side=False)[(ALI, CASS)] == 400
+
+
+def test_a_transfer_routinely_exceeds_every_debt_it_absorbs() -> None:
+    """One 600 payment explained by four 300 debts, two on each side."""
+    only = simplify_debts(from_debts(OVERSIZED)).transfers[0]
+    assert only.amount == Money(600, AUD)
+    assert rows(only.payer_debts) == [
+        ((BO, ALI), 300, 300),
+        ((BO, CASS), 300, 300),
+    ]
+    assert rows(only.receiver_credits) == [
+        ((BO, ALI), 300, 300),
+        ((CASS, ALI), 300, 300),
+    ]
+    for debt in only.payer_debts + only.receiver_credits:
+        assert debt.amount.cents < only.amount.cents
+
+
+def test_one_debt_between_two_people_is_its_own_whole_provenance() -> None:
+    """The simple case reads perfectly: one transfer, one debt, nothing else."""
+    only = simplify_debts(from_debts({(BO, ALI): 1000})).transfers[0]
+    assert rows(only.payer_debts) == [((BO, ALI), 1000, 1000)]
+    assert rows(only.receiver_credits) == [((BO, ALI), 1000, 1000)]
+
+
+def test_an_earlier_transfer_never_eats_a_later_transfer_direct_debt() -> None:
+    """Every transfer claims its own direct debt before anything else touches it.
+
+    Ali pays Bo first and has no debt to Bo, so that transfer has to draw on one of
+    Ali's other debts. Both of them hold 100, so the one it takes decides whether Ali
+    to Cass still finds its direct match. Direct debts are claimed for the whole plan
+    before any transfer reaches for a substitute, so it does.
+    """
+    balances = from_debts(DIRECT_LAST)
+    assert cents(balances) == {ALI: -200, BO: 100, CASS: 100, DEE: 0}
+    plan = simplify_debts(balances)
+    assert moves(plan) == [(ALI, BO, 100), (ALI, CASS, 100)]
+
+    to_bo, to_cass = plan.transfers
+    assert rows(to_cass.payer_debts) == [((ALI, CASS), 100, 100)]
+    assert rows(to_cass.receiver_credits) == [((ALI, CASS), 100, 100)]
+    assert rows(to_bo.payer_debts) == [((ALI, DEE), 100, 100)]
+    assert rows(to_bo.receiver_credits) == [((DEE, BO), 100, 100)]
+
+
+def test_a_pair_may_appear_on_both_sides_of_one_transfer() -> None:
+    """The two-ended view of one payment, not a duplicate."""
+    only = simplify_debts(from_debts(OVERSIZED)).transfers[0]
+    assert (BO, ALI) in {debt.pair for debt in only.payer_debts}
+    assert (BO, ALI) in {debt.pair for debt in only.receiver_credits}
+
+
+def test_the_two_sides_are_attributed_over_separate_books() -> None:
+    """Each side accounts for the whole amount independently. Not double counting."""
+    for transfer in simplify_debts(from_debts(NOT_MINIMAL)).transfers:
+        payer = sum(debt.amount.cents for debt in transfer.payer_debts)
+        receiver = sum(debt.amount.cents for debt in transfer.receiver_credits)
+        assert payer == transfer.amount.cents
+        assert receiver == transfer.amount.cents
