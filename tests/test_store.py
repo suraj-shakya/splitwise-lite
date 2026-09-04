@@ -54,6 +54,7 @@ from splitwise_lite.store import (
     InvalidRecord,
     Member,
     RecordNotFound,
+    Session,
     StorageFailed,
     StoreClosed,
     StoreError,
@@ -200,8 +201,9 @@ def test_member_rejects_an_empty_id() -> None:
 # --- Opening, pragmas and schema --------------------------------------------
 
 
-def test_a_fresh_store_is_at_schema_version_1(store: EventStore) -> None:
-    assert raw(store, "PRAGMA user_version")[0][0] == SCHEMA_VERSION == 1
+def test_a_fresh_store_is_at_schema_version_2(store: EventStore) -> None:
+    """Task 7 raised the version when it added credentials and sessions."""
+    assert raw(store, "PRAGMA user_version")[0][0] == SCHEMA_VERSION == 2
 
 
 def test_foreign_keys_pragma_is_on(store: EventStore) -> None:
@@ -1379,7 +1381,8 @@ def test_opening_one_fresh_file_from_two_stores_leaves_one_valid_schema(
     with open_store(path) as one, open_store(path) as two:
         assert raw(one, "PRAGMA integrity_check")[0][0] == "ok"
         assert raw(two, "PRAGMA user_version")[0][0] == SCHEMA_VERSION
-        assert count_tables(two) == 7
+        # Seven from task 6, plus user_credentials and sessions from task 7.
+        assert count_tables(two) == 9
         a_flat(two)
         assert [member.id for member in one.list_members("g1")] == [
             "g1m1",
@@ -1444,7 +1447,11 @@ def sql_literals() -> list[str]:
     [
         r"\bUPDATE\s+(expense_events|expense_allocations|settlement_events"
         r"|settlement_decision_events)\b",
-        r"\bDELETE\s+FROM\b",
+        # Narrowed by task 7 from a blanket ban on DELETE FROM to the four event
+        # tables. A session is operational state, not history: logging out deletes
+        # the row, and that is correct behaviour rather than a rewrite of history.
+        r"\bDELETE\s+FROM\s+(expense_events|expense_allocations"
+        r"|settlement_events|settlement_decision_events)\b",
         r"\bINSERT\s+OR\s+(REPLACE|IGNORE)\b",
         r"\bREPLACE\s+INTO\b",
         r"\bON\s+CONFLICT\b",
@@ -1455,6 +1462,34 @@ def test_the_module_issues_no_statement_that_could_rewrite_history(
 ) -> None:
     for literal in sql_literals():
         assert re.search(forbidden, literal, re.IGNORECASE) is None, literal
+
+
+def test_the_narrowed_delete_rule_still_bites_on_the_event_tables() -> None:
+    """The only table any DELETE FROM in this module names is ``sessions``.
+
+    The companion to the narrowing above. Relaxing a blanket ban has to leave the
+    append-only guarantee exactly where it was, so this reads back every table a
+    DELETE names rather than trusting one pattern to have caught the right ones.
+    """
+    deleted: set[str] = set()
+    for literal in sql_literals():
+        deleted.update(
+            match.group(1)
+            for match in re.finditer(
+                r"\bDELETE\s+FROM\s+(\w+)", literal, re.IGNORECASE
+            )
+        )
+    assert deleted == {"sessions"}
+    tables = "|".join(APPEND_ONLY_TABLES)
+    for literal in sql_literals():
+        for forbidden in (
+            rf"\bDELETE\s+FROM\s+({tables})\b",
+            rf"\bREPLACE\s+INTO\s+({tables})\b",
+            rf"\bINSERT\s+OR\s+(REPLACE|IGNORE)\s+INTO\s+({tables})\b",
+            rf"\bUPDATE\s+({tables})\b",
+            r"\bON\s+CONFLICT\b",
+        ):
+            assert re.search(forbidden, literal, re.IGNORECASE) is None, literal
 
 
 @pytest.mark.parametrize(
@@ -1521,6 +1556,13 @@ WRITES = [
     "append_expense",
     "append_settlement",
     "append_settlement_decision",
+    # Task 7.
+    "add_user_with_credential",
+    "set_password_hash",
+    "add_session",
+    "delete_session",
+    "delete_sessions_for_user",
+    "delete_expired_sessions",
 ]
 
 READS = [
@@ -1534,6 +1576,11 @@ READS = [
     "list_settlements",
     "list_settlement_decisions",
     "list_events",
+    # Task 7.
+    "get_user_by_email",
+    "get_password_hash",
+    "get_session",
+    "get_member_for_user",
 ]
 
 
@@ -1556,26 +1603,51 @@ def test_open_store_has_no_default_path() -> None:
 
 
 def test_every_public_method_refuses_a_closed_store(tmp_path: Path) -> None:
+    """Every method with its own arguments, so the list stays exhaustive.
+
+    Task 7's methods do not all take one record or one group id, so the old
+    one-argument-for-everything shape could not reach them. Widened rather than
+    narrowed: each name below is called the way a caller would call it.
+    """
     opened = open_store(tmp_path / "ledger.sqlite3")
     a_flat(opened)
+    arguments: dict[str, tuple[object, ...]] = {
+        "add_user": (User(UserId("u1"), "sam@example.com", "Sam", at()),),
+        "add_group": (Group("g9", "Flat", AUD, at()),),
+        "add_member": (Member("m9", "g1", "Sam", None, at()),),
+        "append_expense": (an_expense(),),
+        "append_settlement": (a_settlement(),),
+        "append_settlement_decision": (a_decision(),),
+        "add_user_with_credential": (
+            User(UserId("u2"), "other@example.com", "Other", at()),
+            A_HASH,
+            at(),
+        ),
+        "set_password_hash": (UserId("u1"), A_HASH, at()),
+        "add_session": (a_session(),),
+        "delete_session": (TOKEN_HASH,),
+        "delete_sessions_for_user": (UserId("u1"),),
+        "delete_expired_sessions": (at(),),
+        "get_user": (UserId("u1"),),
+        "get_group": ("g1",),
+        "list_groups": (),
+        "get_member": ("g1m1",),
+        "list_members": ("g1",),
+        "get_expense": ("e1",),
+        "list_expenses": ("g1",),
+        "list_settlements": ("g1",),
+        "list_settlement_decisions": ("s1",),
+        "list_events": ("g1",),
+        "get_user_by_email": ("sam@example.com",),
+        "get_password_hash": (UserId("u1"),),
+        "get_session": (TOKEN_HASH,),
+        "get_member_for_user": ("g1", UserId("u1")),
+    }
+    assert set(arguments) == set(WRITES) | set(READS)
     opened.close()
-    for name in READS:
+    for name, values in arguments.items():
         with pytest.raises(StoreClosed):
-            getattr(opened, name)(*([] if name == "list_groups" else ["g1"]))
-    for name, argument in zip(
-        WRITES,
-        [
-            User(UserId("u1"), "sam@example.com", "Sam", at()),
-            Group("g9", "Flat", AUD, at()),
-            Member("m9", "g1", "Sam", None, at()),
-            an_expense(),
-            a_settlement(),
-            a_decision(),
-        ],
-        strict=True,
-    ):
-        with pytest.raises(StoreClosed):
-            getattr(opened, name)(argument)
+            getattr(opened, name)(*values)
 
 
 def test_every_statement_the_store_issues_is_a_constant_with_bound_parameters() -> None:
@@ -1626,6 +1698,10 @@ def test_membership_is_a_flat_list_with_no_dates(store: EventStore) -> None:
         "expense_allocations",
         "settlement_events",
         "settlement_decision_events",
+        # Task 7's two tables. The members columns above are unchanged by it:
+        # the membership list stays flat, with no joined_at, left_at or is_active.
+        "user_credentials",
+        "sessions",
     }
 
 
@@ -1831,6 +1907,8 @@ EXPECTED_COLUMNS = {
         "decided_by",
         "created_at",
     ],
+    "user_credentials": ["user_id", "password_hash", "updated_at"],
+    "sessions": ["token_hash", "user_id", "created_at", "expires_at"],
 }
 
 
@@ -1907,6 +1985,7 @@ def test_the_store_does_not_create_the_directory_it_was_pointed_at(
         User,
         Group,
         Member,
+        Session,
         StoreError,
         CannotOpenStore,
         UnsupportedSQLiteVersion,
@@ -1922,3 +2001,824 @@ def test_the_store_does_not_create_the_directory_it_was_pointed_at(
 )
 def test_every_public_class_has_a_docstring(documented: type) -> None:
     assert documented.__doc__
+
+
+# --- Task 7: credentials, sessions and the user-to-member link ---------------
+#
+# The schema at version 2, the ten methods it adds, and the read that turns a
+# signed-in user into the member acting in a group. Hashing, tokens and password
+# policy are tested in tests/test_accounts.py: no value below is a password, and
+# the hashes here are shaped like real ones only so the column CHECK admits them.
+
+A_HASH = "scrypt$n=65536,r=8,p=2$" + "A" * 24 + "$" + "B" * 44
+ANOTHER_HASH = "scrypt$n=65536,r=8,p=2$" + "C" * 24 + "$" + "D" * 44
+TOKEN_HASH = "a" * 64
+OTHER_TOKEN_HASH = "b" * 64
+THIRD_TOKEN_HASH = "c" * 64
+_LATER_STAMP = "2026-09-03T10:01:00.000000+00:00"
+
+_INSERT_CREDENTIAL_SQL = (
+    "INSERT INTO user_credentials (user_id, password_hash, updated_at) "
+    "VALUES (?, ?, ?)"
+)
+_INSERT_SESSION_SQL = (
+    "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) "
+    "VALUES (?, ?, ?, ?)"
+)
+
+
+def a_user(
+    store: EventStore, user_id: str = "u1", email: str = "sam@example.com"
+) -> User:
+    """Add and return a user that has no credential row."""
+    user = User(UserId(user_id), email, f"Name {user_id}", at())
+    store.add_user(user)
+    return user
+
+
+def a_session(
+    token_hash: str = TOKEN_HASH,
+    user_id: str = "u1",
+    created_at: datetime | None = None,
+    expires_at: datetime | None = None,
+) -> Session:
+    """A session for ``user_id``, live from the base time for one minute."""
+    return Session(
+        token_hash,
+        UserId(user_id),
+        at() if created_at is None else created_at,
+        at(60) if expires_at is None else expires_at,
+    )
+
+
+def test_session_is_frozen_slotted_and_compares_by_value() -> None:
+    assert Session.__dataclass_params__.frozen is True
+    assert a_session() == a_session()
+    assert a_session() != a_session(OTHER_TOKEN_HASH)
+
+
+def test_session_holds_the_hash_and_never_the_raw_token() -> None:
+    assert tuple(Session.__slots__) == (
+        "token_hash",
+        "user_id",
+        "created_at",
+        "expires_at",
+    )
+
+
+@pytest.mark.parametrize("bad", ["", "a" * 63, "a" * 65, "A" * 64, "z" * 64])
+def test_session_rejects_a_token_hash_that_is_not_64_lowercase_hex(bad: str) -> None:
+    with pytest.raises(InvalidRecord):
+        a_session(token_hash=bad)
+
+
+def test_session_rejects_a_token_hash_that_is_not_a_string() -> None:
+    with pytest.raises(TypeError):
+        a_session(token_hash=1)  # type: ignore[arg-type]
+
+
+def test_session_timestamps_are_normalised_to_utc() -> None:
+    brisbane = timezone(timedelta(hours=10))
+    session = a_session(
+        created_at=datetime(2026, 9, 3, 20, 0, tzinfo=brisbane),
+        expires_at=datetime(2026, 10, 3, 20, 0, tzinfo=brisbane),
+    )
+    assert session.created_at == at()
+    assert session.created_at.utcoffset() == timedelta(0)
+    assert session.expires_at.utcoffset() == timedelta(0)
+
+
+def test_session_rejects_a_naive_timestamp() -> None:
+    with pytest.raises(InvalidRecord):
+        a_session(created_at=datetime(2026, 9, 3, 10, 0))
+    with pytest.raises(InvalidRecord):
+        a_session(expires_at=datetime(2026, 9, 3, 11, 0))
+
+
+@pytest.mark.parametrize("expires_at", [at(), at(-1)])
+def test_session_must_expire_after_it_was_created(expires_at: datetime) -> None:
+    with pytest.raises(InvalidRecord):
+        a_session(created_at=at(), expires_at=expires_at)
+
+
+# --- The schema at version 2 -------------------------------------------------
+
+
+@pytest.mark.parametrize("table", ["user_credentials", "sessions"])
+def test_the_new_tables_are_strict_and_carry_no_default(
+    store: EventStore, table: str
+) -> None:
+    sql = raw(store, "SELECT sql FROM sqlite_master WHERE name = ?", (table,))[0][0]
+    assert sql.rstrip().rstrip(";").upper().endswith("STRICT")
+    assert "DEFAULT" not in sql.upper()
+
+
+@pytest.mark.parametrize("plaintext", ["correct horse battery staple", "p" * 80])
+def test_the_password_column_refuses_a_plaintext_password(
+    store: EventStore, plaintext: str
+) -> None:
+    """The tripwire against the worst bug in task 7, enforced by the database.
+
+    A plaintext password is either shorter than 60 characters or has no ``$`` in
+    it, and the CHECK wants both, so no plausible one can be stored as a hash.
+    """
+    a_user(store)
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_CREDENTIAL_SQL, ("u1", plaintext, _STAMP))
+    assert count(store, "user_credentials") == 0
+
+
+def test_a_token_hash_of_the_wrong_length_is_rejected(store: EventStore) -> None:
+    a_user(store)
+    for bad in ("short", "a" * 63, "a" * 65):
+        with pytest.raises(sqlite3.IntegrityError):
+            raw(store, _INSERT_SESSION_SQL, (bad, "u1", _STAMP, _LATER_STAMP))
+    assert count(store, "sessions") == 0
+
+
+def test_a_session_that_expires_before_it_starts_is_rejected(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_SESSION_SQL, (TOKEN_HASH, "u1", _LATER_STAMP, _STAMP))
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_SESSION_SQL, (TOKEN_HASH, "u1", _STAMP, _STAMP))
+    assert count(store, "sessions") == 0
+
+
+def test_a_credential_or_session_for_an_unknown_user_is_refused_by_the_database(
+    store: EventStore,
+) -> None:
+    """Not only by Python: the foreign key is what makes an orphan impossible."""
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_CREDENTIAL_SQL, ("ghost", A_HASH, _STAMP))
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_SESSION_SQL, (TOKEN_HASH, "ghost", _STAMP, _LATER_STAMP))
+
+
+@pytest.mark.parametrize("bad", BADLY_SHAPED_TIMESTAMPS)
+def test_the_new_tables_reject_a_timestamp_shape_that_would_not_sort(
+    store: EventStore, bad: str
+) -> None:
+    a_user(store)
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_CREDENTIAL_SQL, ("u1", A_HASH, bad))
+    with pytest.raises(sqlite3.IntegrityError):
+        raw(store, _INSERT_SESSION_SQL, (TOKEN_HASH, "u1", _STAMP, bad))
+    assert count(store, "user_credentials") == 0
+    assert count(store, "sessions") == 0
+
+
+def test_the_session_indexes_exist(store: EventStore) -> None:
+    names = {
+        row[0]
+        for row in raw(store, "SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert {"idx_sessions_user", "idx_sessions_expires_at"} <= names
+
+
+def test_opening_a_version_3_database_still_raises(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    with open_store(path) as opened:
+        raw(opened, "PRAGMA user_version = 3")
+    with pytest.raises(UnsupportedSchemaVersion) as caught:
+        open_store(path)
+    assert "3" in str(caught.value)
+
+
+V1_SCHEMA_SQL = """
+BEGIN IMMEDIATE;
+
+CREATE TABLE IF NOT EXISTS users (
+    id           TEXT NOT NULL PRIMARY KEY,
+    email        TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    CHECK (length(id) > 0),
+    CHECK (length(email) > 0),
+    CHECK (email = lower(email)),
+    CHECK (length(display_name) BETWEEN 1 AND 100),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS groups (
+    id            TEXT NOT NULL PRIMARY KEY,
+    name          TEXT NOT NULL,
+    currency_code TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    UNIQUE (id, currency_code),
+    CHECK (length(id) > 0),
+    CHECK (length(name) BETWEEN 1 AND 100),
+    CHECK (currency_code GLOB '[A-Z][A-Z][A-Z]'),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS members (
+    id           TEXT NOT NULL PRIMARY KEY,
+    group_id     TEXT NOT NULL REFERENCES groups (id),
+    display_name TEXT NOT NULL,
+    user_id      TEXT REFERENCES users (id),
+    created_at   TEXT NOT NULL,
+    UNIQUE (group_id, id),
+    CHECK (length(id) > 0),
+    CHECK (length(group_id) > 0),
+    CHECK (length(display_name) BETWEEN 1 AND 100),
+    CHECK (user_id IS NULL OR length(user_id) > 0),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS expense_events (
+    id            TEXT NOT NULL PRIMARY KEY,
+    group_id      TEXT NOT NULL,
+    currency_code TEXT NOT NULL,
+    payer_id      TEXT NOT NULL,
+    total_cents   INTEGER NOT NULL,
+    description   TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    created_by    TEXT NOT NULL,
+    CHECK (length(id) > 0),
+    CHECK (total_cents > 0),
+    CHECK (length(description) <= 500),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T'),
+    FOREIGN KEY (group_id, currency_code) REFERENCES groups (id, currency_code),
+    FOREIGN KEY (group_id, payer_id) REFERENCES members (group_id, id),
+    FOREIGN KEY (group_id, created_by) REFERENCES members (group_id, id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS expense_allocations (
+    expense_id TEXT NOT NULL REFERENCES expense_events (id),
+    position   INTEGER NOT NULL,
+    member_id  TEXT NOT NULL REFERENCES members (id),
+    cents      INTEGER NOT NULL,
+    PRIMARY KEY (expense_id, position),
+    UNIQUE (expense_id, member_id),
+    CHECK (position >= 0),
+    CHECK (cents >= 0)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS settlement_events (
+    id             TEXT NOT NULL PRIMARY KEY,
+    group_id       TEXT NOT NULL,
+    currency_code  TEXT NOT NULL,
+    from_member_id TEXT NOT NULL,
+    to_member_id   TEXT NOT NULL,
+    amount_cents   INTEGER NOT NULL,
+    created_at     TEXT NOT NULL,
+    created_by     TEXT NOT NULL,
+    CHECK (length(id) > 0),
+    CHECK (from_member_id <> to_member_id),
+    CHECK (amount_cents > 0),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T'),
+    FOREIGN KEY (group_id, currency_code) REFERENCES groups (id, currency_code),
+    FOREIGN KEY (group_id, from_member_id) REFERENCES members (group_id, id),
+    FOREIGN KEY (group_id, to_member_id) REFERENCES members (group_id, id),
+    FOREIGN KEY (group_id, created_by) REFERENCES members (group_id, id)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS settlement_decision_events (
+    id            TEXT NOT NULL PRIMARY KEY,
+    settlement_id TEXT NOT NULL REFERENCES settlement_events (id),
+    decision      TEXT NOT NULL,
+    decided_by    TEXT NOT NULL REFERENCES members (id),
+    created_at    TEXT NOT NULL,
+    CHECK (length(id) > 0),
+    CHECK (decision IN ('CONFIRMED', 'REJECTED')),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T')
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_members_group_user
+    ON members (group_id, user_id) WHERE user_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_members_group
+    ON members (group_id);
+
+CREATE INDEX IF NOT EXISTS idx_expense_events_group_order
+    ON expense_events (group_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_expense_allocations_member
+    ON expense_allocations (member_id);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_events_group_order
+    ON settlement_events (group_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_settlement_decisions_settlement_order
+    ON settlement_decision_events (settlement_id, created_at, id);
+
+CREATE TRIGGER IF NOT EXISTS groups_currency_code_is_immutable
+BEFORE UPDATE OF currency_code ON groups
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'groups.currency_code is fixed at creation and cannot be changed'
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS expense_events_no_update
+BEFORE UPDATE ON expense_events
+BEGIN
+    SELECT RAISE(ABORT, 'expense_events is append-only: no row may be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS expense_events_no_delete
+BEFORE DELETE ON expense_events
+BEGIN
+    SELECT RAISE(ABORT, 'expense_events is append-only: no row may be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS expense_allocations_no_update
+BEFORE UPDATE ON expense_allocations
+BEGIN
+    SELECT RAISE(ABORT, 'expense_allocations is append-only: no row may be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS expense_allocations_no_delete
+BEFORE DELETE ON expense_allocations
+BEGIN
+    SELECT RAISE(ABORT, 'expense_allocations is append-only: no row may be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS settlement_events_no_update
+BEFORE UPDATE ON settlement_events
+BEGIN
+    SELECT RAISE(ABORT, 'settlement_events is append-only: no row may be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS settlement_events_no_delete
+BEFORE DELETE ON settlement_events
+BEGIN
+    SELECT RAISE(ABORT, 'settlement_events is append-only: no row may be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS settlement_decision_events_no_update
+BEFORE UPDATE ON settlement_decision_events
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'settlement_decision_events is append-only: no row may be updated'
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS settlement_decision_events_no_delete
+BEFORE DELETE ON settlement_decision_events
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'settlement_decision_events is append-only: no row may be deleted'
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS expense_allocations_member_is_in_the_expense_group
+BEFORE INSERT ON expense_allocations
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'expense_allocations member must belong to the group the expense belongs to'
+    )
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM expense_events AS e
+        JOIN members AS m ON m.id = NEW.member_id
+        WHERE e.id = NEW.expense_id AND m.group_id = e.group_id
+    );
+END;
+
+PRAGMA user_version = 1;
+
+COMMIT;
+"""
+"""Task 6's schema text, verbatim, as it stood when it wrote version 1.
+
+Embedded rather than imported, because the point of the upgrade test is to build a
+database this code did not create. The test below asserts every statement of it is
+still present in the current schema, so a drift in the copy is caught rather than
+quietly weakening the upgrade it is meant to prove.
+"""
+
+
+def test_version_2_only_adds_to_task_sixs_schema() -> None:
+    current = store_module._SCHEMA_SQL
+    statements = [
+        statement.strip()
+        for statement in V1_SCHEMA_SQL.split(";")
+        if statement.strip() and not statement.strip().startswith("PRAGMA user_version")
+    ]
+    assert len(statements) > 20
+    for statement in statements:
+        assert statement in current, statement
+
+
+def test_a_version_1_database_upgrades_in_place_and_keeps_every_row(
+    tmp_path: Path,
+) -> None:
+    """The upgrade path, proven on a database task 6's code wrote, not a fresh one.
+
+    Every statement in the schema is IF NOT EXISTS and open_store re-runs the whole
+    script whenever the stored user_version is behind, so bumping the trailing
+    PRAGMA is the migration. This is the test that fails if it were written as a
+    fresh-database-only path.
+    """
+    path = tmp_path / "ledger.sqlite3"
+    connection = sqlite3.connect(path, isolation_level=None)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.executescript(V1_SCHEMA_SQL)
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        connection.execute(
+            "INSERT INTO users (id, email, display_name, created_at) "
+            "VALUES ('u1', 'sam@example.com', 'Sam', ?)",
+            (_STAMP,),
+        )
+        connection.execute(
+            "INSERT INTO groups (id, name, currency_code, created_at) "
+            "VALUES ('g1', 'Flat g1', 'AUD', ?)",
+            (_STAMP,),
+        )
+        for member_id, user_id in (("g1m1", "u1"), ("g1m2", None), ("g1m3", None)):
+            connection.execute(
+                "INSERT INTO members (id, group_id, display_name, user_id, created_at) "
+                "VALUES (?, 'g1', ?, ?, ?)",
+                (member_id, f"Name {member_id}", user_id, _STAMP),
+            )
+        connection.execute(
+            "INSERT INTO expense_events (id, group_id, currency_code, payer_id, "
+            "total_cents, description, created_at, created_by) "
+            "VALUES ('e1', 'g1', 'AUD', 'g1m1', 1000, 'Dinner', ?, 'g1m1')",
+            (_STAMP,),
+        )
+        for position, member_id in enumerate(("g1m1", "g1m2")):
+            connection.execute(
+                "INSERT INTO expense_allocations (expense_id, position, member_id, "
+                "cents) VALUES ('e1', ?, ?, 500)",
+                (position, member_id),
+            )
+        connection.execute(
+            "INSERT INTO settlement_events (id, group_id, currency_code, "
+            "from_member_id, to_member_id, amount_cents, created_at, created_by) "
+            "VALUES ('s1', 'g1', 'AUD', 'g1m1', 'g1m2', 4000, ?, 'g1m1')",
+            (_LATER_STAMP,),
+        )
+        connection.execute(
+            "INSERT INTO settlement_decision_events (id, settlement_id, decision, "
+            "decided_by, created_at) VALUES ('d1', 's1', 'CONFIRMED', 'g1m2', ?)",
+            (_LATER_STAMP,),
+        )
+    finally:
+        connection.close()
+
+    with open_store(path) as upgraded:
+        assert raw(upgraded, "PRAGMA user_version")[0][0] == SCHEMA_VERSION == 2
+        tables = {
+            row[0]
+            for row in raw(
+                upgraded,
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%'",
+            )
+        }
+        assert {"user_credentials", "sessions"} <= tables
+        assert upgraded.get_user(UserId("u1")) == User(
+            UserId("u1"), "sam@example.com", "Sam", at()
+        )
+        assert upgraded.get_user_by_email("sam@example.com").id == "u1"
+        assert upgraded.get_group("g1") == Group("g1", "Flat g1", AUD, at())
+        assert [member.id for member in upgraded.list_members("g1")] == [
+            "g1m1",
+            "g1m2",
+            "g1m3",
+        ]
+        assert upgraded.get_member("g1m1").user_id == "u1"
+        assert upgraded.get_member_for_user("g1", UserId("u1")).id == "g1m1"
+        expense = upgraded.get_expense("e1")
+        assert expense.total_cents == 1000
+        assert expense.allocations == (
+            Allocation(MemberId("g1m1"), 500),
+            Allocation(MemberId("g1m2"), 500),
+        )
+        # The settlement and its decision share a timestamp: the id breaks the tie.
+        assert [event.id for event in upgraded.list_events("g1")] == ["e1", "d1", "s1"]
+        assert upgraded.list_settlements("g1")[0].amount_cents == 4000
+        assert upgraded.list_settlement_decisions("s1")[0].decision is (
+            SettlementState.CONFIRMED
+        )
+        assert count(upgraded, "user_credentials") == 0
+        assert count(upgraded, "sessions") == 0
+        upgraded.set_password_hash(UserId("u1"), A_HASH, at())
+        upgraded.add_session(a_session())
+        assert upgraded.get_session(TOKEN_HASH).user_id == "u1"
+
+
+# --- Credentials -------------------------------------------------------------
+
+
+def test_a_user_and_a_credential_are_written_in_one_call(store: EventStore) -> None:
+    user = User(UserId("u1"), "sam@example.com", "Sam", at())
+    store.add_user_with_credential(user, A_HASH, at())
+    assert store.get_user(UserId("u1")) == user
+    assert store.get_user_by_email("sam@example.com") == user
+    assert store.get_password_hash(UserId("u1")) == A_HASH
+    assert raw(store, "SELECT updated_at FROM user_credentials") == [(_STAMP,)]
+
+
+def test_a_failed_credential_write_leaves_no_user_and_no_taken_address(
+    store: EventStore,
+) -> None:
+    user = User(UserId("u1"), "sam@example.com", "Sam", at())
+    with pytest.raises(ConstraintViolated):
+        store.add_user_with_credential(user, "not a hash", at())
+    assert count(store, "users") == 0
+    assert count(store, "user_credentials") == 0
+    store.add_user_with_credential(user, A_HASH, at())
+    assert store.get_user_by_email("sam@example.com") == user
+
+
+def test_add_user_with_credential_rejects_a_taken_id_or_address(
+    store: EventStore,
+) -> None:
+    first = User(UserId("u1"), "sam@example.com", "Sam", at())
+    store.add_user_with_credential(first, A_HASH, at())
+    with pytest.raises(DuplicateRecord) as by_id:
+        store.add_user_with_credential(
+            User(UserId("u1"), "other@example.com", "Other", at()), ANOTHER_HASH, at()
+        )
+    assert "u1" in str(by_id.value)
+    with pytest.raises(DuplicateRecord) as by_email:
+        store.add_user_with_credential(
+            User(UserId("u2"), "sam@example.com", "Other", at()), ANOTHER_HASH, at()
+        )
+    assert "sam@example.com" in str(by_email.value)
+    assert store.get_password_hash(UserId("u1")) == A_HASH
+    assert count(store, "users") == 1
+    assert count(store, "user_credentials") == 1
+
+
+def test_add_user_with_credential_takes_a_user(store: EventStore) -> None:
+    with pytest.raises(TypeError):
+        store.add_user_with_credential("u1", A_HASH, at())  # type: ignore[arg-type]
+
+
+def test_get_user_by_email_raises_not_found_naming_the_address(
+    store: EventStore,
+) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.get_user_by_email("ghost@example.com")
+    assert "ghost@example.com" in str(caught.value)
+
+
+def test_get_password_hash_raises_not_found_for_a_user_with_no_credential(
+    store: EventStore,
+) -> None:
+    """Task 6's add_user is still on the surface, so this state is reachable."""
+    a_user(store)
+    with pytest.raises(RecordNotFound) as caught:
+        store.get_password_hash(UserId("u1"))
+    assert "u1" in str(caught.value)
+    with pytest.raises(RecordNotFound):
+        store.get_password_hash(UserId("ghost"))
+
+
+def test_get_password_hash_returns_the_string_it_was_given(store: EventStore) -> None:
+    a_user(store)
+    store.set_password_hash(UserId("u1"), A_HASH, at())
+    stored = store.get_password_hash(UserId("u1"))
+    assert isinstance(stored, str)
+    assert stored == A_HASH
+
+
+def test_set_password_hash_inserts_on_first_use_and_updates_after(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    store.set_password_hash(UserId("u1"), A_HASH, at())
+    assert store.get_password_hash(UserId("u1")) == A_HASH
+    store.set_password_hash(UserId("u1"), ANOTHER_HASH, at(60))
+    assert store.get_password_hash(UserId("u1")) == ANOTHER_HASH
+    assert count(store, "user_credentials") == 1
+    assert raw(store, "SELECT updated_at FROM user_credentials") == [(_LATER_STAMP,)]
+
+
+def test_set_password_hash_deletes_every_session_that_user_holds(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    a_user(store, "u2", "other@example.com")
+    store.add_user_with_credential(
+        User(UserId("u3"), "third@example.com", "Third", at()), A_HASH, at()
+    )
+    store.add_session(a_session(TOKEN_HASH, "u1"))
+    store.add_session(a_session(OTHER_TOKEN_HASH, "u1"))
+    store.add_session(a_session(THIRD_TOKEN_HASH, "u2"))
+    store.set_password_hash(UserId("u1"), A_HASH, at())
+    assert count(store, "sessions") == 1
+    assert store.get_session(THIRD_TOKEN_HASH).user_id == "u2"
+    assert store.get_password_hash(UserId("u3")) == A_HASH
+
+
+def test_setting_a_hash_and_revoking_a_session_is_one_transaction(
+    store: EventStore,
+) -> None:
+    """Traced statements, not a grep: both writes are inside one BEGIN IMMEDIATE."""
+    a_user(store)
+    store.add_session(a_session())
+    traced: list[str] = []
+    store._connection.set_trace_callback(traced.append)
+    try:
+        store.set_password_hash(UserId("u1"), A_HASH, at())
+    finally:
+        store._connection.set_trace_callback(None)
+    assert traced[0] == "BEGIN IMMEDIATE"
+    assert traced[-1] == "COMMIT"
+    assert traced.count("BEGIN IMMEDIATE") == 1
+    assert traced.count("COMMIT") == 1
+    assert any("INSERT INTO user_credentials" in line for line in traced)
+    assert any("DELETE FROM sessions" in line for line in traced)
+
+
+def test_set_password_hash_for_an_unknown_user_is_refused(store: EventStore) -> None:
+    with pytest.raises(StoreError) as caught:
+        store.set_password_hash(UserId("ghost"), A_HASH, at())
+    assert not isinstance(caught.value, sqlite3.Error)
+    assert count(store, "user_credentials") == 0
+
+
+def test_a_refused_hash_leaves_the_stored_hash_and_the_sessions_alone(
+    store: EventStore,
+) -> None:
+    """The rollback covers both halves: a failed update revokes nothing."""
+    a_user(store)
+    store.set_password_hash(UserId("u1"), A_HASH, at())
+    store.add_session(a_session())
+    with pytest.raises(ConstraintViolated):
+        store.set_password_hash(UserId("u1"), "not a hash", at(60))
+    assert store.get_password_hash(UserId("u1")) == A_HASH
+    assert store.get_session(TOKEN_HASH) == a_session()
+
+
+# --- Sessions ----------------------------------------------------------------
+
+
+def test_a_session_round_trips(store: EventStore) -> None:
+    a_user(store)
+    session = a_session()
+    store.add_session(session)
+    assert store.get_session(TOKEN_HASH) == session
+
+
+def test_a_duplicate_token_hash_is_rejected_and_overwrites_nothing(
+    store: EventStore,
+) -> None:
+    """At 256 bits a collision means the random source is broken. Do not retry it."""
+    a_user(store)
+    a_user(store, "u2", "other@example.com")
+    store.add_session(a_session())
+    with pytest.raises(DuplicateRecord) as caught:
+        store.add_session(a_session(TOKEN_HASH, "u2", at(1), at(120)))
+    assert TOKEN_HASH in str(caught.value)
+    assert store.get_session(TOKEN_HASH) == a_session()
+    assert count(store, "sessions") == 1
+
+
+def test_a_session_for_an_unknown_user_is_rejected(store: EventStore) -> None:
+    with pytest.raises(StoreError) as caught:
+        store.add_session(a_session())
+    assert not isinstance(caught.value, sqlite3.Error)
+    assert count(store, "sessions") == 0
+
+
+def test_add_session_takes_a_session(store: EventStore) -> None:
+    with pytest.raises(TypeError):
+        store.add_session(TOKEN_HASH)  # type: ignore[arg-type]
+
+
+def test_get_session_raises_not_found_naming_the_hash(store: EventStore) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.get_session(TOKEN_HASH)
+    assert TOKEN_HASH in str(caught.value)
+
+
+def test_several_live_sessions_for_one_user_are_normal(store: EventStore) -> None:
+    a_user(store)
+    store.add_session(a_session(TOKEN_HASH))
+    store.add_session(a_session(OTHER_TOKEN_HASH))
+    assert store.get_session(TOKEN_HASH).user_id == "u1"
+    assert store.get_session(OTHER_TOKEN_HASH).user_id == "u1"
+    assert count(store, "sessions") == 2
+
+
+def test_delete_session_is_idempotent_and_reports_what_it_deleted(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    store.add_session(a_session(TOKEN_HASH))
+    store.add_session(a_session(OTHER_TOKEN_HASH))
+    assert store.delete_session(TOKEN_HASH) == 1
+    assert store.delete_session(TOKEN_HASH) == 0
+    assert store.delete_session("f" * 64) == 0
+    with pytest.raises(RecordNotFound):
+        store.get_session(TOKEN_HASH)
+    assert store.get_session(OTHER_TOKEN_HASH).user_id == "u1"
+
+
+def test_delete_sessions_for_user_counts_and_leaves_other_users_alone(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    a_user(store, "u2", "other@example.com")
+    store.add_session(a_session(TOKEN_HASH, "u1"))
+    store.add_session(a_session(OTHER_TOKEN_HASH, "u1"))
+    store.add_session(a_session(THIRD_TOKEN_HASH, "u2"))
+    assert store.delete_sessions_for_user(UserId("u1")) == 2
+    assert store.delete_sessions_for_user(UserId("u1")) == 0
+    assert store.get_session(THIRD_TOKEN_HASH).user_id == "u2"
+    assert count(store, "sessions") == 1
+
+
+def test_delete_sessions_for_an_unknown_user_raises_not_found(
+    store: EventStore,
+) -> None:
+    with pytest.raises(RecordNotFound) as caught:
+        store.delete_sessions_for_user(UserId("ghost"))
+    assert "ghost" in str(caught.value)
+
+
+def test_delete_expired_sessions_removes_rows_at_or_before_now(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    store.add_session(a_session(TOKEN_HASH, expires_at=at(60)))
+    store.add_session(a_session(OTHER_TOKEN_HASH, expires_at=at(120)))
+    assert store.delete_expired_sessions(at(30)) == 0
+    assert store.delete_expired_sessions(at(60)) == 1
+    with pytest.raises(RecordNotFound):
+        store.get_session(TOKEN_HASH)
+    assert store.get_session(OTHER_TOKEN_HASH).expires_at == at(120)
+    assert store.delete_expired_sessions(at(600)) == 1
+    assert count(store, "sessions") == 0
+
+
+def test_delete_expired_sessions_takes_a_timezone_aware_datetime(
+    store: EventStore,
+) -> None:
+    with pytest.raises(TypeError):
+        store.delete_expired_sessions("2026-09-03")  # type: ignore[arg-type]
+    with pytest.raises(InvalidRecord):
+        store.delete_expired_sessions(datetime(2026, 9, 3, 10, 0))
+
+
+# --- The user-to-member link -------------------------------------------------
+
+
+def test_get_member_for_user_returns_the_linked_member(store: EventStore) -> None:
+    a_group(store)
+    a_user(store)
+    linked = a_member(store, "m1", "g1", "u1")
+    assert store.get_member_for_user("g1", UserId("u1")) == linked
+
+
+def test_get_member_for_user_never_returns_another_groups_member(
+    store: EventStore,
+) -> None:
+    a_group(store, "g1")
+    a_group(store, "g2", NZD)
+    a_user(store)
+    a_member(store, "m1", "g1", "u1")
+    a_member(store, "m2", "g2", "u1")
+    assert store.get_member_for_user("g1", UserId("u1")).id == "m1"
+    assert store.get_member_for_user("g2", UserId("u1")).id == "m2"
+
+
+def test_get_member_for_user_never_returns_an_unlinked_member(
+    store: EventStore,
+) -> None:
+    a_group(store)
+    a_user(store)
+    a_member(store, "m1", "g1", None)
+    with pytest.raises(RecordNotFound):
+        store.get_member_for_user("g1", UserId("u1"))
+
+
+def test_get_member_for_user_raises_not_found_naming_both_ids(
+    store: EventStore,
+) -> None:
+    """A signed-in user who is not in this group is a legitimate state, not a bug."""
+    a_group(store)
+    a_user(store)
+    with pytest.raises(RecordNotFound) as caught:
+        store.get_member_for_user("g1", UserId("u1"))
+    assert "g1" in str(caught.value)
+    assert "u1" in str(caught.value)
+
+
+def test_get_member_for_user_for_an_unknown_group_raises_not_found(
+    store: EventStore,
+) -> None:
+    a_user(store)
+    with pytest.raises(RecordNotFound) as caught:
+        store.get_member_for_user("ghost", UserId("u1"))
+    assert "ghost" in str(caught.value)

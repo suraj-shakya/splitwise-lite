@@ -32,7 +32,15 @@ width plus a fixed offset is what makes byte order equal chronological order, so
 state column on a settlement. Those are folded out of the events by later tasks, which
 is the spec's resolution to the netting-versus-audit conflict.
 
-The schema is version 1, recorded in ``PRAGMA user_version``. Column order mirrors the
+**Credentials and sessions are held apart from the records they belong to.** A password
+hash lives in ``user_credentials``, not on ``users``, so a ``User`` and its ``repr``
+cannot carry one into a log line or a template, and ``SELECT * FROM users`` stays safe.
+A session row holds the SHA-256 of the token that was issued and never the token, so a
+stolen database file contains no credential anyone can present. The store knows how to
+hold both and nothing about what either means: hashing, token generation, expiry and the
+login flow are ``accounts.py``'s, which owns no statement.
+
+The schema is version 2, recorded in ``PRAGMA user_version``. Column order mirrors the
 field order of the matching type in ``events.py`` so the two can be read side by side.
 The ``CHECK`` constraints are a superset of the ones the task spec tabulates: ids and
 emails are additionally required to be non-empty, which strengthens the schema and
@@ -81,6 +89,7 @@ __all__ = [
     "InvalidRecord",
     "Member",
     "RecordNotFound",
+    "Session",
     "StorageFailed",
     "StoreClosed",
     "StoreError",
@@ -96,11 +105,13 @@ UserId = NewType("UserId", str)
 event references a user: events are between members, and a member may exist with no
 account at all. Like the id types in ``events.py`` it is a ``str`` at runtime."""
 
-SCHEMA_VERSION: Final[int] = 1
+SCHEMA_VERSION: Final[int] = 2
 """The schema this module writes and understands, held in ``PRAGMA user_version``.
 
-Task 7 raises it to 2 when it adds credentials and sessions. A database at a higher
-version is refused rather than half-understood.
+Version 2 is version 1 plus ``user_credentials`` and ``sessions``. A database at a
+higher version is refused rather than half-understood; one at a lower version is
+upgraded on open, because every statement in the script is ``IF NOT EXISTS`` and
+re-running the whole of it adds what is missing and touches nothing that is there.
 """
 
 MIN_SQLITE_VERSION: Final[tuple[int, int, int]] = (3, 37, 0)
@@ -120,6 +131,17 @@ fixture teardown, and never by the application, which always names a real file."
 
 _MAX_NAME_LENGTH: Final[int] = 100
 """Cap on ``display_name`` and group ``name``, matching the schema's ``CHECK``."""
+
+_TOKEN_HASH_LENGTH: Final[int] = 64
+"""Characters in a session's stored key: a SHA-256 digest in lowercase hex.
+
+Fixed width, so the column's ``CHECK`` on the length is a real constraint rather than
+an upper bound, and a row holding something other than a digest stands out.
+"""
+
+_HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789abcdef")
+"""The only characters a stored token hash may contain. Lowercase, so one digest has
+one spelling and a lookup by hash cannot miss on case."""
 
 
 class StoreError(DomainError):
@@ -262,6 +284,24 @@ def _require_email(value: object, field: str) -> str:
         raise InvalidRecord(f"{field} must not be empty")
     if value != value.lower():
         raise InvalidRecord(f"{field} must be lowercase, got {value!r}")
+    return value
+
+
+def _require_token_hash(value: object, field: str) -> str:
+    """Return ``value`` if it is 64 lowercase hex characters, else raise.
+
+    The shape of a SHA-256 digest, which is what a session row is keyed by. The raw
+    token that hashes to it is never given to this module, so this is also the check
+    that a caller has not passed one by mistake: a token is 43 characters and carries
+    ``-`` and ``_``, so it cannot satisfy this.
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a str, got {type(value).__name__}: {value!r}")
+    if len(value) != _TOKEN_HASH_LENGTH or not _HEX_DIGITS.issuperset(value):
+        raise InvalidRecord(
+            f"{field} must be {_TOKEN_HASH_LENGTH} lowercase hex characters, got "
+            f"{len(value)} characters"
+        )
     return value
 
 
@@ -448,6 +488,53 @@ class Member:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class Session:
+    """One signed-in device, keyed by the hash of a token this store never holds.
+
+    Invariants:
+
+    * ``token_hash`` is 64 lowercase hex characters: the SHA-256 of the token its
+      owner was handed once, at login. The token itself has no field here, is never
+      written and is never logged, so a stolen database file or a backup contains no
+      credential anyone can present.
+    * ``user_id`` is a non-empty ``str``. A session records the user, not a member and
+      not a group: one person may be a member of several groups, so which member is
+      acting is a lookup against a group rather than a property of the session.
+    * ``created_at`` and ``expires_at`` are timezone-aware, normalised to UTC, and
+      ``expires_at`` is strictly the later of the two.
+
+    Expiry is absolute and written once at creation: there is no sliding renewal, which
+    would mean a write on every request, and no idle timeout. Whether a session is
+    still live is decided against a caller's clock in ``accounts.py``; the store holds
+    the two instants and reads neither of them against a clock of its own.
+    """
+
+    token_hash: str
+    user_id: UserId
+    created_at: datetime
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "token_hash",
+            _require_token_hash(self.token_hash, "Session token_hash"),
+        )
+        _require_id(self.user_id, "Session user_id")
+        object.__setattr__(
+            self, "created_at", _require_utc(self.created_at, "Session created_at")
+        )
+        object.__setattr__(
+            self, "expires_at", _require_utc(self.expires_at, "Session expires_at")
+        )
+        if self.expires_at <= self.created_at:
+            raise InvalidRecord(
+                f"Session expires_at must be later than created_at, got "
+                f"{self.expires_at.isoformat()} against {self.created_at.isoformat()}"
+            )
+
+
 # --- Schema -----------------------------------------------------------------
 
 _SCHEMA_SQL: Final[str] = """
@@ -492,6 +579,30 @@ CREATE TABLE IF NOT EXISTS members (
     CHECK (user_id IS NULL OR length(user_id) > 0),
     CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
            AND substr(created_at, 11, 1) = 'T')
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_credentials (
+    user_id       TEXT NOT NULL PRIMARY KEY REFERENCES users (id),
+    password_hash TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    CHECK (length(user_id) > 0),
+    CHECK (length(password_hash) >= 60 AND instr(password_hash, '$') > 0),
+    CHECK (length(updated_at) = 32 AND updated_at LIKE '%+00:00'
+           AND substr(updated_at, 11, 1) = 'T')
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT NOT NULL PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users (id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    CHECK (length(token_hash) = 64),
+    CHECK (length(user_id) > 0),
+    CHECK (length(created_at) = 32 AND created_at LIKE '%+00:00'
+           AND substr(created_at, 11, 1) = 'T'),
+    CHECK (length(expires_at) = 32 AND expires_at LIKE '%+00:00'
+           AND substr(expires_at, 11, 1) = 'T'),
+    CHECK (expires_at > created_at)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS expense_events (
@@ -561,6 +672,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_members_group_user
 
 CREATE INDEX IF NOT EXISTS idx_members_group
     ON members (group_id);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user
+    ON sessions (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
+    ON sessions (expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_expense_events_group_order
     ON expense_events (group_id, created_at, id);
@@ -652,7 +769,7 @@ BEGIN
     );
 END;
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 COMMIT;
 """
@@ -670,6 +787,18 @@ impossible at the storage layer rather than merely unlikely in Python:
 column points at ``members (group_id, id)``. Allocations carry no ``group_id`` of their
 own, so a ``BEFORE INSERT`` trigger enforces the same rule for them by joining through
 the expense.
+
+Re-running the script is also the migration. A database written at version 1 gains
+``user_credentials`` and ``sessions`` on open and keeps every row it had, because the
+trailing ``PRAGMA user_version`` is the only statement in the script that is not
+``IF NOT EXISTS``. There is no migration framework and no ``ALTER TABLE``.
+
+``user_credentials.password_hash`` carries ``length >= 60 AND instr(..., '$') > 0``. No
+plaintext password can satisfy both, so the column is a tripwire against the worst bug
+this schema could be asked to store as well as a place to keep the hash. It names no
+algorithm, so raising the cost later needs no schema change. The two new tables carry no
+append-only trigger: a session is operational state, and deleting a logged-out one is
+the correct behaviour rather than a rewrite of history.
 """
 
 _CONNECTION_PRAGMAS: Final[tuple[str, ...]] = (
@@ -734,6 +863,56 @@ _SELECT_MEMBERS_BY_GROUP: Final[str] = (
 )
 
 _SELECT_GROUP_CURRENCY: Final[str] = "SELECT currency_code FROM groups WHERE id = ?"
+
+_SELECT_USER_BY_EMAIL: Final[str] = (
+    "SELECT id, email, display_name, created_at FROM users WHERE email = ?"
+)
+
+# A member is reached from a user by an equality on user_id, which never matches a
+# NULL, so an unclaimed member row can never come back from this read.
+_SELECT_MEMBER_FOR_USER: Final[str] = (
+    "SELECT id, group_id, display_name, user_id, created_at FROM members "
+    "WHERE group_id = ? AND user_id = ?"
+)
+
+_INSERT_CREDENTIAL: Final[str] = (
+    "INSERT INTO user_credentials (user_id, password_hash, updated_at) "
+    "VALUES (?, ?, ?)"
+)
+
+# A check followed by this or the insert above, never an upsert: the write lock is
+# already held, so the check is sound, and the ban on ON CONFLICT and INSERT OR REPLACE
+# stays literally true of this module's source.
+_UPDATE_CREDENTIAL: Final[str] = (
+    "UPDATE user_credentials SET password_hash = ?, updated_at = ? WHERE user_id = ?"
+)
+
+_EXISTS_CREDENTIAL: Final[str] = "SELECT 1 FROM user_credentials WHERE user_id = ?"
+
+_SELECT_CREDENTIAL: Final[str] = (
+    "SELECT password_hash FROM user_credentials WHERE user_id = ?"
+)
+
+_INSERT_SESSION: Final[str] = (
+    "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) "
+    "VALUES (?, ?, ?, ?)"
+)
+
+_EXISTS_SESSION: Final[str] = "SELECT 1 FROM sessions WHERE token_hash = ?"
+
+_SELECT_SESSION: Final[str] = (
+    "SELECT token_hash, user_id, created_at, expires_at FROM sessions "
+    "WHERE token_hash = ?"
+)
+
+# The only three statements in this module that delete anything, and all three name
+# sessions. An event table can only be appended to, and a trigger on each of the four
+# refuses an UPDATE or a DELETE from any source, including this one.
+_DELETE_SESSION: Final[str] = "DELETE FROM sessions WHERE token_hash = ?"
+
+_DELETE_SESSIONS_FOR_USER: Final[str] = "DELETE FROM sessions WHERE user_id = ?"
+
+_DELETE_EXPIRED_SESSIONS: Final[str] = "DELETE FROM sessions WHERE expires_at <= ?"
 
 _INSERT_EXPENSE: Final[str] = (
     "INSERT INTO expense_events (id, group_id, currency_code, payer_id, total_cents, "
@@ -1153,6 +1332,183 @@ class EventStore:
                 ),
             )
 
+    # --- Writes: credentials and sessions -----------------------------------
+
+    def add_user_with_credential(
+        self, user: User, password_hash: str, updated_at: datetime
+    ) -> None:
+        """Store a new user and their password hash in one transaction.
+
+        One call, so one transaction: either both rows land or neither does. A user
+        row with no credential row is an account nobody can sign in to, and it would
+        hold the email address against the second attempt, so a signup that failed
+        half way would lock the address it failed on.
+
+        Nothing here hashes anything. The encoded string arrives ready, and the
+        column's ``CHECK`` refuses one short enough or plain enough to be a password.
+
+        Raises:
+            TypeError: if ``user`` is not a ``User``, or a bound value is of a type
+                this module never binds.
+            InvalidRecord: if ``updated_at`` is naive.
+            DuplicateRecord: if the id or the email address is already taken.
+            ConstraintViolated: if the database refuses the hash.
+        """
+        if not isinstance(user, User):
+            raise TypeError(
+                f"add_user_with_credential takes a User, got {type(user).__name__}"
+            )
+        stamp = _encode_timestamp(_require_utc(updated_at, "credential updated_at"))
+        with self._writing("adding a user with a credential") as connection:
+            self._require_free(
+                connection,
+                _EXISTS_USER,
+                (user.id,),
+                f"a user with id {user.id!r} already exists",
+            )
+            self._require_free(
+                connection,
+                _EXISTS_USER_EMAIL,
+                (user.email,),
+                f"a user with email {user.email!r} already exists",
+            )
+            connection.execute(
+                _INSERT_USER,
+                _params(
+                    user.id,
+                    user.email,
+                    user.display_name,
+                    _encode_timestamp(user.created_at),
+                ),
+            )
+            connection.execute(
+                _INSERT_CREDENTIAL, _params(user.id, password_hash, stamp)
+            )
+
+    def set_password_hash(
+        self, user_id: str, password_hash: str, updated_at: datetime
+    ) -> None:
+        """Replace a user's password hash and delete every session they hold.
+
+        Both halves happen in one ``BEGIN IMMEDIATE`` transaction, because they cannot
+        be allowed to half-happen: a hash that changed while a session survived on the
+        old secret is exactly the hole that makes changing a leaked password
+        pointless, and a revocation without the new hash would sign someone out for
+        nothing. The session that asked for the change goes with the rest.
+
+        The row is inserted on first use and updated afterwards, written as a check
+        and then one statement or the other rather than as an upsert: the write lock
+        is already held, so the check is sound.
+
+        Raises:
+            TypeError: if a bound value is of a type this module never binds.
+            InvalidRecord: if ``updated_at`` is naive.
+            ConstraintViolated: if the user does not exist, or the database refuses
+                the hash.
+        """
+        stamp = _encode_timestamp(_require_utc(updated_at, "credential updated_at"))
+        with self._writing("setting a password hash") as connection:
+            held = connection.execute(_EXISTS_CREDENTIAL, _params(user_id)).fetchone()
+            if held is None:
+                connection.execute(
+                    _INSERT_CREDENTIAL, _params(user_id, password_hash, stamp)
+                )
+            else:
+                connection.execute(
+                    _UPDATE_CREDENTIAL, _params(password_hash, stamp, user_id)
+                )
+            connection.execute(_DELETE_SESSIONS_FOR_USER, _params(user_id))
+
+    def add_session(self, session: Session) -> None:
+        """Store one live session, keyed by the hash of the token that was issued.
+
+        The token is not a parameter and has no column: the caller keeps it, the store
+        keeps its digest. A ``token_hash`` that is already held raises rather than
+        overwriting the row it collides with. There is no retry and no upsert: at 256
+        bits a collision means the random source is broken, and quietly minting a
+        second token would hide that.
+
+        Raises:
+            TypeError: if ``session`` is not a ``Session``.
+            DuplicateRecord: if a session with that token hash already exists.
+            ConstraintViolated: if the user does not exist.
+        """
+        if not isinstance(session, Session):
+            raise TypeError(
+                f"add_session takes a Session, got {type(session).__name__}"
+            )
+        with self._writing("adding a session") as connection:
+            self._require_free(
+                connection,
+                _EXISTS_SESSION,
+                (session.token_hash,),
+                f"a session with token hash {session.token_hash!r} already exists",
+            )
+            connection.execute(
+                _INSERT_SESSION,
+                _params(
+                    session.token_hash,
+                    session.user_id,
+                    _encode_timestamp(session.created_at),
+                    _encode_timestamp(session.expires_at),
+                ),
+            )
+
+    def delete_session(self, token_hash: str) -> int:
+        """Delete the session with ``token_hash`` and return how many rows went.
+
+        Idempotent and unconditional: a hash that names no row deletes nothing and
+        raises nothing, so signing out twice, or with a token that has already
+        expired, is not an error. No ownership is checked, because possession of the
+        token is the authority, which is what a bearer token means.
+
+        Raises:
+            TypeError: if ``token_hash`` is not a ``str``.
+        """
+        with self._writing("deleting a session") as connection:
+            return connection.execute(
+                _DELETE_SESSION, _params(token_hash)
+            ).rowcount
+
+    def delete_sessions_for_user(self, user_id: str) -> int:
+        """Delete every session ``user_id`` holds and return how many went.
+
+        A user with none returns 0. An unknown id raises instead, matching every
+        other read and write scoped to one record, so a typo is not reported as
+        "there was nothing to sign out".
+
+        Raises:
+            TypeError: if ``user_id`` is not a ``str``.
+            RecordNotFound: if no user has that id.
+        """
+        with self._writing("deleting the sessions of a user") as connection:
+            if connection.execute(_EXISTS_USER, _params(user_id)).fetchone() is None:
+                raise RecordNotFound(f"no user with id {user_id!r}")
+            return connection.execute(
+                _DELETE_SESSIONS_FOR_USER, _params(user_id)
+            ).rowcount
+
+    def delete_expired_sessions(self, now: datetime) -> int:
+        """Delete every session already expired at ``now``, returning how many went.
+
+        At or before, not strictly before, matching the rule the caller applies: a
+        session whose expiry is exactly the current instant is already dead.
+
+        Nothing calls this on a schedule in version 1: it exists so that a caller can.
+        An unpurged row is never honoured in the meantime, because whether a session
+        is live is decided on every read against the caller's clock rather than by the
+        row's presence.
+
+        Raises:
+            TypeError: if ``now`` is not a ``datetime``.
+            InvalidRecord: if it is naive.
+        """
+        stamp = _encode_timestamp(_require_utc(now, "delete_expired_sessions now"))
+        with self._writing("deleting expired sessions") as connection:
+            return connection.execute(
+                _DELETE_EXPIRED_SESSIONS, _params(stamp)
+            ).rowcount
+
     # --- Writes: the log ----------------------------------------------------
 
     def append_expense(self, expense: ExpenseEvent) -> None:
@@ -1368,6 +1724,73 @@ class EventStore:
             ).fetchall()
         return tuple(_member_from_row(row) for row in rows)
 
+    def get_user_by_email(self, email: str) -> User:
+        """Return the user with ``email``, or raise ``RecordNotFound`` naming it.
+
+        The address must already be canonical. Lowercasing here would put a second,
+        quieter canonicalisation next to the caller's, and one spelling per address is
+        what makes the column's ``UNIQUE`` mean "one account per address".
+        """
+        with self._reading("reading a user by email") as connection:
+            row = connection.execute(_SELECT_USER_BY_EMAIL, _params(email)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no user with email {email!r}")
+        return _user_from_row(row)
+
+    def get_password_hash(self, user_id: str) -> str:
+        """Return the stored password hash for ``user_id``, or raise ``RecordNotFound``.
+
+        A ``str`` rather than a record: the rule that reads return domain objects is
+        about not handing back rows, dicts and ``sqlite3.Row`` objects, and one scalar
+        is not a row. A user who has no credential row raises like an unknown one:
+        ``add_user`` can make an account with no password, and that account simply
+        cannot sign in.
+        """
+        with self._reading("reading a password hash") as connection:
+            row = connection.execute(_SELECT_CREDENTIAL, _params(user_id)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no password hash for user with id {user_id!r}")
+        return row[0]
+
+    def get_session(self, token_hash: str) -> Session:
+        """Return the session with ``token_hash``, or raise ``RecordNotFound``.
+
+        The row as it was stored, expired or not. Reading a session and deciding it is
+        still live are separate: the expiry rule belongs to the caller's clock, and
+        this read never writes, because a read that writes is lock contention waiting
+        for the first two people to open the app at once.
+        """
+        with self._reading("reading a session") as connection:
+            row = connection.execute(_SELECT_SESSION, _params(token_hash)).fetchone()
+        if row is None:
+            raise RecordNotFound(f"no session with token hash {token_hash!r}")
+        return _session_from_row(row)
+
+    def get_member_for_user(self, group_id: str, user_id: str) -> Member:
+        """Return the member of ``group_id`` linked to ``user_id``, or raise.
+
+        This is what turns "who is acting" into a member id that an event can name. It
+        never crosses a group, and never returns a member whose ``user_id`` is NULL,
+        whatever else matches: an unclaimed member row is a flatmate with no account
+        yet, not this user.
+
+        Raises:
+            RecordNotFound: if the group does not exist, naming it, or if nobody in it
+                is linked to that user, naming both ids. A signed-in user who is not a
+                member of a group is a legitimate state, not a bug: it is what every
+                brand new account looks like until a group links it.
+        """
+        with self._reading("reading the member acting for a user") as connection:
+            self._require_group(connection, group_id)
+            row = connection.execute(
+                _SELECT_MEMBER_FOR_USER, _params(group_id, user_id)
+            ).fetchone()
+        if row is None:
+            raise RecordNotFound(
+                f"no member of group {group_id!r} is linked to user {user_id!r}"
+            )
+        return _member_from_row(row)
+
     # --- Reads: the log -----------------------------------------------------
 
     def get_expense(self, expense_id: str) -> ExpenseEvent:
@@ -1580,6 +2003,17 @@ def _member_from_row(row: tuple[str, str, str, str | None, str]) -> Member:
         display_name,
         None if user_id is None else UserId(user_id),
         _decode_timestamp(created_at),
+    )
+
+
+def _session_from_row(row: tuple[str, str, str, str]) -> Session:
+    """Build a ``Session`` from its row, re-checking every invariant on the way out."""
+    token_hash, user_id, created_at, expires_at = row
+    return Session(
+        token_hash,
+        UserId(user_id),
+        _decode_timestamp(created_at),
+        _decode_timestamp(expires_at),
     )
 
 
