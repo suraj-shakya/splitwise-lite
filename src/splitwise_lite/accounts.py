@@ -792,6 +792,10 @@ def change_password(
     A new password equal to the current one is refused. Rewriting the same secret buys
     nothing and costs the user every session they hold.
 
+    An empty or over-long current password is refused before the derivation runs, for
+    the reason ``log_in`` refuses one: this path reaches the same memory-hard function,
+    so it needs the same cap on what may be fed to it.
+
     Raises:
         TypeError: if an argument is of the wrong type.
         InvalidRecord: if ``now`` is naive.
@@ -802,6 +806,8 @@ def change_password(
     """
     moment = _require_utc(now, "now")
     current = _normalise_password(current_password)
+    if not current or len(current) > MAX_PASSWORD_LENGTH:
+        raise AuthenticationFailed(_CURRENT_PASSWORD_WRONG)
     stored = store.get_password_hash(user_id)
     if not verify_password(current, stored):
         raise AuthenticationFailed(_CURRENT_PASSWORD_WRONG)

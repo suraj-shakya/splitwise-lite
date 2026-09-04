@@ -2403,16 +2403,35 @@ quietly weakening the upgrade it is meant to prove.
 """
 
 
-def test_version_2_only_adds_to_task_sixs_schema() -> None:
-    current = store_module._SCHEMA_SQL
-    statements = [
+def creates(script: str) -> list[str]:
+    """Every CREATE statement in ``script``, in order, as written.
+
+    Split on the semicolon, which shreds a trigger body into its parts; only the
+    fragment that starts with CREATE is kept, so what is compared is a whole table,
+    index or trigger head rather than a stray END or a bare RAISE.
+    """
+    return [
         statement.strip()
-        for statement in V1_SCHEMA_SQL.split(";")
-        if statement.strip() and not statement.strip().startswith("PRAGMA user_version")
+        for statement in script.split(";")
+        if statement.strip().upper().startswith("CREATE")
     ]
-    assert len(statements) > 20
-    for statement in statements:
+
+
+def test_version_2_only_adds_to_task_sixs_schema() -> None:
+    """Every statement task 6 wrote is still here, and version 2 adds exactly four.
+
+    Two tables and two indexes. If this fails, the embedded v1 text has drifted from
+    what task 6 actually wrote, and the upgrade test below is proving nothing.
+    """
+    current = store_module._SCHEMA_SQL
+    before = creates(V1_SCHEMA_SQL)
+    assert len(creates(current)) == len(before) + 4
+    for statement in before:
         assert statement in current, statement
+    for statement in V1_SCHEMA_SQL.split(";"):
+        statement = statement.strip()
+        if statement and not statement.startswith("PRAGMA user_version"):
+            assert statement in current, statement
 
 
 def test_a_version_1_database_upgrades_in_place_and_keeps_every_row(
@@ -2639,6 +2658,31 @@ def test_setting_a_hash_and_revoking_a_session_is_one_transaction(
     assert traced.count("COMMIT") == 1
     assert any("INSERT INTO user_credentials" in line for line in traced)
     assert any("DELETE FROM sessions" in line for line in traced)
+
+
+def test_a_failure_on_the_second_write_rolls_the_first_one_back(
+    store: EventStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction of the same transaction.
+
+    The test below forces the failure on the credential write. This one points the
+    revocation at a table that is not there, so the credential write has already
+    succeeded when the transaction fails and the rollback has something to undo.
+    """
+    a_user(store)
+    store.set_password_hash(UserId("u1"), A_HASH, at())
+    store.add_session(a_session())
+    monkeypatch.setattr(
+        store_module,
+        "_DELETE_SESSIONS_FOR_USER",
+        "DELETE FROM a_table_that_is_not_there WHERE user_id = ?",
+    )
+    with pytest.raises(StorageFailed):
+        store.set_password_hash(UserId("u1"), ANOTHER_HASH, at(60))
+    monkeypatch.undo()
+    assert store.get_password_hash(UserId("u1")) == A_HASH
+    assert raw(store, "SELECT updated_at FROM user_credentials") == [(_STAMP,)]
+    assert store.get_session(TOKEN_HASH) == a_session()
 
 
 def test_set_password_hash_for_an_unknown_user_is_refused(store: EventStore) -> None:

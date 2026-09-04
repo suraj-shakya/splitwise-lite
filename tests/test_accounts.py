@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import uuid
 import hashlib
 import inspect
 import unicodedata
@@ -312,21 +313,19 @@ def test_every_function_that_touches_storage_takes_the_store_first(function) -> 
 
 
 def test_the_module_holds_no_store_and_no_current_user() -> None:
-    public_values = {
-        name: getattr(accounts_module, name) for name in accounts_module.__all__
-    }
-    for name, value in public_values.items():
+    """Every attribute, private ones included: a module-level store is the bug."""
+    for name, value in vars(accounts_module).items():
         assert not isinstance(value, EventStore), name
+        assert not isinstance(value, (Session, User, IssuedSession)), name
     assert not hasattr(accounts_module, "current_user")
     assert not hasattr(accounts_module, "store")
 
 
 def test_no_value_type_in_the_module_holds_a_password() -> None:
     """A field would put one in a repr, a log line and a traceback."""
-    for value_type in (ScryptParams, IssuedSession, Session):
-        for name in value_type.__slots__:
-            assert "password" not in name, (value_type, name)
-            assert "secret" not in name, (value_type, name)
+    assert ScryptParams.__slots__ == ("n", "r", "p", "dklen")
+    assert IssuedSession.__slots__ == ("token", "session")
+    assert Session.__slots__ == ("token_hash", "user_id", "created_at", "expires_at")
 
 
 def test_the_error_family_is_one_family() -> None:
@@ -655,8 +654,9 @@ def test_a_password_is_measured_after_normalisation(
         an_account(store, params, password=too_short)
     long_enough = unicodedata.normalize("NFD", "caf\u00e9 secrets")
     assert len(unicodedata.normalize("NFKC", long_enough)) == MIN_PASSWORD_LENGTH
-    an_account(store, params, password=long_enough)
-    assert log_in(store, email="sam@example.com", password=long_enough, now=at())
+    user = an_account(store, params, password=long_enough)
+    issued = log_in(store, email="sam@example.com", password=long_enough, now=at())
+    assert issued.session.user_id == user.id
 
 
 @pytest.mark.parametrize("password", ["short", "x" * 11, "x" * 1025])
@@ -684,7 +684,12 @@ def test_a_password_is_never_stripped(
     an_account(store, params, password=" secret phrase!")
     with pytest.raises(AuthenticationFailed):
         log_in(store, email="sam@example.com", password="secret phrase!", now=at())
-    assert log_in(store, email="sam@example.com", password=" secret phrase!", now=at())
+    signed_in = log_in(
+        store, email="sam@example.com", password=" secret phrase!", now=at()
+    )
+    assert signed_in.session.user_id == store.get_user_by_email(
+        "sam@example.com"
+    ).id
 
 
 def test_a_password_of_whitespace_alone_is_refused(
@@ -709,8 +714,9 @@ def test_a_password_of_whitespace_alone_is_refused(
 def test_there_are_no_composition_rules(
     store: EventStore, params: ScryptParams, password: str
 ) -> None:
-    an_account(store, params, password=password)
-    assert log_in(store, email="sam@example.com", password=password, now=at())
+    user = an_account(store, params, password=password)
+    issued = log_in(store, email="sam@example.com", password=password, now=at())
+    assert issued.session.user_id == user.id
 
 
 def test_log_in_applies_no_password_policy(
@@ -802,6 +808,47 @@ def test_sign_up_returns_the_stored_user(
     assert verify_password(PASSWORD, store.get_password_hash(user.id)) is True
 
 
+def test_a_new_account_gets_a_fresh_id_from_the_repos_id_factory(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """``new_id()``, so an id is never derived from a name, an address or a count."""
+    first = an_account(store, params)
+    second = an_account(store, params, email="other@example.com")
+    assert uuid.UUID(first.id).version == 4
+    assert first.id != second.id
+    assert "sam" not in first.id
+    assert "example" not in first.id
+
+
+@pytest.mark.parametrize("password", [None, 1234, b"bytes", ["list"]])
+def test_a_password_of_the_wrong_type_raises_type_error_on_every_call(
+    store: EventStore, params: ScryptParams, password: object
+) -> None:
+    user = an_account(store, params)
+    with pytest.raises(TypeError):
+        an_account(store, params, email="new@example.com", password=password)
+    with pytest.raises(TypeError):
+        log_in(store, email="sam@example.com", password=password, now=at())
+    with pytest.raises(TypeError):
+        change_password(
+            store,
+            user_id=user.id,
+            current_password=password,
+            new_password=OTHER_PASSWORD,
+            now=at(60),
+            params=params,
+        )
+    with pytest.raises(TypeError):
+        change_password(
+            store,
+            user_id=user.id,
+            current_password=PASSWORD,
+            new_password=password,
+            now=at(60),
+            params=params,
+        )
+
+
 def test_a_signup_that_fails_on_the_credential_write_leaves_nothing(
     store: EventStore, params: ScryptParams, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -889,15 +936,16 @@ def test_two_logins_give_two_distinct_live_sessions(
     second = log_in(store, email="sam@example.com", password=PASSWORD, now=at(1))
     assert first.token != second.token
     assert first.session.token_hash != second.session.token_hash
-    assert authenticate(store, first.token, now=at(2))
-    assert authenticate(store, second.token, now=at(2))
+    assert authenticate(store, first.token, now=at(2)) == first.session
+    assert authenticate(store, second.token, now=at(2)) == second.session
 
 
 def test_a_login_normalises_the_address_it_is_given(
     store: EventStore, params: ScryptParams
 ) -> None:
-    an_account(store, params)
-    assert log_in(store, email=" SAM@Example.com ", password=PASSWORD, now=at())
+    user = an_account(store, params)
+    issued = log_in(store, email=" SAM@Example.com ", password=PASSWORD, now=at())
+    assert issued.session.user_id == user.id
 
 
 def test_every_login_failure_is_the_same_type_with_the_same_message(
@@ -1146,7 +1194,7 @@ def test_authenticate_refuses_a_token_it_does_not_hold(
     a_signed_in_user(store, params)
     with pytest.raises(SessionInvalid) as caught:
         authenticate(store, token, now=at())
-    assert not token or token not in str(caught.value)
+    assert str(caught.value) == "that token does not name a live session"
 
 
 def test_a_token_that_is_not_a_string_raises_type_error(store: EventStore) -> None:
@@ -1161,7 +1209,10 @@ def test_expiry_is_exclusive_to_the_microsecond(
 ) -> None:
     issued = a_signed_in_user(store, params)
     expires_at = issued.session.expires_at
-    assert authenticate(store, issued.token, now=expires_at - timedelta(microseconds=1))
+    assert (
+        authenticate(store, issued.token, now=expires_at - timedelta(microseconds=1))
+        == issued.session
+    )
     for moment in (expires_at, expires_at + timedelta(microseconds=1)):
         with pytest.raises(SessionInvalid):
             authenticate(store, issued.token, now=moment)
@@ -1246,8 +1297,8 @@ def test_log_out_everywhere_counts_and_touches_no_other_user(
     for token in (mine.token, also_mine.token):
         with pytest.raises(SessionInvalid):
             authenticate(store, token, now=at(2))
-    for token in (theirs.token, also_theirs.token):
-        assert authenticate(store, token, now=at(2))
+    for token, live in ((theirs.token, theirs), (also_theirs.token, also_theirs)):
+        assert authenticate(store, token, now=at(2)) == live.session
     assert log_out_everywhere(store, mine.session.user_id) == 0
 
 
@@ -1295,7 +1346,12 @@ def test_after_a_change_the_new_password_logs_in_and_the_old_one_does_not(
         now=at(60),
         params=params,
     )
-    assert log_in(store, email="sam@example.com", password=OTHER_PASSWORD, now=at(61))
+    assert (
+        log_in(
+            store, email="sam@example.com", password=OTHER_PASSWORD, now=at(61)
+        ).session.user_id
+        == user.id
+    )
     with pytest.raises(AuthenticationFailed):
         log_in(store, email="sam@example.com", password=PASSWORD, now=at(61))
 
@@ -1391,6 +1447,64 @@ def test_the_hash_and_the_revocation_cannot_half_happen(
         )
     assert store.get_password_hash(issued.session.user_id) == before
     assert authenticate(store, issued.token, now=at(61)) == issued.session
+
+
+def test_a_failure_on_the_second_write_rolls_the_first_one_back(
+    store: EventStore, params: ScryptParams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forced to fail after the hash is written and before the revocation runs.
+
+    The test above forces the failure on the first of the two writes. This one points
+    the revocation at a table that is not there, so the credential write has already
+    succeeded when the transaction fails, and the rollback has something to undo.
+    """
+    issued = a_signed_in_user(store, params)
+    before = store.get_password_hash(issued.session.user_id)
+    monkeypatch.setattr(
+        store_module,
+        "_DELETE_SESSIONS_FOR_USER",
+        "DELETE FROM a_table_that_is_not_there WHERE user_id = ?",
+    )
+    with pytest.raises(DomainError):
+        change_password(
+            store,
+            user_id=issued.session.user_id,
+            current_password=PASSWORD,
+            new_password=OTHER_PASSWORD,
+            now=at(60),
+            params=params,
+        )
+    monkeypatch.undo()
+    assert store.get_password_hash(issued.session.user_id) == before
+    assert authenticate(store, issued.token, now=at(61)) == issued.session
+
+
+def test_an_empty_or_over_long_current_password_costs_no_derivation(
+    store: EventStore, params: ScryptParams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cap ``log_in`` applies, applied on this path for the same reason."""
+    issued = a_signed_in_user(store, params)
+    before = store.get_password_hash(issued.session.user_id)
+    calls: list[int] = []
+    real = accounts_module._derive
+
+    def counting(password: str, salt: bytes, parameters: ScryptParams) -> bytes:
+        calls.append(1)
+        return real(password, salt, parameters)
+
+    monkeypatch.setattr(accounts_module, "_derive", counting)
+    for current in ("", "x" * (MAX_PASSWORD_LENGTH + 1)):
+        with pytest.raises(AuthenticationFailed):
+            change_password(
+                store,
+                user_id=issued.session.user_id,
+                current_password=current,
+                new_password=OTHER_PASSWORD,
+                now=at(60),
+                params=params,
+            )
+    assert calls == []
+    assert store.get_password_hash(issued.session.user_id) == before
 
 
 def test_a_change_touches_no_other_account(
