@@ -27,6 +27,7 @@ from splitwise_lite.events import (
     ExpenseEvent,
     ExpenseId,
     GroupId,
+    LedgerEvent,
     MemberId,
     SettlementDecisionEvent,
     SettlementEvent,
@@ -583,4 +584,261 @@ def test_a_three_way_cycle_stays_three_pairwise_entries() -> None:
         (BO, ALI): 1000,
         (CASS, BO): 1000,
     }
+    assert_consistent(result)
+
+
+# --- The settlement fold ----------------------------------------------------
+
+
+def confirmed(
+    event_id: str,
+    *,
+    payer: MemberId,
+    receiver: MemberId,
+    amount: int,
+    minute: int = 1,
+) -> list[LedgerEvent]:
+    """A settlement and the receiver's confirmation of it, as two events."""
+    return [
+        settlement(
+            event_id, payer=payer, receiver=receiver, amount=amount, minute=minute
+        ),
+        decision(
+            f"d-{event_id}",
+            settlement_id=event_id,
+            state=SettlementState.CONFIRMED,
+            minute=minute,
+            decided_by=receiver,
+        ),
+    ]
+
+
+def test_a_confirmed_settlement_credits_the_payer_and_debits_the_receiver() -> None:
+    """Bo has handed over real money, so his position improves by what he paid."""
+    result = derive_balances(
+        confirmed("s1", payer=BO, receiver=ALI, amount=400),
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert cents_of(result) == {ALI: -400, BO: 400}
+    assert_consistent(result)
+
+
+def test_full_settlement_back_to_zero() -> None:
+    """The three-person dinner, settled by both debtors and confirmed by the payer."""
+    events: list[LedgerEvent] = [
+        expense("e1", payer=ALI, total=3000, shares=THIRDS),
+    ]
+    events += confirmed("s1", payer=BO, receiver=ALI, amount=1000, minute=1)
+    events += confirmed("s2", payer=CASS, receiver=ALI, amount=1000, minute=2)
+
+    result = derive_balances(events, group_id=GROUP, currency=AUD)
+    assert cents_of(result) == {ALI: 0, BO: 0, CASS: 0}
+    assert debts_of(result) == {}
+    assert_consistent(result)
+
+
+def test_a_partial_confirmed_settlement_reduces_the_debt() -> None:
+    events: list[LedgerEvent] = [expense("e1", payer=ALI, total=3000, shares=THIRDS)]
+    events += confirmed("s1", payer=BO, receiver=ALI, amount=600, minute=1)
+
+    result = derive_balances(events, group_id=GROUP, currency=AUD)
+    assert debts_of(result) == {(BO, ALI): 400, (CASS, ALI): 1000}
+    assert cents_of(result) == {ALI: 1400, BO: -400, CASS: -1000}
+    assert_consistent(result)
+
+
+def test_a_pending_settlement_moves_nothing() -> None:
+    without: list[LedgerEvent] = [
+        expense("e1", payer=ALI, total=1000, shares={BO: 1000})
+    ]
+    with_pending = without + [
+        settlement("s1", payer=CASS, receiver=ALI, amount=500, minute=1)
+    ]
+
+    result = derive_balances(with_pending, group_id=GROUP, currency=AUD)
+    assert result == derive_balances(without, group_id=GROUP, currency=AUD)
+    assert CASS not in result.net
+    assert settlement_states(with_pending) == {"s1": SettlementState.PENDING}
+
+
+def test_a_rejected_settlement_moves_nothing() -> None:
+    without: list[LedgerEvent] = [
+        expense("e1", payer=ALI, total=1000, shares={BO: 1000})
+    ]
+    with_rejected = without + [
+        settlement("s1", payer=CASS, receiver=ALI, amount=500, minute=1),
+        decision("d1", settlement_id="s1", state=SettlementState.REJECTED, minute=2),
+    ]
+
+    result = derive_balances(with_rejected, group_id=GROUP, currency=AUD)
+    assert result == derive_balances(without, group_id=GROUP, currency=AUD)
+    assert CASS not in result.net
+    assert settlement_states(with_rejected) == {"s1": SettlementState.REJECTED}
+
+
+def test_a_settlement_larger_than_the_debt_flips_the_pair() -> None:
+    """The fold records what the log says and never clamps a settlement to a debt."""
+    events: list[LedgerEvent] = [expense("e1", payer=ALI, total=3000, shares=THIRDS)]
+    events += confirmed("s1", payer=BO, receiver=ALI, amount=1500, minute=1)
+
+    result = derive_balances(events, group_id=GROUP, currency=AUD)
+    assert debts_of(result) == {(ALI, BO): 500, (CASS, ALI): 1000}
+    assert cents_of(result) == {ALI: 500, BO: 500, CASS: -1000}
+    assert_consistent(result)
+
+
+def test_a_settlement_with_no_expense_behind_it_creates_the_opposite_debt() -> None:
+    """Handing someone money for nothing is recordable, and leaves them owing it."""
+    result = derive_balances(
+        confirmed("s1", payer=BO, receiver=CASS, amount=750),
+        group_id=GROUP,
+        currency=AUD,
+    )
+    assert debts_of(result) == {(CASS, BO): 750}
+    assert cents_of(result) == {BO: 750, CASS: -750}
+    assert_consistent(result)
+
+
+# --- Settlement state -------------------------------------------------------
+
+
+def test_a_settlement_with_no_decision_is_pending() -> None:
+    events = [settlement("s1", payer=BO, receiver=ALI, amount=100)]
+    assert settlement_states(events) == {"s1": SettlementState.PENDING}
+
+
+def test_every_settlement_gets_one_entry_keyed_ascending() -> None:
+    events = [
+        settlement("s-c", payer=BO, receiver=ALI, amount=100, minute=1),
+        settlement("s-a", payer=BO, receiver=ALI, amount=100, minute=2),
+        settlement("s-b", payer=CASS, receiver=ALI, amount=100, minute=3),
+        decision("d1", settlement_id="s-b", state=SettlementState.CONFIRMED, minute=4),
+    ]
+    states = settlement_states(events)
+    assert list(states) == ["s-a", "s-b", "s-c"]
+    assert states == {
+        "s-a": SettlementState.PENDING,
+        "s-b": SettlementState.CONFIRMED,
+        "s-c": SettlementState.PENDING,
+    }
+
+
+def test_a_confirmation_at_ten_beats_a_rejection_at_eleven() -> None:
+    events = [
+        settlement("s1", payer=BO, receiver=ALI, amount=100),
+        decision("d1", settlement_id="s1", state=SettlementState.CONFIRMED, minute=10),
+        decision("d2", settlement_id="s1", state=SettlementState.REJECTED, minute=11),
+    ]
+    assert settlement_states(events) == {"s1": SettlementState.CONFIRMED}
+
+
+def test_a_rejection_at_ten_beats_a_confirmation_at_eleven() -> None:
+    """A later CONFIRMED after an earlier REJECTED is ignored, like any late answer."""
+    events = [
+        settlement("s1", payer=BO, receiver=ALI, amount=100),
+        decision("d1", settlement_id="s1", state=SettlementState.REJECTED, minute=10),
+        decision("d2", settlement_id="s1", state=SettlementState.CONFIRMED, minute=11),
+    ]
+    assert settlement_states(events) == {"s1": SettlementState.REJECTED}
+
+
+def test_two_decisions_on_one_timestamp_are_broken_by_the_smaller_id() -> None:
+    base = [settlement("s1", payer=BO, receiver=ALI, amount=100)]
+    smaller_confirms = base + [
+        decision("d-a", settlement_id="s1", state=SettlementState.CONFIRMED, minute=5),
+        decision("d-b", settlement_id="s1", state=SettlementState.REJECTED, minute=5),
+    ]
+    smaller_rejects = base + [
+        decision("d-a", settlement_id="s1", state=SettlementState.REJECTED, minute=5),
+        decision("d-b", settlement_id="s1", state=SettlementState.CONFIRMED, minute=5),
+    ]
+    assert settlement_states(smaller_confirms) == {"s1": SettlementState.CONFIRMED}
+    assert settlement_states(smaller_rejects) == {"s1": SettlementState.REJECTED}
+    assert settlement_states(list(reversed(smaller_confirms))) == {
+        "s1": SettlementState.CONFIRMED
+    }
+    assert settlement_states(list(reversed(smaller_rejects))) == {
+        "s1": SettlementState.REJECTED
+    }
+
+
+def test_a_decision_naming_no_settlement_in_the_input_is_ignored() -> None:
+    events = [
+        settlement("s1", payer=BO, receiver=ALI, amount=100),
+        decision("d1", settlement_id="s-elsewhere", state=SettlementState.CONFIRMED),
+    ]
+    assert settlement_states(events) == {"s1": SettlementState.PENDING}
+    assert derive_balances(events, group_id=GROUP, currency=AUD) == derive_balances(
+        [events[0]], group_id=GROUP, currency=AUD
+    )
+
+
+def test_an_orphan_decision_alone_is_ignored_rather_than_rejected() -> None:
+    orphan = [
+        decision("d1", settlement_id="s-elsewhere", state=SettlementState.CONFIRMED)
+    ]
+    assert settlement_states(orphan) == {}
+    assert derive_balances(orphan, group_id=GROUP, currency=AUD) == derive_balances(
+        [], group_id=GROUP, currency=AUD
+    )
+
+
+def test_decisions_are_not_group_checked() -> None:
+    """A decision carries no group, so it can only be bound through its settlement."""
+    events: list[LedgerEvent] = [
+        settlement("s1", payer=BO, receiver=ALI, amount=400),
+        decision("d1", settlement_id="s1", state=SettlementState.CONFIRMED, minute=1),
+    ]
+    result = derive_balances(events, group_id=GROUP, currency=AUD)
+    assert cents_of(result) == {ALI: -400, BO: 400}
+
+
+def test_expense_events_are_ignored_rather_than_rejected_by_the_state_map() -> None:
+    """The same whole-log list goes to both public functions."""
+    events: list[LedgerEvent] = [
+        expense("e1", payer=ALI, total=3000, shares=THIRDS),
+        settlement("s1", payer=BO, receiver=ALI, amount=1000, minute=1),
+    ]
+    assert settlement_states(events) == {"s1": SettlementState.PENDING}
+
+
+def test_the_decider_is_not_checked_against_the_receiver() -> None:
+    """Task 15 owns that rule; it needs both records loaded, and this does not."""
+    events = [
+        settlement("s1", payer=BO, receiver=ALI, amount=400),
+        decision(
+            "d1",
+            settlement_id="s1",
+            state=SettlementState.CONFIRMED,
+            minute=1,
+            decided_by=CASS,
+        ),
+    ]
+    assert settlement_states(events) == {"s1": SettlementState.CONFIRMED}
+    assert cents_of(derive_balances(events, group_id=GROUP, currency=AUD)) == {
+        ALI: -400,
+        BO: 400,
+    }
+
+
+def test_the_balances_and_the_rendered_state_can_never_disagree() -> None:
+    events: list[LedgerEvent] = [
+        expense("e1", payer=ALI, total=3000, shares=THIRDS),
+        settlement("s1", payer=BO, receiver=ALI, amount=1000, minute=1),
+        settlement("s2", payer=CASS, receiver=ALI, amount=1000, minute=2),
+        decision("d1", settlement_id="s1", state=SettlementState.CONFIRMED, minute=3),
+        decision("d2", settlement_id="s2", state=SettlementState.REJECTED, minute=4),
+        decision("d3", settlement_id="s2", state=SettlementState.CONFIRMED, minute=5),
+    ]
+    states = settlement_states(events)
+    result = derive_balances(events, group_id=GROUP, currency=AUD)
+
+    assert states == {
+        "s1": SettlementState.CONFIRMED,
+        "s2": SettlementState.REJECTED,
+    }
+    # Only s1 moved money: Bo is square and Cass still owes the whole third.
+    assert cents_of(result) == {ALI: 1000, BO: 0, CASS: -1000}
+    assert debts_of(result) == {(CASS, ALI): 1000}
     assert_consistent(result)
