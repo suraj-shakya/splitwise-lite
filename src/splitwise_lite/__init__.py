@@ -1,6 +1,6 @@
 """Splitwise Lite: a shared expense ledger for small groups.
 
-The domain vocabulary lives in five modules and is re-exported here:
+The domain vocabulary lives in six modules and is re-exported here:
 
 * ``money``: currency, integer-cent ``Money``, amount parsing and formatting, and the
   ``DomainError`` base every domain exception subclasses.
@@ -9,6 +9,8 @@ The domain vocabulary lives in five modules and is re-exported here:
   allocations an expense event stores.
 * ``balances``: the fold that derives pairwise debts and net positions from a ledger,
   and the settlement states that decide which settlements counted.
+* ``simplify``: the greedy pass that turns those net positions into suggested
+  transfers, each carrying the pairwise debts it absorbed.
 * ``store``: the durable, append-only SQLite store those events are written to and
   read back from, and the user, group and member records they reference.
 """
@@ -46,6 +48,13 @@ from .money import (
     Money,
     format_amount,
     parse_amount,
+)
+from .simplify import (
+    AbsorbedDebt,
+    InvalidBalances,
+    Transfer,
+    TransferPlan,
+    simplify_debts,
 )
 from .split import (
     InvalidSplit,
@@ -86,6 +95,7 @@ __all__ = [
     "MINOR_UNITS",
     "MIN_SQLITE_VERSION",
     "SCHEMA_VERSION",
+    "AbsorbedDebt",
     "Allocation",
     "AmountTooLarge",
     "Balances",
@@ -102,6 +112,7 @@ __all__ = [
     "GroupId",
     "InvalidAllocation",
     "InvalidAmount",
+    "InvalidBalances",
     "InvalidCurrency",
     "InvalidEvent",
     "InvalidLedger",
@@ -119,6 +130,8 @@ __all__ = [
     "StorageFailed",
     "StoreClosed",
     "StoreError",
+    "Transfer",
+    "TransferPlan",
     "UnsupportedSQLiteVersion",
     "UnsupportedSchemaVersion",
     "User",
@@ -131,6 +144,7 @@ __all__ = [
     "ordering_key",
     "parse_amount",
     "settlement_states",
+    "simplify_debts",
     "split_by_weight",
     "split_equally",
     "split_exact",
