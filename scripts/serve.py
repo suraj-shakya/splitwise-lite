@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> None:
     arguments = sys.argv[1:] if argv is None else argv
     port = int(arguments[0]) if arguments else DEFAULT_PORT
     server = make_server(port)
-    print(f"Serving {APP_DIR} on http://localhost:{server.server_address[1]}")
+    # Flushed, so the URL appears even when the output is piped to a log.
+    print(f"Serving {APP_DIR} on http://localhost:{server.server_address[1]}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
