@@ -1,6 +1,6 @@
 """Splitwise Lite: a shared expense ledger for small groups.
 
-The domain vocabulary lives in five modules and is re-exported here:
+The domain vocabulary lives in six modules and is re-exported here:
 
 * ``money``: currency, integer-cent ``Money``, amount parsing and formatting, and the
   ``DomainError`` base every domain exception subclasses.
@@ -10,9 +10,39 @@ The domain vocabulary lives in five modules and is re-exported here:
 * ``balances``: the fold that derives pairwise debts and net positions from a ledger,
   and the settlement states that decide which settlements counted.
 * ``store``: the durable, append-only SQLite store those events are written to and
-  read back from, and the user, group and member records they reference.
+  read back from, and the user, group, member and session records they reference.
+* ``accounts``: signing up, signing in, scrypt password hashing, and the sessions that
+  turn a token back into the person acting.
 """
 
+from .accounts import (
+    DEFAULT_SCRYPT_PARAMS,
+    HASH_ALGORITHM,
+    MAX_EMAIL_LENGTH,
+    MAX_PASSWORD_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    SALT_BYTES,
+    SESSION_LIFETIME,
+    TOKEN_BYTES,
+    AccountError,
+    AuthenticationFailed,
+    EmailAlreadyRegistered,
+    InvalidEmail,
+    InvalidPassword,
+    IssuedSession,
+    PasswordHashInvalid,
+    ScryptParams,
+    SessionInvalid,
+    authenticate,
+    change_password,
+    hash_password,
+    log_in,
+    log_out,
+    log_out_everywhere,
+    normalise_email,
+    sign_up,
+    verify_password,
+)
 from .balances import (
     Balances,
     InvalidLedger,
@@ -67,6 +97,7 @@ from .store import (
     InvalidRecord,
     Member,
     RecordNotFound,
+    Session,
     StorageFailed,
     StoreClosed,
     StoreError,
@@ -81,13 +112,23 @@ __version__ = "0.1.0"
 
 __all__ = [
     "BUSY_TIMEOUT_MS",
+    "DEFAULT_SCRYPT_PARAMS",
+    "HASH_ALGORITHM",
     "IN_MEMORY",
     "MAX_CENTS",
+    "MAX_EMAIL_LENGTH",
+    "MAX_PASSWORD_LENGTH",
     "MINOR_UNITS",
+    "MIN_PASSWORD_LENGTH",
     "MIN_SQLITE_VERSION",
+    "SALT_BYTES",
     "SCHEMA_VERSION",
+    "SESSION_LIFETIME",
+    "TOKEN_BYTES",
+    "AccountError",
     "Allocation",
     "AmountTooLarge",
+    "AuthenticationFailed",
     "Balances",
     "CannotOpenStore",
     "ConstraintViolated",
@@ -95,6 +136,7 @@ __all__ = [
     "CurrencyMismatch",
     "DomainError",
     "DuplicateRecord",
+    "EmailAlreadyRegistered",
     "EventStore",
     "ExpenseEvent",
     "ExpenseId",
@@ -103,15 +145,22 @@ __all__ = [
     "InvalidAllocation",
     "InvalidAmount",
     "InvalidCurrency",
+    "InvalidEmail",
     "InvalidEvent",
     "InvalidLedger",
+    "InvalidPassword",
     "InvalidRecord",
     "InvalidSplit",
+    "IssuedSession",
     "LedgerEvent",
     "Member",
     "MemberId",
     "Money",
+    "PasswordHashInvalid",
     "RecordNotFound",
+    "ScryptParams",
+    "Session",
+    "SessionInvalid",
     "SettlementDecisionEvent",
     "SettlementEvent",
     "SettlementId",
@@ -124,14 +173,23 @@ __all__ = [
     "User",
     "UserId",
     "__version__",
+    "authenticate",
+    "change_password",
     "derive_balances",
     "format_amount",
+    "hash_password",
+    "log_in",
+    "log_out",
+    "log_out_everywhere",
     "new_id",
+    "normalise_email",
     "open_store",
     "ordering_key",
     "parse_amount",
     "settlement_states",
+    "sign_up",
     "split_by_weight",
     "split_equally",
     "split_exact",
+    "verify_password",
 ]
