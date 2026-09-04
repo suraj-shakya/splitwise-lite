@@ -148,8 +148,24 @@ def test_icons_are_reproducible_from_the_generator() -> None:
     # `uv run python scripts/make_icons.py` must leave `git status` clean, so the
     # committed bytes are exactly what the generator produces today.
     make_icons = load_script("make_icons")
-    for name, size in sorted(ICON_SIZES.items()):
-        assert make_icons.render(name) == (ICONS / name).read_bytes()
+    for name in sorted(ICON_SIZES):
+        generated = make_icons.render(name)
+        committed = (ICONS / name).read_bytes()
+        if generated == committed:
+            continue
+        # Report what changed instead of dumping two compressed blobs: compare the
+        # header, then the pixels, and show only the first few that differ.
+        assert read_ihdr(generated) == read_ihdr(committed), name
+        width, fresh = decode_rgb(generated)
+        _, stored = decode_rgb(committed)
+        differences = [
+            (x, y, fresh[y][x], stored[y][x])
+            for y in range(len(fresh))
+            for x in range(width)
+            if fresh[y][x] != stored[y][x]
+        ]
+        assert (name, len(differences), differences[:3]) == (name, 0, [])
+        raise AssertionError(f"{name}: pixels match but the encoded bytes differ")
 
 
 def test_generator_declares_the_same_four_icons() -> None:
@@ -563,7 +579,7 @@ def test_claude_md_names_the_real_run_command() -> None:
     assert RUN_COMMAND in text
     assert "nothing to run yet" not in text
     assert "http://localhost:8000" in text
-    assert "no build step" in text
+    assert "no build step" in " ".join(text.split())
 
 
 def test_claude_md_no_longer_says_the_front_end_is_missing() -> None:
@@ -581,6 +597,30 @@ def test_the_readme_documents_how_to_run_the_app() -> None:
     assert "## Run the app" in text
     assert RUN_COMMAND in text
     assert "no product code yet" not in text
+
+
+def paragraph_naming(text: str, needle: str) -> str:
+    """The one paragraph naming `needle`, with its line wrapping flattened.
+
+    Prose wraps, so a phrase can straddle a newline; searching the raw text would
+    make these assertions depend on where a line happens to break.
+    """
+    blocks = [" ".join(block.split()) for block in text.split("\n\n")]
+    matches = [block for block in blocks if needle in block]
+    assert len(matches) == 1, f"expected exactly one paragraph naming {needle!r}"
+    return matches[0]
+
+
+def test_the_no_build_step_claim_carries_its_caveat_where_it_is_made() -> None:
+    # The worker precaches the shell, so an edit to one of those eight files does not
+    # show on reload, and the dev server's no-store header cannot help: the request
+    # never reaches it. The caveat has to sit in the paragraph that makes the claim,
+    # in both files, because a reader who stops at the claim is misled, and tasks 10
+    # to 12 all edit app/index.html.
+    for text in (claude_md(), readme()):
+        caveat = paragraph_naming(text, "no build step")
+        assert "VERSION" in caveat
+        assert "app/sw.js" in caveat
 
 
 def test_one_document_says_how_to_clear_a_stuck_service_worker() -> None:

@@ -9,10 +9,14 @@ web shell in `app/` whose three screens are still placeholders.
 - Run tests: `uv run python -m pytest`
 - Run the app: `uv run python scripts/serve.py`, then open `http://localhost:8000`
 
-There is no build step and no npm: the files in `app/` are what the browser runs, so
-an edit shows up on reload. Reach the app on `localhost` or `127.0.0.1` only. A LAN
-address is not a secure context, so the service worker will not register there and
-the app will not offer to install.
+There is no build step and no npm: the files in `app/` are what the browser runs. An
+edit to one of the eight shell files will not show on reload, though, because
+`app/sw.js` precaches them and serves them from its cache: bump `VERSION` in
+`app/sw.js` and reload, or unregister the worker (DevTools, Application, Service
+Workers, Unregister).
+
+Reach the app on `localhost` or `127.0.0.1` only. A LAN address is not a secure context,
+so the service worker will not register there and the app will not offer to install.
 
 `uv run pytest` fails on this machine with an access-denied spawn error, so use
 `uv run python -m pytest`.

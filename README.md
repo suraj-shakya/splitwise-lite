@@ -19,17 +19,17 @@ Requires [uv](https://docs.astral.sh/uv/). Dependencies install into a project-l
     uv run python scripts/serve.py
 
 Then open `http://localhost:8000`. The optional first argument is a port. There is no
-build step and no npm: `scripts/serve.py` serves the plain files in `app/`, so an edit
-shows on reload.
+build step and no npm: `scripts/serve.py` serves the plain files in `app/`. An edit to
+one of the eight shell files will not show on reload, though, because `app/sw.js`
+precaches them and serves them from its cache: bump `VERSION` in `app/sw.js` and reload
+to pick the change up.
+
+To clear a worker that is stuck entirely, open DevTools, Application, Service Workers,
+and press Unregister, then reload.
 
 Use `localhost` or `127.0.0.1`, not a LAN address. Only those two are secure contexts,
 and without one the service worker will not register and the app will not offer to
 install.
-
-The app registers a service worker that caches the shell, so a stale copy can outlive
-an edit. If a change refuses to appear, bump `VERSION` in `app/sw.js` and reload. To
-clear a worker that is stuck entirely, open DevTools, Application, Service Workers,
-and press Unregister, then reload.
 
 ## Test
 
