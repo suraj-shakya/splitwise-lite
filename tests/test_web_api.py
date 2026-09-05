@@ -2038,3 +2038,691 @@ def test_two_groups_are_refused_with_both_ids_named(seeded: Path) -> None:
     assert body["error"]["code"] == "ambiguous_group"
     for group_id in ids:
         assert group_id in body["error"]["message"]
+
+
+# --- Members ----------------------------------------------------------------
+
+
+def roster(client) -> list[dict]:
+    """The roster as the API reports it, which is the only source of member ids."""
+    body = client.get("/api/members").get_json()
+    return body["members"]
+
+
+def by_name(client) -> dict[str, str]:
+    return {member["display_name"]: member["id"] for member in roster(client)}
+
+
+def test_the_roster_is_the_group_in_store_order_with_two_keys_each(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    response = signed.get("/api/members")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert set(body) == {"members"}
+    assert [member["display_name"] for member in body["members"]] == list(ROSTER)
+    for member in body["members"]:
+        assert set(member) == {"id", "display_name"}
+
+    with open_store(seeded) as store:
+        from splitwise_lite.groups import resolve_sole_group
+
+        group = resolve_sole_group(store)
+        stored = [member.id for member in store.list_members(group.id)]
+    assert [member["id"] for member in body["members"]] == stored
+
+
+def test_the_roster_carries_no_account_information(app, seeded: Path) -> None:
+    # Task 9 decided an unlinked member is a full member that nothing filters, greys
+    # out or marks pending, and a screenshot of the roster is not an account list.
+    signed = linked_client(app, seeded)
+    text = signed.get("/api/members").get_data(as_text=True)
+    for forbidden in ("user_id", "email", "linked", "example.com"):
+        assert forbidden not in text
+
+
+# --- Expenses ---------------------------------------------------------------
+
+
+def add_expense(
+    client,
+    *,
+    payer_id: str,
+    amount: str,
+    split: dict,
+    description: str = "Milk",
+):
+    return post(
+        client,
+        "/api/expenses",
+        {
+            "description": description,
+            "amount": amount,
+            "payer_id": payer_id,
+            "split": split,
+        },
+    )
+
+
+def equal_split(*member_ids: str) -> dict:
+    return {"mode": "equal", "member_ids": list(member_ids)}
+
+
+def expense_count(path: Path) -> int:
+    from splitwise_lite.groups import resolve_sole_group
+
+    with open_store(path) as store:
+        return len(store.list_expenses(resolve_sole_group(store).id))
+
+
+def test_a_group_with_no_expenses_is_an_empty_list_and_not_a_404(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    response = signed.get("/api/expenses")
+    assert response.status_code == 200
+    assert response.get_json() == {"currency": CURRENCY, "expenses": []}
+
+
+def test_the_feed_is_newest_first_with_ties_broken_by_id_descending(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    everyone = equal_split(*sorted(members.values()))
+
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    first = add_expense(
+        signed, payer_id=members["Sam"], amount="30.00", split=everyone
+    ).get_json()["expense"]["id"]
+    second = add_expense(
+        signed, payer_id=members["Ali"], amount="15.00", split=everyone
+    ).get_json()["expense"]["id"]
+    monkeypatch.setattr(web, "_now", lambda: at(10))
+    third = add_expense(
+        signed, payer_id=members["Jo"], amount="9.00", split=everyone
+    ).get_json()["expense"]["id"]
+
+    listed = [entry["id"] for entry in signed.get("/api/expenses").get_json()["expenses"]]
+    assert listed == [third] + sorted([first, second], reverse=True)
+
+
+def test_a_feed_entry_carries_its_allocations_and_no_display_names(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="30.00",
+        split=equal_split(*sorted(members.values())),
+    )
+    entry = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert set(entry) == {
+        "id",
+        "description",
+        "amount",
+        "payer_id",
+        "created_by",
+        "created_at",
+        "allocations",
+        }
+    assert entry["amount"] == "30.00"
+    assert entry["payer_id"] == members["Sam"]
+    assert entry["created_by"] == members["Sam"]
+    assert entry["created_at"] == "2026-09-05T09:00:00.000000+00:00"
+    assert len(entry["created_at"]) == 32
+    assert entry["allocations"] == [
+        {"member_id": member_id, "amount": "10.00"}
+        for member_id in sorted(members.values())
+    ]
+    for allocation in entry["allocations"]:
+        assert set(allocation) == {"member_id", "amount"}
+    assert "display_name" not in signed.get("/api/expenses").get_data(as_text=True)
+
+
+def test_an_equal_split_stores_the_event_field_by_field(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splitwise_lite.events import Allocation
+    from splitwise_lite.groups import resolve_sole_group
+    from splitwise_lite.money import Currency as CurrencyType
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    response = add_expense(
+        signed,
+        payer_id=members["Ali"],
+        amount="10.00",
+        split=equal_split(members["Sam"], members["Ali"], members["Jo"]),
+        description="  Milk  ",
+    )
+    assert response.status_code == 201
+    created = response.get_json()["expense"]
+
+    with open_store(seeded) as store:
+        group = resolve_sole_group(store)
+        stored = store.list_expenses(group.id)
+    assert len(stored) == 1
+    expense = stored[0]
+    assert expense.id == created["id"]
+    assert expense.group_id == group.id
+    assert expense.currency == CurrencyType(CURRENCY)
+    assert expense.payer_id == members["Ali"]
+    assert expense.total_cents == 1000
+    assert expense.description == "Milk"
+    assert expense.created_at == at(9)
+    # The acting member, never a name in the body.
+    assert expense.created_by == members["Sam"]
+    # 1000 cents across three people is 333, 333, 334. Which member absorbs the
+    # extra cent is the resolver's rotation, not this layer's: at a base share of
+    # 333 the walk starts at index (1000 // 3) % 3 == 0, so it is the member who
+    # sorts first by id. Asserted exactly, never approximately.
+    ordered = sorted(members.values())
+    assert expense.allocations == (
+        Allocation(ordered[0], 334),
+        Allocation(ordered[1], 333),
+        Allocation(ordered[2], 333),
+    )
+    assert sum(allocation.cents for allocation in expense.allocations) == 1000
+
+
+def test_a_weighted_split_stores_the_event_field_by_field(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splitwise_lite.groups import resolve_sole_group
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={
+            "mode": "weight",
+            "weights": {members["Sam"]: 1, members["Ali"]: 4},
+        },
+    )
+    assert response.status_code == 201
+
+    with open_store(seeded) as store:
+        expense = store.list_expenses(resolve_sole_group(store).id)[0]
+    assert expense.total_cents == 1000
+    assert expense.created_at == at(9)
+    shares = {
+        allocation.member_id: allocation.cents for allocation in expense.allocations
+    }
+    assert shares == {members["Sam"]: 200, members["Ali"]: 800}
+
+
+def test_an_exact_split_parses_its_amounts_from_strings(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splitwise_lite.groups import resolve_sole_group
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    response = add_expense(
+        signed,
+        payer_id=members["Jo"],
+        amount="10.00",
+        split={
+            "mode": "exact",
+            "amounts": {members["Sam"]: "8.00", members["Jo"]: "2.00"},
+        },
+    )
+    assert response.status_code == 201
+
+    with open_store(seeded) as store:
+        expense = store.list_expenses(resolve_sole_group(store).id)[0]
+    shares = {
+        allocation.member_id: allocation.cents for allocation in expense.allocations
+    }
+    assert shares == {members["Sam"]: 800, members["Jo"]: 200}
+    assert expense.total_cents == 1000
+
+
+def test_the_created_expense_comes_back_in_the_same_shape_as_a_feed_entry(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    created = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="30.00",
+        split=equal_split(*sorted(members.values())),
+    ).get_json()["expense"]
+    listed = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert created == listed
+
+
+@pytest.mark.parametrize("amount", [12.50, 1250, 0, True])
+def test_an_amount_that_is_a_json_number_is_refused(
+    app, seeded: Path, amount
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount=amount,
+        split=equal_split(members["Sam"]),
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert "amounts are strings" in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+@pytest.mark.parametrize(
+    "amount, code, fragment",
+    [
+        ("0.00", "invalid_split", "strictly positive"),
+        ("-5.00", "invalid_amount", "not a valid amount"),
+        ("12.505", "invalid_amount", "fractional digits"),
+        ("92233720368547758.08", "invalid_amount", "too large to store"),
+    ],
+)
+def test_an_unusable_amount_carries_the_domain_layers_own_message(
+    app, seeded: Path, amount: str, code: str, fragment: str
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount=amount,
+        split=equal_split(members["Sam"]),
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == code
+    assert fragment in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+def test_a_payer_who_is_not_a_member_is_refused_by_name(app, seeded: Path) -> None:
+    # Decided from the roster before any write, so no foreign key violation is
+    # ever reached.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id="a-stranger",
+        amount="10.00",
+        split=equal_split(members["Sam"]),
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert "'a-stranger'" in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+@pytest.mark.parametrize("mode", ["equal", "weight", "exact"])
+def test_a_split_naming_someone_outside_the_group_is_refused_by_name(
+    app, seeded: Path, mode: str
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    splits = {
+        "equal": {"mode": "equal", "member_ids": [members["Sam"], "a-stranger"]},
+        "weight": {"mode": "weight", "weights": {members["Sam"]: 1, "a-stranger": 1}},
+        "exact": {
+            "mode": "exact",
+            "amounts": {members["Sam"]: "5.00", "a-stranger": "5.00"},
+        },
+    }
+    response = add_expense(
+        signed, payer_id=members["Sam"], amount="10.00", split=splits[mode]
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert "'a-stranger'" in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+def test_a_split_naming_a_member_twice_is_refused_by_the_resolver(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split=equal_split(members["Sam"], members["Sam"]),
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "invalid_split"
+    assert "more than once" in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+@pytest.mark.parametrize(
+    "split, fragment",
+    [
+        ({"mode": "equal", "member_ids": []}, "at least one member"),
+        ({"mode": "weight", "weights": {}}, "at least one member"),
+        ({"mode": "exact", "amounts": {}}, "at least one member"),
+    ],
+)
+def test_an_empty_split_is_refused_by_the_resolver(
+    app, seeded: Path, split: dict, fragment: str
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed, payer_id=members["Sam"], amount="10.00", split=split
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "invalid_split"
+    assert fragment in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+def test_weights_summing_to_zero_are_refused_by_the_resolver(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight", "weights": {members["Sam"]: 0, members["Ali"]: 0}},
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "invalid_split"
+    assert "sum to zero" in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+def test_exact_amounts_that_do_not_add_up_report_both_figures(
+    app, seeded: Path
+) -> None:
+    # The resolver's own message carries what was allocated and what the total was,
+    # which is what lets an entry screen say by how much the user is out.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={
+            "mode": "exact",
+            "amounts": {members["Sam"]: "8.00", members["Ali"]: "1.50"},
+        },
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "invalid_split"
+    assert body["error"]["message"] == "exact amounts sum to 950, not the total 1000"
+    assert expense_count(seeded) == 0
+
+
+@pytest.mark.parametrize("mode", ["percentage", "", "EQUAL", 7])
+def test_an_unknown_split_mode_names_the_three_that_exist(
+    app, seeded: Path, mode
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": mode},
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    if isinstance(mode, str):
+        for named in ("'equal'", "'weight'", "'exact'"):
+            assert named in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+@pytest.mark.parametrize(
+    "split",
+    [
+        {"mode": "equal"},
+        {"mode": "equal", "member_ids": "not-a-list"},
+        {"mode": "weight", "weights": "not-an-object"},
+        {"mode": "weight", "weights": {"whoever": "two"}},
+        {"mode": "exact", "amounts": {"whoever": 8.0}},
+        {"mode": "equal", "member_ids": [], "extra": 1},
+        {},
+    ],
+)
+def test_a_split_of_the_wrong_shape_is_refused(app, seeded: Path, split) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed, payer_id=members["Sam"], amount="10.00", split=split
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "malformed_request"
+    assert expense_count(seeded) == 0
+
+
+def test_the_currency_is_the_groups_and_cannot_be_named(app, seeded: Path) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    assert (
+        add_expense(
+            signed,
+            payer_id=members["Sam"],
+            amount="10.00",
+            split=equal_split(members["Sam"]),
+        ).status_code
+        == 201
+    )
+    assert signed.get("/api/expenses").get_json()["currency"] == CURRENCY
+
+
+# --- Balances ---------------------------------------------------------------
+
+
+def seed_three_expenses(client, members: dict[str, str], monkeypatch) -> None:
+    """Sam pays 30 for all three, Ali pays 15 for all three, Jo pays 9 for two.
+
+    Every division is exact, so the figures below are arithmetic rather than a
+    remainder rule: Sam ends up owed 10.50, Jo owes 10.50 and Ali is square.
+    """
+    everyone = equal_split(*sorted(members.values()))
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            client, payer_id=members["Sam"], amount="30.00", split=everyone
+        ).status_code
+        == 201
+    )
+    monkeypatch.setattr(web, "_now", lambda: at(10))
+    assert (
+        add_expense(
+            client, payer_id=members["Ali"], amount="15.00", split=everyone
+        ).status_code
+        == 201
+    )
+    monkeypatch.setattr(web, "_now", lambda: at(11))
+    assert (
+        add_expense(
+            client,
+            payer_id=members["Jo"],
+            amount="9.00",
+            split=equal_split(members["Sam"], members["Jo"]),
+        ).status_code
+        == 201
+    )
+
+
+def test_a_settled_group_is_every_member_at_zero_and_no_transfers(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    members = roster(signed)
+    response = signed.get("/api/balances")
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "currency": CURRENCY,
+        "net": [
+            {"member_id": member["id"], "amount": "0.00", "direction": "settled"}
+            for member in members
+        ],
+        "transfers": [],
+    }
+
+
+def test_balances_report_the_exact_figures_and_the_exact_transfer_list(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+
+    body = signed.get("/api/balances").get_json()
+    assert body["currency"] == CURRENCY
+    # Roster order, which is the order GET /api/members reports.
+    assert body["net"] == [
+        {"member_id": members["Sam"], "amount": "10.50", "direction": "owed"},
+        {"member_id": members["Ali"], "amount": "0.00", "direction": "settled"},
+        {"member_id": members["Jo"], "amount": "10.50", "direction": "owes"},
+    ]
+    assert body["transfers"] == [
+        {
+            "from_member_id": members["Jo"],
+            "to_member_id": members["Sam"],
+            "amount": "10.50",
+        }
+    ]
+
+
+def test_a_member_the_ledger_has_never_seen_is_settled_at_zero(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``Balances.net_for`` is total by design, so a member in no expense at all is
+    # square with the group rather than missing from the payload.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            signed,
+            payer_id=members["Sam"],
+            amount="10.00",
+            split=equal_split(members["Sam"], members["Ali"]),
+        ).status_code
+        == 201
+    )
+    body = signed.get("/api/balances").get_json()
+    entries = {entry["member_id"]: entry for entry in body["net"]}
+    assert entries[members["Jo"]] == {
+        "member_id": members["Jo"],
+        "amount": "0.00",
+        "direction": "settled",
+    }
+    assert len(body["net"]) == len(ROSTER)
+
+
+def test_a_transfer_carries_no_provenance(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Task 13 owns the drill-down and widens this object; it is not here yet.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    body = signed.get("/api/balances").get_json()
+    for transfer in body["transfers"]:
+        assert set(transfer) == {"from_member_id", "to_member_id", "amount"}
+    text = signed.get("/api/balances").get_data(as_text=True)
+    for forbidden in ("payer_debts", "receiver_credits", "pair", "absorbed"):
+        assert forbidden not in text
+
+
+def test_every_direction_is_one_of_the_three_and_the_amount_is_never_negative(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``direction`` carries the sign, so ``amount`` is always the non-negative
+    # magnitude and no client ever has to parse or render a minus sign.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    body = signed.get("/api/balances").get_json()
+    assert {entry["direction"] for entry in body["net"]} == {
+        "owed",
+        "owes",
+        "settled",
+    }
+    for entry in body["net"]:
+        assert not entry["amount"].startswith("-")
+
+
+# --- Money on the wire ------------------------------------------------------
+
+
+def every_amount_key(payload) -> list:
+    """Every value under a key an amount lives at, anywhere in a payload."""
+    found = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == "amount":
+                found.append(value)
+            found.extend(every_amount_key(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            found.extend(every_amount_key(item))
+    return found
+
+
+def test_no_amount_is_ever_a_json_number_and_no_payload_names_cents(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    for path in ("/api/session", "/api/members", "/api/expenses", "/api/balances"):
+        response = signed.get(path)
+        assert response.status_code == 200
+        payload = response.get_json()
+        for amount in every_amount_key(payload):
+            assert isinstance(amount, str), (path, amount)
+            # Exactly what format_amount produces: two decimal places, never a float.
+            assert amount.count(".") == 1
+            assert len(amount.partition(".")[2]) == 2
+        assert "cents" not in response.get_data(as_text=True), path
+
+
+def test_an_amount_is_rendered_the_way_format_amount_renders_it(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splitwise_lite.money import Currency as CurrencyType
+    from splitwise_lite.money import Money, format_amount
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            signed,
+            payer_id=members["Sam"],
+            amount="1,234.50",
+            split=equal_split(members["Sam"]),
+        ).status_code
+        == 201
+    )
+    entry = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert entry["amount"] == format_amount(Money(123450, CurrencyType(CURRENCY)))
+    assert entry["amount"] == "1,234.50"

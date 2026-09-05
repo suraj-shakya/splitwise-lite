@@ -904,7 +904,9 @@ def _expense_view(expense: events.ExpenseEvent) -> dict[str, Any]:
         "amount": _amount(expense.total_cents, expense.currency),
         "payer_id": expense.payer_id,
         "created_by": expense.created_by,
-        "created_at": expense.created_at.isoformat(),
+        # The fixed-width 32 character form tasks 6, 7 and 9 store, always with six
+        # fractional digits, so the wire and the row spell one instant one way.
+        "created_at": expense.created_at.isoformat(timespec="microseconds"),
         "allocations": [
             {
                 "member_id": allocation.member_id,
