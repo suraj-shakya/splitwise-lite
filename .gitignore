@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 dist/
 *.egg-info/
+
+# A real roster is the names of real people; group.example.toml is the committed shape.
+group.toml
+# The ledger itself, and the WAL and shared-memory sidecars SQLite writes beside it.
+*.sqlite3*
