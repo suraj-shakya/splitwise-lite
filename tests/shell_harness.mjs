@@ -739,6 +739,31 @@ const notLinked = () =>
   failure(403, CODES.memberNotLinked, 'Nobody has linked you to a member yet.');
 const serverError = () => failure(500, CODES.internalError, 'Something went wrong.');
 
+function noticeIsUp(page, which, what) {
+  page.is(page.el('notice').hidden, false, what + ': #notice visible');
+  page.is(
+    page.el('notice-unlinked').hidden,
+    which !== 'unlinked',
+    what + ': #notice-unlinked hidden'
+  );
+  page.is(
+    page.el('notice-offline').hidden,
+    which !== 'offline',
+    what + ': #notice-offline hidden'
+  );
+  page.is(page.el('gate').hidden, true, what + ': #gate hidden');
+  page.is(page.query('.content')[0].hidden, true, what + ': the app frame hidden');
+  page.is(page.focused, page.el('notice-title'), what + ': focus');
+}
+
+function appIsUp(page, what) {
+  page.is(page.query('.content')[0].hidden, false, what + ': the app frame visible');
+  page.is(page.query('.tabbar')[0].hidden, false, what + ': the tab bar visible');
+  page.is(page.el('gate').hidden, true, what + ': #gate hidden');
+  page.is(page.el('notice').hidden, true, what + ': #notice hidden');
+  page.is(page.el('sign-out').hidden, false, what + ': #sign-out visible');
+}
+
 function gateIsUp(page, what) {
   page.is(page.el('gate').hidden, false, what + ': #gate visible');
   page.is(page.query('.content')[0].hidden, true, what + ': the app frame hidden');
@@ -758,6 +783,88 @@ const SCENARIOS = [
       page.is(page.el('gate-error').textContent, '', '#gate-error text');
       page.is(page.focused, page.el('gate-title'), 'focus');
       page.same(page.requests, ['GET /api/session'], 'requests');
+    }
+  },
+
+  {
+    name: 'boot_with_a_linked_session_shows_the_app',
+    async run(page) {
+      page.respond('GET', '/session', ok(A_MEMBER));
+      await page.boot();
+      appIsUp(page, 'a linked session');
+      /* No focus move on first load: the person has not navigated anywhere yet. */
+      page.is(page.focused, null, 'focus');
+      page.same(page.requests, ['GET /api/session'], 'requests');
+    }
+  },
+
+  {
+    /* Runs straight after the scenario above, which caches a session view inside
+       api.js. A 403 leaves cached alone, so a view showing up here would be the
+       previous scenario's, and the fresh context and fresh document would be a
+       fiction. */
+    name: 'nothing_from_the_previous_scenario_survives_into_this_one',
+    async run(page) {
+      page.respond('GET', '/session', notLinked());
+      await page.boot();
+      page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+      page.same(page.requests, ['GET /api/session'], 'requests');
+    }
+  },
+
+  {
+    name: 'boot_with_an_unlinked_session_shows_the_not_linked_message',
+    async run(page) {
+      page.respond('GET', '/session', ok(NO_MEMBER));
+      await page.boot();
+      noticeIsUp(page, 'unlinked', 'an unlinked session');
+      page.is(page.el('sign-out').hidden, false, '#sign-out visible');
+    }
+  },
+
+  {
+    /* The other route to the same screen: through announce(), not through refresh(). */
+    name: 'a_403_member_not_linked_shows_the_not_linked_message',
+    async run(page) {
+      page.respond('GET', '/session', notLinked());
+      await page.boot();
+      noticeIsUp(page, 'unlinked', 'a 403 member_not_linked');
+      page.is(page.el('sign-out').hidden, false, '#sign-out visible');
+    }
+  },
+
+  {
+    name: 'a_network_failure_shows_the_offline_message_and_never_the_gate',
+    async run(page) {
+      page.respond('GET', '/session', networkFailure());
+      await page.boot();
+      noticeIsUp(page, 'offline', 'a network failure');
+      /* Explicitly, because the offline notice being up is not enough on its own:
+         prompting for a password on a page that cannot send it is how a person types
+         their password into nothing, repeatedly. */
+      page.is(page.el('gate').hidden, true, '#gate hidden');
+    }
+  },
+
+  {
+    name: 'a_server_error_is_the_same_screen_as_being_offline',
+    async run(page) {
+      page.respond('GET', '/session', serverError());
+      await page.boot();
+      noticeIsUp(page, 'offline', 'a 500');
+      page.is(page.el('gate').hidden, true, '#gate hidden');
+    }
+  },
+
+  {
+    name: 'the_api_client_failing_to_load_shows_the_offline_message',
+    async run(page) {
+      page.absent('api.js');
+      await page.boot();
+      noticeIsUp(page, 'offline', 'the client failing to load');
+      /* Nothing is ever wired, so nothing is ever asked of the back end. */
+      page.same(page.requests, [], 'requests');
+      page.is(page.global('typeof window.SplitwiseApi'), 'undefined', 'SplitwiseApi');
     }
   },
 

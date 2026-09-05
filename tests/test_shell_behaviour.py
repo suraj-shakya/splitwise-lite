@@ -37,8 +37,18 @@ NODE_MISSING = (
 # exactly this list back, so a scenario deleted from the harness fails pytest and one
 # added to the harness without being declared here fails pytest too.
 SCENARIOS = [
+    # Boot
     "boot_with_no_session_shows_the_gate",
+    "boot_with_a_linked_session_shows_the_app",
+    "nothing_from_the_previous_scenario_survives_into_this_one",
+    "boot_with_an_unlinked_session_shows_the_not_linked_message",
+    "a_403_member_not_linked_shows_the_not_linked_message",
+    "a_network_failure_shows_the_offline_message_and_never_the_gate",
+    "a_server_error_is_the_same_screen_as_being_offline",
+    "the_api_client_failing_to_load_shows_the_offline_message",
+    # Signing in
     "a_refused_sign_in_tells_the_person_why",
+    # Routing
     "an_unknown_hash_is_replaced_not_pushed",
 ]
 
