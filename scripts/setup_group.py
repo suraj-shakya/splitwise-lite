@@ -1,8 +1,8 @@
 """The operator command behind task 9: seed a group, link an account, read the roster.
 
     uv run python scripts/setup_group.py apply --store PATH --definition PATH
-    uv run python scripts/setup_group.py link  --store PATH --email ADDRESS --member-name NAME
-    uv run python scripts/setup_group.py show  --store PATH
+    uv run python scripts/setup_group.py link --store PATH --email ADDR --member-id ID
+    uv run python scripts/setup_group.py show --store PATH
 
 Standard library plus ``splitwise_lite``. Every decision this makes lives in
 ``splitwise_lite.groups``; this file parses arguments, opens a store, calls one
@@ -14,11 +14,11 @@ is imported, and there is no HTTP layer in this repository for it to be part of.
 Possession of the database file is the whole authority: there is no privileged user in
 a flat, and this is what a command on a server means.
 
-**No path is guessed.** ``--store`` is required, has no default, is read from no
-variable in the process env and is handed to ``open_store`` exactly as typed. No
-directory is created. The store is opened and closed around each invocation through
-its context manager, so a failed run leaves no handle on the file, which on Windows
-would block the next run from renaming or deleting it.
+**No path is guessed.** ``--store`` is required, has no default, reads no environment
+variable and is handed to ``open_store`` exactly as typed. No directory is created. The
+store is opened and closed around each invocation through its context manager, so a
+failed run leaves no handle on the file, which on Windows would block the next run from
+renaming or deleting it.
 
 **Re-running ``apply`` is safe.** It writes nothing when nothing changed, adds a name
 the file gained, and refuses a name the file lost rather than deleting a member.
@@ -67,8 +67,9 @@ def _fold(name: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """The whole command line. Built here so a test can read it without running it.
 
-    No argument has a default path and none is read from the process env: an operator
-    who has to type the store path cannot seed the wrong database by inheriting one.
+    No argument has a default path and none is read from an environment variable: an
+    operator who has to type the store path cannot seed the wrong database by
+    inheriting one.
     """
     parser = argparse.ArgumentParser(
         prog=PROGRAM,
@@ -98,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="link a signed-up account to the member row that acts for it",
         description=(
             "A deliberate operator action. Nothing links automatically, because a "
-            "signup address is unverified."
+            "signup email address is unverified."
         ),
     )
     _add_store(link_command)
@@ -118,8 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
         "show",
         help="print the group and its roster",
         description=(
-            "Read only. Prints no address and no user id, so a screenshot of the "
-            "roster is not an address list."
+            "Read only. Prints no email address and no user id, so a screenshot of "
+            "the roster is not an address list."
         ),
     )
     _add_store(show_command)
@@ -226,8 +227,8 @@ def _run_link(store: EventStore, arguments: argparse.Namespace) -> None:
 def _run_show(store: EventStore, arguments: argparse.Namespace) -> None:
     """Print the group and its roster. Reads only, and writes nothing.
 
-    No address and no user id appear here, only whether an account is linked at all,
-    so this output can be pasted into a chat without becoming an address list.
+    No email address and no user id appear here, only whether an account is linked at
+    all, so this output can be pasted into a chat without becoming an address list.
     """
     group = _group_for(store, arguments.group_id)
     members = store.list_members(group.id)

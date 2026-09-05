@@ -107,6 +107,32 @@ def groups_source() -> str:
     return Path(groups_module.__file__).read_text(encoding="utf-8")
 
 
+AMBIENT_READS = frozenset(
+    {
+        "environ",
+        "getenv",
+        "getcwd",
+        "cwd",
+        "glob",
+        "rglob",
+        "iterdir",
+        "scandir",
+        "listdir",
+        "walk",
+        "home",
+        "expanduser",
+    }
+)
+"""Every way a module could reach for a path or a value nobody passed it."""
+
+
+def names_used(tree: ast.AST) -> set[str]:
+    """Every identifier the source mentions: bare names and attribute names alike."""
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+
 @pytest.fixture(params=["memory", "file"])
 def store(request: pytest.FixtureRequest, tmp_path: Path):
     """An open store, once in memory and once backed by a file under ``tmp_path``."""
@@ -274,17 +300,56 @@ def test_the_dependency_direction_stays_one_way() -> None:
                     assert "groups" not in alias.name
 
 
-def test_the_module_never_imports_accounts() -> None:
-    assert "accounts" not in groups_source()
+def test_nothing_ambient_is_ever_read() -> None:
+    """No default path, no environment variable and no search of a directory.
+
+    Read as names in the syntax tree rather than as substrings, so a docstring is free
+    to say "no environment variable is read" without failing the test that says so.
+    The criterion is about what the code reaches for, not about which English words
+    appear near it.
+    """
+    tree = ast.parse(groups_source())
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            assert node.module is not None
+            imported.add(node.module.split(".")[0])
+    assert "os" not in imported
+    assert imported <= {
+        "__future__",
+        "dataclasses",
+        "datetime",
+        "pathlib",
+        "tomllib",
+        "typing",
+        "unicodedata",
+    }, imported
+    assert not AMBIENT_READS & names_used(tree)
 
 
-def test_nothing_is_read_at_import_time() -> None:
-    """No default path, no environment variable and no search of the directory."""
-    source = groups_source()
-    assert "environ" not in source
-    assert "getenv" not in source
-    assert "cwd(" not in source
-    assert "glob" not in source
+def test_nothing_runs_at_import_time() -> None:
+    """Importing the module defines names and does nothing else.
+
+    No file is opened, no directory is listed and no clock is read while it loads, so
+    importing ``splitwise_lite`` never depends on a roster existing.
+    """
+    for node in ast.parse(groups_source()).body:
+        assert isinstance(
+            node,
+            (
+                ast.Expr,
+                ast.Import,
+                ast.ImportFrom,
+                ast.Assign,
+                ast.AnnAssign,
+                ast.ClassDef,
+                ast.FunctionDef,
+            ),
+        ), ast.dump(node)[:80]
+        if isinstance(node, ast.Expr):
+            assert isinstance(node.value, ast.Constant), "only docstrings execute"
 
 
 def test_every_storage_function_takes_the_store_first() -> None:
@@ -1241,14 +1306,17 @@ def test_signing_up_links_nothing_even_when_every_name_matches(
         acting_member(store, group_id=result.group.id, user_id=user.id)
 
 
-@pytest.mark.parametrize(
-    "forbidden", ["email", "Email", "startswith", "difflib", "SequenceMatcher"]
-)
-def test_the_module_compares_no_user_to_a_member_by_similarity(
-    forbidden: str,
-) -> None:
-    """Not by address, not by display name, not by anything else."""
-    assert forbidden not in groups_source()
+def test_the_module_compares_no_user_to_a_member_by_similarity() -> None:
+    """Not by address, not by display name, not by anything else.
+
+    Names in the syntax tree again, so the module may explain in prose why it does not
+    match on an email address while still proving it never touches one.
+    """
+    tree = ast.parse(groups_source())
+    used = names_used(tree)
+    assert "email" not in used
+    assert not used & {"difflib", "SequenceMatcher", "get_close_matches", "startswith"}
+    assert "email" not in list(GroupDefinition.__dataclass_fields__)
 
 
 def test_a_definition_cannot_carry_an_address() -> None:

@@ -63,6 +63,32 @@ def script_source() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+AMBIENT_READS = frozenset(
+    {
+        "environ",
+        "getenv",
+        "getcwd",
+        "cwd",
+        "glob",
+        "rglob",
+        "iterdir",
+        "scandir",
+        "listdir",
+        "walk",
+        "home",
+        "expanduser",
+    }
+)
+"""Every way the command could reach for a path or a value the operator did not type."""
+
+
+def names_used(tree: ast.AST) -> set[str]:
+    """Every identifier the source mentions: bare names and attribute names alike."""
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+
 @pytest.fixture(scope="module")
 def script() -> ModuleType:
     return load_script()
@@ -220,11 +246,11 @@ def test_no_subcommand_has_a_default_store_and_none_reads_the_env(
         )
         assert store.required is True, name
         assert store.default is None, name
-    source = script_source()
-    assert "environ" not in source
-    assert "getenv" not in source
-    assert "mkdir" not in source
-    assert "makedirs" not in source
+    # Names in the syntax tree, not words in the file: the script is free to document
+    # that it reads no environment variable and creates no directory.
+    used = names_used(ast.parse(script_source()))
+    assert not used & AMBIENT_READS
+    assert not used & {"mkdir", "makedirs"}
 
 
 # --- apply -------------------------------------------------------------------

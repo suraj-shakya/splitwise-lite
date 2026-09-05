@@ -18,8 +18,8 @@ cleanly and keeps the flat's names out of shell history::
 It carries display names and nothing else: no address, no id, no date, no role and no
 flag. ``parse_group_definition`` and ``load_group_definition`` turn it into a frozen
 ``GroupDefinition``; ``apply_group_definition`` is what writes. Nothing is read at
-import time, there is no default path, nothing is read from the process env, and no
-directory is searched. A path is always passed.
+import time, there is no default path, no environment variable is read and no search of
+the working directory happens. A path is always passed.
 
 **Applying is idempotent for the names already there, and additive for new ones.** A
 second run over an unchanged file writes nothing at all. A name the file gained is
@@ -37,13 +37,16 @@ the group when the store holds exactly one group and raises otherwise. It is not
 whose id still scopes every later read, and it lives here rather than in the store, so
 the store keeps no knowledge that v1 exposes one group.
 
-**Signing up links nothing automatically.** A ``user_id`` reaches a member row only
-through ``link_user_to_member``, called by the operator command. No code path here
-compares a user to a member by address, by display name or by any other similarity:
-sign-up details are unverified, so whoever claimed a flatmate's address first would
-otherwise take over their position in the ledger. A member whose ``user_id`` is NULL is
-a full member of the ledger, renders like any other and is nobody's pending invite;
-a signed-in user with no member row calls ``acting_member`` and gets
+**Signing up links nothing automatically.** Members exist before those people have
+accounts. That is why ``members.user_id`` is nullable, and four member rows with zero
+users is the normal state of a fresh flat: it is what the app looks like on the day it
+is installed. A ``user_id`` reaches a member row only through ``link_user_to_member``,
+called by the operator command. No code path here compares a user to a member by email
+address, by display name or by any other similarity: a signup email address is
+unverified and the spec cuts email verification, so whoever signed up with a flatmate's
+address first would otherwise become them in the ledger. A member whose ``user_id`` is
+NULL is a full member of the ledger, renders like any other and is nobody's pending
+invite; a signed-in user with no member row calls ``acting_member`` and gets
 ``MemberNotLinked``.
 
 Membership is flat. There is no ``joined_at``, ``left_at``, ``is_active``, membership
@@ -233,7 +236,7 @@ def _require_display_name(value: object, field: str) -> str:
 
 
 def _require_utc(value: object, field: str) -> datetime:
-    """Return ``value`` converted to UTC, or raise, matching tasks 6 and 7.
+    """Return ``value`` converted to UTC, or raise, matching ``accounts.py``.
 
     A wrong type is a ``TypeError`` and a naive datetime is an ``InvalidRecord``: a
     datetime with no zone is rejected rather than assumed to be local or UTC, because
@@ -271,9 +274,9 @@ class GroupDefinition:
       ``casefold()``. Matching is by display name, so a roster that cannot tell two
       entries apart is refused at the file rather than guessed at in the store.
 
-    It holds no id, no address, no password, no date, no role and no flag. Addresses
-    are excluded deliberately: putting them here would invite matching a sign-up to a
-    member row by address, and a sign-up address is unverified.
+    It holds no id, no email address, no password, no date, no role and no flag.
+    Email addresses are excluded deliberately: putting them in the roster would invite
+    matching a signup to a member row by address, and a signup address is unverified.
 
     Value type, so a test builds one in three lines with no temporary file and a caller
     whose roster came from somewhere else needs no new entry point.
@@ -393,15 +396,16 @@ def parse_group_definition(text: str) -> GroupDefinition:
         raise TypeError(
             f"parse_group_definition takes a str of TOML, got {type(text).__name__}"
         )
-    return _definition_from(_document(text, "the group definition"), "the group definition")
+    where = "the group definition"
+    return _definition_from(_document(text, where), where)
 
 
 def load_group_definition(path: str | Path) -> GroupDefinition:
     """Read the TOML definition at ``path`` and return a ``GroupDefinition``.
 
-    There is no default path, nothing is read from the process env, and no directory
-    is searched: the path is always passed, mirroring task 6's rule that the store
-    never chooses one. Nothing is read at import time.
+    There is no default path, no environment variable and no search of the working
+    directory: the path is always passed, mirroring task 6's rule that the store never
+    chooses one. Nothing is read at import time.
 
     The file is decoded as ``utf-8-sig``, so a byte order mark from a plain Windows
     editor is tolerated rather than surfacing as a parse error whose message names
@@ -664,7 +668,9 @@ def _require_reconcilable(
 
     wanted = {_key(name) for name in definition.members}
     dropped = [
-        member.display_name for member in stored if _key(member.display_name) not in wanted
+        member.display_name
+        for member in stored
+        if _key(member.display_name) not in wanted
     ]
     if dropped:
         raise GroupMismatch(
@@ -684,10 +690,10 @@ def link_user_to_member(
 
     The only way a ``user_id`` ever reaches a member row, and a deliberate operator
     action: ``scripts/setup_group.py link`` calls it and nothing else in v1 does.
-    Nothing links automatically. No comparison of address, display name or any other
-    similarity happens here, because a sign-up address is unverified and matching on
-    one would let whoever claimed a flatmate's address take over their position in the
-    ledger.
+    Nothing links automatically. No comparison of email address, display name or any
+    other similarity happens here, because a signup email address is unverified and
+    matching on one would let whoever knows a flatmate's address take over their
+    position in the ledger.
 
     Linking a member to the user it already points at is a no-op: nothing is written
     and the member comes back unchanged. Linking changes ``user_id`` and nothing else:
