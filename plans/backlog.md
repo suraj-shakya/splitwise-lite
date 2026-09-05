@@ -84,9 +84,22 @@ Description: Create the single group with its fixed currency, populate members f
 manual list, and link signed-in users to their member record. No invite links, no
 join requests. This is the fixture every screen task needs to show real names.
 
+## 9a. Application server and HTTP API
+Goal: The bridge between the domain layer and the screens.
+Depends on: 7, 8, 9
+Description: Added after the original numbering, when sharpening task 9 exposed that
+nothing joins the two halves of the product. Task 8 built a static shell whose criteria
+forbid `fetch` outright, task 7 delivered accounts as a library and deferred cookies,
+CSRF, TLS and login rate limiting to "task 10" by name, and task 9 is a library plus an
+operator CLI. Tasks 10 to 12 therefore have no way to reach any data. This task owns the
+framework decision, serving `app/`, turning a session token into an acting member, the
+session transport and CSRF, login rate limiting, and the one mapping from `DomainError`
+to HTTP status. It exists so those decisions are made and reviewed once, rather than
+invented inside a screen task whose stated goal is entry speed.
+
 ## 10. Expense entry screen
 Goal: Log a spend in under ten seconds.
-Depends on: 3, 6, 8, 9
+Depends on: 3, 6, 8, 9, 9a
 Description: A form for amount, payer, description and split mode, covering all three
 modes, resolving to explicit allocations on save. Speed is the requirement, not a nice
 to have: default to equal across everyone, keep the amount field focused on open, and
@@ -94,14 +107,14 @@ make saving one tap from a filled form.
 
 ## 11. Expense feed
 Goal: See what the flat has spent.
-Depends on: 6, 8, 9
+Depends on: 6, 8, 9, 9a
 Description: Reverse-chronological list of expenses showing payer, total, description
 and who it was split across. Tapping one opens its allocation detail. Read-only in
 this task; editing arrives in task 17.
 
 ## 12. Balances screen
 Goal: Answer who owes who, in the fewest payments.
-Depends on: 5, 8, 9
+Depends on: 5, 8, 9, 9a
 Description: Show each member net position and the simplified transfer list. Every
 figure is derived on read from the event log; this screen stores nothing. It is the
 screen the whole product exists to render.
@@ -167,7 +180,10 @@ balance clears. This is the regression net for every later change.
 **After 6 and 7**
 9
 
-**After 9 (with 3, 5, 8)**
+**After 7, 8 and 9**
+9a
+
+**After 9a (with 3, 5, 8)**
 10, 11, 12
 
 **After 12**
