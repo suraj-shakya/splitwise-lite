@@ -585,7 +585,8 @@ function page(scripts, name, provokeRunawayTimer) {
 
   const drainMicrotasks = async () => {
     /* Returning to the event loop drains the microtask queue to empty, so two hops
-       finish a chain that queued more work while the first drain was running. */
+       finish a chain that queued more work while the first drain was running.
+       setImmediate is a Node global rather than an import, and nothing here sleeps. */
     await new Promise((done) => setImmediate(done));
     await new Promise((done) => setImmediate(done));
   };
