@@ -2186,6 +2186,95 @@ def test_a_feed_entry_carries_its_allocations_and_no_display_names(
     assert "display_name" not in signed.get("/api/expenses").get_data(as_text=True)
 
 
+def test_an_empty_description_round_trips_as_an_empty_string(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Task 2 made the description optional so that entry can happen in under ten
+    # seconds. The feed renders the fixed literal "No description" for one of these,
+    # which needs the key present and its value the empty string: null or an absent
+    # key would be a different shape and a different screen.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    created = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="12.50",
+        split=equal_split(*sorted(members.values())),
+        description="",
+    )
+    assert created.status_code == 201
+    entry = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert "description" in entry
+    assert entry["description"] == ""
+    assert entry["description"] is not None
+
+
+def test_a_payer_who_is_not_a_participant_stays_out_of_the_allocations(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Task 4 supports paying for a meal you did not eat. The feed lists only the
+    # allocation members on its "Split across" line and says so in the detail, which
+    # only works if the payer really is absent from allocations.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    sharing = sorted([members["Ali"], members["Jo"]])
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="20.00",
+        split=equal_split(*sharing),
+    )
+    entry = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert entry["payer_id"] == members["Sam"]
+    assert entry["allocations"] == [
+        {"member_id": sharing[0], "amount": "10.00"},
+        {"member_id": sharing[1], "amount": "10.00"},
+    ]
+
+
+def test_two_cents_across_three_members_keeps_the_zero_share_in_the_array(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Task 3's remainder rule gives 1, 1, 0, and a zero share is a real participant
+    # rather than a member to drop. The feed counts them into "and N others" and
+    # shows their 0.00 in the detail, so the array must carry all three.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    ordered = sorted(members.values())
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    add_expense(
+        signed, payer_id=members["Sam"], amount="0.02", split=equal_split(*ordered)
+    )
+    entry = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert entry["amount"] == "0.02"
+    assert entry["allocations"] == [
+        {"member_id": ordered[0], "amount": "0.01"},
+        {"member_id": ordered[1], "amount": "0.01"},
+        {"member_id": ordered[2], "amount": "0.00"},
+    ]
+
+
+def test_an_expense_split_across_one_member_has_one_allocation_of_the_total(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The single share equals the total, and the feed renders both without adding
+    # anything up. Nothing about the payload marks this case as special.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="7.35",
+        split=equal_split(members["Sam"]),
+    )
+    entry = signed.get("/api/expenses").get_json()["expenses"][0]
+    assert entry["amount"] == "7.35"
+    assert entry["allocations"] == [{"member_id": members["Sam"], "amount": "7.35"}]
+
+
 def test_an_equal_split_stores_the_event_field_by_field(
     app, seeded: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
