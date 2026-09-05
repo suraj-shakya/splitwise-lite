@@ -24,6 +24,15 @@ so the service worker will not register there and the app will not offer to inst
 `uv run pytest` fails on this machine with an access-denied spawn error, so use
 `uv run python -m pytest`.
 
+The suite has a JavaScript half, so `node` 20 or later on `PATH` is a test-time
+requirement of this repo. `tests/shell_harness.mjs` runs the real `app/index.html`,
+`app/app.js` and `app/api.js` under Node's built-in `vm`, against a stubbed DOM and a
+stubbed `fetch`, and pytest drives it, so `uv run python -m pytest` is still the one
+test command and one failure list covers both languages. There is still no npm, no
+`package.json` and no `node_modules`: the harness imports `node:vm`, `node:fs`,
+`node:path` and `node:url` and nothing else. A missing `node` fails the suite, loudly,
+and is never skipped.
+
 ## Money
 
 Money is always integer cents, never floats. Amounts are parsed to cents at the input

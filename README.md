@@ -73,3 +73,9 @@ install.
 ## Test
 
     uv run python -m pytest
+
+That one command runs both halves. The JavaScript half needs `node` 20 or later on
+`PATH`: `tests/shell_harness.mjs` runs the files in `app/` under Node's built-in `vm`
+and asserts what a person would see on the screen. There is still no npm and no
+`node_modules`. Without `node` the suite fails and says so, rather than quietly
+skipping the half it cannot run.
