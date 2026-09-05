@@ -531,6 +531,26 @@ def test_the_document_says_what_an_unlinked_account_sees() -> None:
     assert "The app cannot reach the server" in text
 
 
+def test_every_element_the_router_reaches_for_exists_in_the_document() -> None:
+    """The boot wiring is the one thing a mistyped id turns into a blank page.
+
+    There is no browser in this suite, so a getElementById that returns null would
+    otherwise only be found by opening the app. Every id and class app.js looks up is
+    checked against the document instead.
+    """
+    router = (APP / "app.js").read_text(encoding="utf-8")
+    doc = document()
+    present = {attrs["id"] for _, attrs in doc.tags if attrs.get("id")}
+    for wanted in re.findall(r"getElementById\('([^']+)'\)", router):
+        assert wanted in present, wanted
+
+    classes = set()
+    for _, attrs in doc.tags:
+        classes.update((attrs.get("class") or "").split())
+    for selector in re.findall(r"querySelector\('\.([^']+)'\)", router):
+        assert selector in classes, selector
+
+
 def test_a_noscript_block_explains_that_the_app_needs_javascript() -> None:
     assert document().find("noscript")
     assert "JavaScript" in document().text
@@ -634,6 +654,18 @@ def test_the_worker_refuses_to_cache_the_api() -> None:
     source = (APP / "sw.js").read_text(encoding="utf-8")
     assert "pathname.indexOf('/api') === 0" in source
     assert "'/api'" in source
+
+
+@pytest.mark.parametrize("name", sorted(APP_FILES - {"manifest.json"}))
+def test_no_shell_file_does_money_or_split_arithmetic(name: str) -> None:
+    # Task 8's independence rule, unchanged by task 9a and made easy to keep by the
+    # string-only money contract: the front end is handed nothing it could do
+    # arithmetic on, so it must not start.
+    if not name.endswith((".js", ".html", ".css")):
+        return
+    source = (APP / name).read_text(encoding="utf-8")
+    for forbidden in ("toFixed", "parseFloat", "Math.round", "Math.floor", "/ 100"):
+        assert forbidden not in source, name
 
 
 def test_no_rule_sets_a_font_size_below_sixteen_pixels() -> None:
