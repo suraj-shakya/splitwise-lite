@@ -146,6 +146,24 @@ function element(tag, attributes, sink) {
     removeAttribute(name) {
       delete own.attributes[name];
     },
+    appendChild(child) {
+      own.childNodes.push(child);
+      return child;
+    },
+    removeChild(child) {
+      const at = own.childNodes.indexOf(child);
+      if (at === -1) {
+        throw new Error('removeChild was given a node that is not a child');
+      }
+      own.childNodes.splice(at, 1);
+      return child;
+    },
+    replaceChildren(...nodes) {
+      own.childNodes = nodes.slice();
+    },
+    get firstChild() {
+      return own.childNodes.length === 0 ? null : own.childNodes[0];
+    },
     addEventListener(type, handler) {
       const listeners = own.listeners[type] || [];
       listeners.push(handler);
@@ -785,6 +803,23 @@ const NO_MEMBER = {
 const REFUSED = 'Those details did not match an account.';
 const SIGN_IN_FIRST = 'Sign in to continue.';
 
+/* Tasks 11 and 12 landed after this harness was written, and both read as soon as the
+   app frame appears: the feed loads the expenses and the roster, the balances screen
+   loads the roster and the figures. Every scenario that reaches the app screen has to
+   answer them, which is this harness working as intended rather than a burden, since a
+   call nobody registered an answer for is a failure. These are the empty, valid shapes:
+   those two tasks own the scenarios that assert what their screens draw, and this task
+   still asserts only the gate, the notices, routing and the client. */
+const EMPTY_FEED = { currency: 'AUD', expenses: [] };
+const EMPTY_ROSTER = { members: [] };
+const EMPTY_BALANCES = { net: [], transfers: [] };
+
+function screensLoad(page) {
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(EMPTY_ROSTER));
+  page.respond('GET', '/balances', ok(EMPTY_BALANCES));
+}
+
 const refusal = (message) => failure(401, CODES.authenticationFailed, message);
 const notLinked = () =>
   failure(403, CODES.memberNotLinked, 'Nobody has linked you to a member yet.');
@@ -928,6 +963,7 @@ const SCENARIOS = [
   {
     name: 'boot_with_a_linked_session_shows_the_app',
     async run(page) {
+      screensLoad(page);
       page.respond('GET', '/session', ok(A_MEMBER));
       await page.boot();
       appIsUp(page, 'a linked session');
@@ -941,7 +977,11 @@ const SCENARIOS = [
         true,
         'SplitwiseApi as a bare global'
       );
-      page.expectRequests(['GET /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members'
+      ]);
     }
   },
 
@@ -1075,6 +1115,7 @@ const SCENARIOS = [
   {
     name: 'a_successful_sign_in_keeps_the_screen_the_person_was_on',
     async run(page) {
+      screensLoad(page);
       page.startAt('#/balances');
       page.respondInOrder('GET', '/session', [refusal(SIGN_IN_FIRST), ok(A_MEMBER)]);
       page.respond('POST', '/session', ok(A_MEMBER));
@@ -1088,7 +1129,9 @@ const SCENARIOS = [
       page.expectRequests([
         'GET /api/session',
         'POST /api/session',
-        'GET /api/session'
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
       ]);
     }
   },
@@ -1131,6 +1174,7 @@ const SCENARIOS = [
     /* Signup issues no session, so the client signs in straight after it. */
     name: 'creating_an_account_signs_in_straight_after',
     async run(page) {
+      screensLoad(page);
       page.respondInOrder('GET', '/session', [refusal(SIGN_IN_FIRST), ok(A_MEMBER)]);
       page.respond('POST', '/signup', ok({ account: A_MEMBER.account }));
       page.respond('POST', '/session', ok(A_MEMBER));
@@ -1142,7 +1186,9 @@ const SCENARIOS = [
         'GET /api/session',
         'POST /api/signup',
         'POST /api/session',
-        'GET /api/session'
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members'
       ]);
       appIsUp(page, 'creating an account');
       /* Back to signing in, because the account now exists. */
@@ -1215,19 +1261,26 @@ const SCENARIOS = [
   {
     name: 'signing_out_returns_to_the_gate',
     async run(page) {
+      screensLoad(page);
       page.respond('GET', '/session', ok(A_MEMBER));
       page.respond('DELETE', '/session', noContent());
       await page.boot();
       await page.dispatch(page.el('sign-out'), 'click');
       gateIsUp(page, 'after signing out');
       gateReads(page, 'signing in', 'after signing out');
-      page.expectRequests(['GET /api/session', 'DELETE /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'DELETE /api/session'
+      ]);
     }
   },
 
   {
     name: 'routing_shows_one_screen_and_moves_focus',
     async run(page) {
+      screensLoad(page);
       page.respond('GET', '/session', ok(A_MEMBER));
       await page.boot();
       await page.goTo('#/balances');
@@ -1235,13 +1288,20 @@ const SCENARIOS = [
       page.same(currentTabs(page), ['#/balances'], 'aria-current');
       page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
       page.is(page.focused, page.el('title-balances'), 'focus');
-      page.expectRequests(['GET /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
     }
   },
 
   {
     name: 'an_unknown_hash_is_replaced_not_pushed',
     async run(page) {
+      screensLoad(page);
       page.startAt('#/nope');
       page.respond('GET', '/session', ok(A_MEMBER));
       await page.boot();
@@ -1249,13 +1309,18 @@ const SCENARIOS = [
       page.same(page.pushStates, [], 'history.pushState');
       page.is(page.hash, '#/feed', 'location.hash');
       page.same(visibleScreens(page), ['screen-feed'], 'the screens on show');
-      page.expectRequests(['GET /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members'
+      ]);
     }
   },
 
   {
     name: 'every_request_goes_to_the_api_with_credentials',
     async run(page) {
+      screensLoad(page);
       page.setCookie('sl_csrf=a-token');
       page.respond('GET', '/session', ok(A_MEMBER));
       page.respond('DELETE', '/session', noContent());
@@ -1265,6 +1330,8 @@ const SCENARIOS = [
       await signIn(page, 'sam@example.com', 'hunter2');
       page.expectRequests([
         'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
         'DELETE /api/session',
         'POST /api/session'
       ]);
@@ -1317,6 +1384,7 @@ const SCENARIOS = [
   {
     name: 'a_204_is_not_parsed_as_json',
     async run(page) {
+      screensLoad(page);
       const answer = noContent();
       page.respond('GET', '/session', ok(A_MEMBER));
       page.respond('DELETE', '/session', answer);
@@ -1325,7 +1393,12 @@ const SCENARIOS = [
       page.is(answer.jsonCalls, 0, 'json() calls on the 204');
       page.is(page.el('gate').hidden, false, '#gate visible');
       page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
-      page.expectRequests(['GET /api/session', 'DELETE /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'DELETE /api/session'
+      ]);
     }
   },
 
@@ -1354,6 +1427,24 @@ const SCENARIOS = [
 ];
 
 /* --- Running ---------------------------------------------------------------- */
+
+/* The scenario being driven, so an error that escapes into a promise nobody handled
+   can be recorded against it. Without these handlers such an error kills the process
+   and takes the whole report with it, which turns one broken scenario into a run that
+   says nothing about the other twenty-four. */
+let running = null;
+
+function escaped(kind, reason) {
+  const detail = kind + ': ' + (reason && reason.stack ? reason.stack : String(reason));
+  if (running === null) {
+    process.stderr.write('harness error: ' + detail + '\n');
+    process.exit(2);
+  }
+  running.fail(detail);
+}
+
+process.on('unhandledRejection', (reason) => escaped('unhandled rejection', reason));
+process.on('uncaughtException', (error) => escaped('uncaught exception', error));
 
 function readSource(relative, substitutions) {
   const path = join(REPO, relative);
@@ -1425,6 +1516,7 @@ async function main() {
        and handlers, app.js holds current and creating, and no scenario may inherit
        another's state. */
     const driver = page(scripts, scenario.name, Boolean(config.provokeRunawayTimer));
+    running = driver;
     try {
       await scenario.run(driver);
       driver.finish();
@@ -1434,6 +1526,7 @@ async function main() {
       }
       driver.fail('threw: ' + (error && error.stack ? error.stack : String(error)));
     }
+    running = null;
     const passed = driver.failures.length === 0;
     report.scenarios.push({
       name: scenario.name,

@@ -346,9 +346,14 @@ def test_the_service_worker_registration_branch_is_never_entered(
     # app.js registers a window 'load' listener only inside
     # `if ('serviceWorker' in navigator)`, and the stub navigator has no such
     # property. A 'load' listener showing up here would mean the branch ran, and the
-    # harness would be pretending to cover something it does not.
+    # harness would be pretending to cover something it does not. The count of
+    # hashchange listeners is not pinned: tasks 11 and 12 each added one of their own,
+    # and the screens after them will add more.
     for entry in report["scenarios"]:
-        assert entry["windowEvents"] == ["hashchange"], entry["name"]
+        assert set(entry["windowEvents"]) == {"hashchange"}, (
+            entry["name"],
+            entry["windowEvents"],
+        )
 
 
 def test_each_scenario_starts_from_a_fresh_context(report: dict[str, Any]) -> None:
@@ -363,7 +368,15 @@ def test_each_scenario_starts_from_a_fresh_context(report: dict[str, Any]) -> No
     found = results(report)
     for name in (linked, after):
         assert found[name]["passed"], found[name]["failures"]
-        assert found[name]["requests"] == ["GET /api/session"]
+    # The linked session reaches the app frame, so it reads the two screens as well.
+    # The 403 that follows it never gets that far and reads once, and a recorder shared
+    # between the two would carry those extra reads into this list.
+    assert found[linked]["requests"] == [
+        "GET /api/session",
+        "GET /api/expenses",
+        "GET /api/members",
+    ]
+    assert found[after]["requests"] == ["GET /api/session"]
 
 
 # --- Neither half depends on the working directory -------------------------
