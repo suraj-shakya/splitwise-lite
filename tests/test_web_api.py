@@ -2726,3 +2726,141 @@ def test_an_amount_is_rendered_the_way_format_amount_renders_it(
     entry = signed.get("/api/expenses").get_json()["expenses"][0]
     assert entry["amount"] == format_amount(Money(123450, CurrencyType(CURRENCY)))
     assert entry["amount"] == "1,234.50"
+
+
+# --- Signing up -------------------------------------------------------------
+
+
+def test_a_signup_returns_the_user_and_no_password_field_of_any_kind(client) -> None:
+    response = sign_up(client)
+    assert response.status_code == 201
+    body = response.get_json()
+    assert set(body) == {"user"}
+    assert set(body["user"]) == {"id", "email", "display_name"}
+    assert body["user"]["email"] == "sam@example.com"
+    assert body["user"]["display_name"] == "Sam"
+    assert body["user"]["id"]
+    text = response.get_data(as_text=True)
+    for forbidden in ("password", "hash", "scrypt", "salt", "credential"):
+        assert forbidden not in text.lower()
+
+
+def test_a_signup_creates_no_session(client) -> None:
+    # Task 7 decided signup issues none, and keeping one place that mints a session
+    # is worth the client's second request.
+    response = sign_up(client)
+    assert response.status_code == 201
+    assert web.SESSION_COOKIE not in set_cookies(response)
+    assert client.get("/api/session").status_code == 401
+
+
+def test_a_signup_links_nothing(app, seeded: Path) -> None:
+    from splitwise_lite.groups import resolve_sole_group
+
+    client = app.test_client()
+    assert sign_up(client).status_code == 201
+    with open_store(seeded) as store:
+        group = resolve_sole_group(store)
+        assert all(
+            member.user_id is None for member in store.list_members(group.id)
+        )
+
+
+def test_a_duplicate_address_is_a_conflict(client) -> None:
+    assert sign_up(client).status_code == 201
+    response = sign_up(client, display_name="Someone Else")
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "email_already_registered"
+
+
+def test_a_losing_racer_gets_the_same_answer_as_a_plain_duplicate(
+    app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The address was free when it was checked and taken by the time the row was
+    # written. For the person typing that is the same situation.
+    client = app.test_client()
+    plain = app.test_client()
+    assert sign_up(plain).status_code == 201
+    expected = sign_up(plain, display_name="Someone Else")
+
+    fresh = app.test_client()
+    real = web.accounts.sign_up
+
+    def racing(*arguments, **keywords):
+        raise web.store.DuplicateRecord("a user with that email already exists")
+
+    monkeypatch.setattr(web.accounts, "sign_up", racing)
+    raced = sign_up(fresh, email="racer@example.com")
+    monkeypatch.setattr(web.accounts, "sign_up", real)
+
+    assert raced.status_code == expected.status_code == 409
+    assert (
+        raced.get_json()["error"]["code"]
+        == expected.get_json()["error"]["code"]
+        == "email_already_registered"
+    )
+    assert client.get("/api/session").status_code == 401
+
+
+@pytest.mark.parametrize(
+    "payload, code, fragment",
+    [
+        (
+            {"email": "not-an-address", "display_name": "Sam", "password": PASSWORD},
+            "invalid_email",
+            "exactly one @",
+        ),
+        (
+            {"email": "sam@example.com", "display_name": "Sam", "password": "short"},
+            "invalid_password",
+            "characters",
+        ),
+        (
+            {"email": "sam@example.com", "display_name": "   ", "password": PASSWORD},
+            "invalid_record",
+            "display_name",
+        ),
+    ],
+)
+def test_a_rejected_signup_carries_the_domain_layers_own_message(
+    client, payload: dict, code: str, fragment: str
+) -> None:
+    response = post(client, "/api/signup", payload)
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == code
+    assert fragment in body["error"]["message"]
+
+
+# --- Signing in -------------------------------------------------------------
+
+
+def test_a_correct_password_returns_the_session_view(app, seeded: Path) -> None:
+    signed = linked_client(app, seeded)
+    body = signed.get("/api/session").get_json()
+    assert body["member"]["display_name"] == "Sam"
+
+
+def test_every_failure_says_exactly_the_same_thing(app, seeded: Path) -> None:
+    # Task 7's guarantee: the response reveals nothing about which field was wrong.
+    from splitwise_lite.events import new_id
+    from splitwise_lite.store import User, UserId
+
+    client = app.test_client()
+    assert sign_up(client).status_code == 201
+
+    with open_store(seeded) as store:
+        # An account with no credential row at all: add_user can make one, and it
+        # simply cannot sign in.
+        store.add_user(
+            User(UserId(new_id()), "nopassword@example.com", "No Password", at())
+        )
+
+    wrong_password = log_in(client, password=OTHER_PASSWORD)
+    unknown_address = log_in(client, email="nobody@example.com")
+    no_credential = log_in(client, email="nopassword@example.com")
+
+    for response in (wrong_password, unknown_address, no_credential):
+        assert response.status_code == 401
+        assert response.get_json()["error"]["code"] == "authentication_failed"
+    assert wrong_password.data == unknown_address.data == no_credential.data
