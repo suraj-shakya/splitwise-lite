@@ -9,9 +9,9 @@ and carries the harness's own message rather than one opaque "node exited 1".
 
 ``node`` is a test-time requirement of this repo, named in CLAUDE.md. **A missing or
 too old ``node`` is a failure, never a skip**: `.claude/rules/testing.md` forbids
-skipping or xfailing a test to make the suite green, and a JavaScript suite that
-silently evaporates on a machine without the runtime is that same failure wearing a
-hat.
+marking a test skipped or expected to fail to make the suite green, and a JavaScript
+suite that silently evaporates on a machine without the runtime is that same failure
+wearing a hat.
 """
 
 from __future__ import annotations

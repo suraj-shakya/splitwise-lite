@@ -472,7 +472,7 @@ function page(scripts, name, provokeRunawayTimer) {
     }, 0);
   };
 
-  const head = byId === null ? null : select(parsed.root, 'head')[0];
+  const head = select(parsed.root, 'head')[0];
   head.appendChild = (node) => {
     head.childNodes.push(node);
     if (node.tagName === 'SCRIPT' && node.src !== '') {
@@ -524,6 +524,10 @@ function page(scripts, name, provokeRunawayTimer) {
          a call at boot fails loudly and has to register its answer. */
       throw new Error('no answer was registered for ' + key);
     }
+    /* One registered answer stands for every matching request; a list registered
+       with respondInOrder is consumed in order and its last entry stands for
+       anything after it. Every scenario asserts its exact request list, so a call
+       nobody expected is caught there rather than being quietly served. */
     const answer = queue.length === 1 ? queue[0] : queue.shift();
     if (answer.rejectWith) {
       return Promise.reject(answer.rejectWith());
@@ -571,13 +575,13 @@ function page(scripts, name, provokeRunawayTimer) {
   sandbox.setTimeout = setTimeoutStub;
   sandbox.clearTimeout = clearTimeoutStub;
   sandbox.fetch = fetchStub;
+  const windowListeners = {};
   sandbox.addEventListener = (type, handler) => {
     windowEvents.push(String(type));
     const listeners = windowListeners[type] || [];
     listeners.push(handler);
     windowListeners[type] = listeners;
   };
-  const windowListeners = {};
 
   const drainMicrotasks = async () => {
     /* Returning to the event loop drains the microtask queue to empty, so two hops
@@ -635,9 +639,15 @@ function page(scripts, name, provokeRunawayTimer) {
       scripts.get(join(APP, 'app.js')).runInContext(sandbox);
       await settle();
     },
-    async dispatch(element, type) {
-      const event = { type: type, defaultPrevented: false, preventDefault() { event.defaultPrevented = true; } };
-      (element.listeners[type] || []).forEach((handler) => handler(event));
+    async dispatch(node, type) {
+      const event = {
+        type: type,
+        defaultPrevented: false,
+        preventDefault() {
+          event.defaultPrevented = true;
+        }
+      };
+      (node.listeners[type] || []).forEach((handler) => handler(event));
       await settle();
       return event;
     },
@@ -650,9 +660,6 @@ function page(scripts, name, provokeRunawayTimer) {
          fires hashchange. No click handler is registered on a nav link. */
       sandbox.location.hash = String(hash);
       await api.dispatchWindow('hashchange');
-    },
-    async settle() {
-      await settle();
     },
 
     /* --- looking --- */
@@ -723,7 +730,16 @@ function page(scripts, name, provokeRunawayTimer) {
 }
 
 function show(value) {
-  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+  if (typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  /* `in` rather than a property read, so a guarded stub that is not an element says
+     so instead of throwing while a failure message is being written. */
+  if (value && typeof value === 'object' && 'tagName' in value) {
+    const id = value.attributes.id;
+    return '<' + value.tagName.toLowerCase() + (id === undefined ? '' : ' id=' + id) + '>';
+  }
+  return String(value);
 }
 
 /* --- The scenarios ---------------------------------------------------------- */
