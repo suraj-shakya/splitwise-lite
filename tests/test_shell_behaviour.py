@@ -58,7 +58,13 @@ SCENARIOS = [
     "the_email_is_trimmed_and_the_password_is_not",
     "signing_out_returns_to_the_gate",
     # Routing
+    "routing_shows_one_screen_and_moves_focus",
     "an_unknown_hash_is_replaced_not_pushed",
+    # The client
+    "every_request_goes_to_the_api_with_credentials",
+    "the_csrf_token_is_read_at_request_time_not_cached",
+    "a_204_is_not_parsed_as_json",
+    "an_unsupported_selector_is_a_loud_failure_not_a_null",
 ]
 
 # The two mutants the harness is measured against, as anchored substitutions applied

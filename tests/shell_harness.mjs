@@ -645,6 +645,12 @@ function page(scripts, name, provokeRunawayTimer) {
       (windowListeners[type] || []).forEach((handler) => handler({ type: type }));
       await settle();
     },
+    async goTo(hash) {
+      /* What following a tab link does: the anchor changes the hash and the browser
+         fires hashchange. No click handler is registered on a nav link. */
+      sandbox.location.hash = String(hash);
+      await api.dispatchWindow('hashchange');
+    },
     async settle() {
       await settle();
     },
@@ -748,6 +754,19 @@ async function signIn(page, email, password) {
   page.el('gate-email').value = email;
   page.el('gate-password').value = password;
   return page.dispatch(page.el('gate-form'), 'submit');
+}
+
+const SCREENS = ['screen-feed', 'screen-add', 'screen-balances'];
+
+function visibleScreens(page) {
+  return SCREENS.filter((id) => !page.el(id).hidden);
+}
+
+function currentTabs(page) {
+  return page
+    .query('.tabbar a')
+    .filter((tab) => tab.getAttribute('aria-current') !== null)
+    .map((tab) => tab.getAttribute('href'));
 }
 
 function noticeIsUp(page, which, what) {
@@ -1062,6 +1081,19 @@ const SCENARIOS = [
   },
 
   {
+    name: 'routing_shows_one_screen_and_moves_focus',
+    async run(page) {
+      page.respond('GET', '/session', ok(A_MEMBER));
+      await page.boot();
+      await page.goTo('#/balances');
+      page.same(visibleScreens(page), ['screen-balances'], 'the screens on show');
+      page.same(currentTabs(page), ['#/balances'], 'aria-current');
+      page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
+      page.is(page.focused, page.el('title-balances'), 'focus');
+    }
+  },
+
+  {
     name: 'an_unknown_hash_is_replaced_not_pushed',
     async run(page) {
       page.startAt('#/nope');
@@ -1070,9 +1102,96 @@ const SCENARIOS = [
       page.same(page.replaceStates, ['#/feed'], 'history.replaceState');
       page.same(page.pushStates, [], 'history.pushState');
       page.is(page.hash, '#/feed', 'location.hash');
-      page.is(page.el('screen-feed').hidden, false, '#screen-feed visible');
-      page.is(page.el('screen-add').hidden, true, '#screen-add hidden');
-      page.is(page.el('screen-balances').hidden, true, '#screen-balances hidden');
+      page.same(visibleScreens(page), ['screen-feed'], 'the screens on show');
+    }
+  },
+
+  {
+    name: 'every_request_goes_to_the_api_with_credentials',
+    async run(page) {
+      page.setCookie('sl_csrf=a-token');
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.same(
+        page.requests,
+        ['GET /api/session', 'POST /api/session'],
+        'requests'
+      );
+      page.calls.forEach((call, index) => {
+        page.ok(
+          call.url.indexOf('/api/') === 0,
+          'call ' + index + ' goes to /api/, not ' + call.url
+        );
+        page.is(call.credentials, 'same-origin', 'call ' + index + ' credentials');
+      });
+      /* A safe method sends neither, because it changes nothing and needs no token. */
+      page.same(Object.keys(page.calls[0].headers), ['Accept'], 'the GET headers');
+      page.is(page.calls[0].body, null, 'the GET body');
+      page.same(
+        Object.keys(page.calls[1].headers),
+        ['Accept', 'Content-Type', 'X-CSRF-Token'],
+        'the POST headers'
+      );
+    }
+  },
+
+  {
+    /* The token the server rotated on the last response is the one the next request
+       has to carry, so it is read from the cookie at request time and never cached. */
+    name: 'the_csrf_token_is_read_at_request_time_not_cached',
+    async run(page) {
+      page.setCookie('sl_csrf=first-token');
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.setCookie('sl_csrf=second-token');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.same(
+        page.requests,
+        ['GET /api/session', 'POST /api/session', 'POST /api/session'],
+        'requests'
+      );
+      page.is(page.calls[1].headers['X-CSRF-Token'], 'first-token', 'the first POST');
+      page.is(page.calls[2].headers['X-CSRF-Token'], 'second-token', 'the second POST');
+    }
+  },
+
+  {
+    name: 'a_204_is_not_parsed_as_json',
+    async run(page) {
+      const answer = noContent();
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('DELETE', '/session', answer);
+      await page.boot();
+      await page.dispatch(page.el('sign-out'), 'click');
+      page.is(answer.jsonCalls, 0, 'json() calls on the 204');
+      page.is(page.el('gate').hidden, false, '#gate visible');
+      page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+    }
+  },
+
+  {
+    /* The stub's own honesty check: a selector shape it does not support has to be a
+       loud failure, so a screen task that introduces one widens the stub deliberately
+       instead of quietly getting null back. */
+    name: 'an_unsupported_selector_is_a_loud_failure_not_a_null',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      await page.boot();
+      let message = null;
+      try {
+        page.query('a[href]');
+      } catch (error) {
+        message = String(error.message);
+      }
+      page.ok(message !== null, 'an unsupported selector throws rather than returning');
+      page.ok(
+        message !== null && message.indexOf('a[href]') !== -1,
+        'the message names the selector, and was: ' + message
+      );
     }
   }
 ];
