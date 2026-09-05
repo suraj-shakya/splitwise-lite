@@ -824,6 +824,14 @@ const SCENARIOS = [
       appIsUp(page, 'a linked session');
       /* No focus move on first load: the person has not navigated anywhere yet. */
       page.is(page.focused, null, 'focus');
+      /* window is the context's own global, as in a browser, so what api.js hung off
+         window is reachable as a bare global from app.js. */
+      page.is(page.global('window === globalThis'), true, 'window === globalThis');
+      page.is(
+        page.global('SplitwiseApi === window.SplitwiseApi'),
+        true,
+        'SplitwiseApi as a bare global'
+      );
       page.same(page.requests, ['GET /api/session'], 'requests');
     }
   },
