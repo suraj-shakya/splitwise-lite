@@ -45,9 +45,12 @@ acceptable silently.
 :data:`ERROR_CODE` map exception classes to a status and a code, resolved by walking
 the raised exception's MRO so a subclass added later cannot fall through to 500 by
 accident. Every error response is
-``{"error": {"code": ..., "message": ...}}``. A 4xx carries ``str(error)``; a 5xx
-carries one fixed generic string and the real exception goes to the log with its
-traceback, because a 500 message can carry a file path or a SQL fragment.
+``{"error": {"code": ..., "message": ...}}``. Every status except 500 carries
+``str(error)``; a 500 carries one fixed generic string and the real exception goes to
+the log with its traceback, because a 500 message can carry a file path or a SQL
+fragment. The two 503 rows keep their own messages, which name the setup command and
+the ambiguous group ids: hiding those would leave a freshly installed server saying
+only that something went wrong.
 
 **Reading the ledger requires a member link.** Every endpoint except signup and the
 three session endpoints needs both a valid session and a member row in the group, and
@@ -272,6 +275,15 @@ balance is the "looks authoritative while being wrong" failure the spec names as
 product's largest risk. No Content Security Policy: it needs an inventory of every
 inline handler and style plus a nonce mechanism, and half a policy silently breaks the
 app, so it is named as a later task's work rather than guessed at here."""
+
+_INTERNAL_ERROR_STATUS: Final[int] = 500
+"""The one status whose message is generic and whose exception is logged.
+
+Not "any 5xx": ``NoGroupConfigured`` and ``AmbiguousGroup`` are 503 and their messages
+are fixed sentences this repo wrote for an operator to read, naming the setup command
+and the ambiguous ids. Hiding those behind the generic string would leave a freshly
+installed server saying only that something went wrong.
+"""
 
 _GENERIC_500_MESSAGE: Final[str] = (
     "the server could not complete that request; the failure has been logged"
@@ -712,7 +724,6 @@ def _set_csrf_cookie(response: flask.Response, token: str) -> None:
         httponly=False,
         samesite="Lax",
     )
-    flask.g._csrf_written = True
 
 
 def _clear_csrf_cookie(response: flask.Response) -> None:
@@ -730,7 +741,6 @@ def _clear_csrf_cookie(response: flask.Response) -> None:
         httponly=False,
         samesite="Lax",
     )
-    flask.g._csrf_written = True
 
 
 def _set_session_cookie(
@@ -1016,11 +1026,13 @@ def _create_session() -> flask.Response:
     limiter.clear(_LOGIN_EMAIL_BUCKET, key)
 
     flask.g.session = issued.session
-    response = _json_response(_session_view(), 200)
-    _set_session_cookie(response, issued)
+    # Recorded rather than written here, so the cookies land on whatever response
+    # this request ends with. The session row exists from this point on, and a view
+    # that then fails must not leave a live session the browser was never told about.
+    flask.g.issue_session = issued
     # Rotated on login, so a token captured before sign-in cannot be replayed after it.
-    _set_csrf_cookie(response, secrets.token_urlsafe(_CSRF_TOKEN_BYTES))
-    return response
+    flask.g.rotate_csrf = secrets.token_urlsafe(_CSRF_TOKEN_BYTES)
+    return _json_response(_session_view(), 200)
 
 
 def _read_session() -> flask.Response:
@@ -1063,10 +1075,9 @@ def _delete_session() -> flask.Response:
     token = flask.request.cookies.get(SESSION_COOKIE)
     if token:
         accounts.log_out(_store(), token)
-    response = flask.Response(status=204)
-    _clear_session_cookie(response)
-    _clear_csrf_cookie(response)
-    return response
+    flask.g.clear_session = True
+    flask.g.clear_csrf = True
+    return flask.Response(status=204)
 
 
 def _list_members() -> flask.Response:
@@ -1445,14 +1456,33 @@ def _before_request() -> None:
 
 
 def _after_request(response: flask.Response) -> flask.Response:
-    """Add the security headers and issue a CSRF cookie when one is missing."""
+    """Add the security headers and write whatever cookies this request decided on.
+
+    Every ``Set-Cookie`` this app sends is written here, from a decision a handler or
+    the error handler recorded on ``flask.g``. One place, so a cookie cannot be lost
+    by a handler whose response was later replaced by an error response, and so the
+    attributes of a write and of the matching delete cannot drift apart.
+    """
     for name, value in _SECURITY_HEADERS.items():
         response.headers[name] = value
-    if (
+
+    issued = getattr(flask.g, "issue_session", None)
+    if issued is not None:
+        _set_session_cookie(response, issued)
+    elif getattr(flask.g, "clear_session", False):
+        _clear_session_cookie(response)
+
+    rotated = getattr(flask.g, "rotate_csrf", None)
+    if rotated is not None:
+        _set_csrf_cookie(response, rotated)
+    elif getattr(flask.g, "clear_csrf", False):
+        _clear_csrf_cookie(response)
+    elif (
         flask.request.method in _CSRF_ISSUING_METHODS
         and CSRF_COOKIE not in flask.request.cookies
-        and not getattr(flask.g, "_csrf_written", False)
     ):
+        # Issued on the first safe request, so loading the shell always yields one
+        # and the login POST can carry a header before any session exists.
         _set_csrf_cookie(response, secrets.token_urlsafe(_CSRF_TOKEN_BYTES))
     return response
 
@@ -1467,11 +1497,12 @@ def _close_store(exception: BaseException | None) -> None:
 def _handle_error(error: Exception) -> flask.Response:
     """Turn any exception into the one JSON error body, at the mapped status.
 
-    A 4xx carries ``str(error)``: those strings were written deliberately in this repo
-    for a person to read, and task 7 already guarantees none of them contains a
-    password. A 5xx carries one fixed generic string and the real exception goes to the
-    log with its traceback, because a 500 message can carry a file path, a SQL fragment
-    or a stored hash.
+    Everything except a 500 carries ``str(error)``: those strings were written
+    deliberately in this repo for a person to read, and task 7 already guarantees none
+    of them contains a password. A 500 carries one fixed generic string and the real
+    exception goes to the log with its traceback, because a 500 message can carry a
+    file path, a SQL fragment or a stored hash. The two 503 rows keep their own
+    messages on purpose, because naming the setup command is the whole value of them.
 
     Routing's own refusals arrive here too, as exceptions carrying an HTTP status. Their
     response is reused so headers such as ``Allow`` survive, with the body replaced by
@@ -1486,16 +1517,21 @@ def _handle_error(error: Exception) -> flask.Response:
         return response
 
     status, code = _status_and_code(error)
-    if status >= 500:  # noqa: PLR2004 - the 4xx/5xx split is the contract itself
+    if status == _INTERNAL_ERROR_STATUS:
+        # The generic message and the logged traceback are for exactly this status:
+        # a 500 is either an unmapped failure or database damage, and its message can
+        # carry a file path, a SQL fragment or a stored hash. Every other status,
+        # 503 included, carries ``str(error)``: those strings were written
+        # deliberately in this repo for a person to read, which is why
+        # ``NoGroupConfigured`` can name the command that fixes it and
+        # ``AmbiguousGroup`` can name both group ids.
         flask.current_app.logger.exception(
             "%s %s failed with %s",
             flask.request.method,
             flask.request.path,
             type(error).__name__,
         )
-        response = _json_response(
-            _error_body(code, _GENERIC_500_MESSAGE), status
-        )
+        response = _json_response(_error_body(code, _GENERIC_500_MESSAGE), status)
     else:
         response = _json_response(_error_body(code, str(error)), status)
     retry_after = getattr(error, "retry_after", None)
@@ -1505,5 +1541,5 @@ def _handle_error(error: Exception) -> flask.Response:
         # Without this a stale token sits in the browser producing a 401 on every
         # request forever, and the user has no way to get rid of it. NotAuthenticated
         # clears nothing, because there was nothing there to clear.
-        _clear_session_cookie(response)
+        flask.g.clear_session = True
     return response

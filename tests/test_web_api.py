@@ -1227,3 +1227,814 @@ def test_logging_in_rotates_the_csrf_token(client) -> None:
     stale = send(client, "DELETE", "/api/session", headers={web.CSRF_HEADER: before})
     assert stale.status_code == 403
     assert send(client, "DELETE", "/api/session").status_code == 204
+
+
+# --- The rate limiter, on its own -------------------------------------------
+
+
+def test_the_published_limits_are_exactly_these_numbers() -> None:
+    # Asserted so changing one is a visible edit rather than a quiet drift.
+    from datetime import timedelta
+
+    assert web.LOGIN_WINDOW == timedelta(minutes=15)
+    assert web.LOGIN_LIMIT_PER_EMAIL == 10
+    assert web.LOGIN_LIMIT_PER_ADDRESS == 30
+    assert web.MAX_BODY_BYTES == 65536
+
+
+def test_the_limiter_is_guarded_by_a_lock() -> None:
+    import threading
+
+    limiter = web.RateLimiter()
+    assert isinstance(limiter._lock, type(threading.Lock()))
+
+
+def test_the_limiter_counts_only_failures_and_refuses_at_the_limit() -> None:
+    limiter = web.RateLimiter()
+    moment = at()
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        limiter.check("login_email", "sam@example.com", now=moment)
+        limiter.record_failure("login_email", "sam@example.com", now=moment)
+    with pytest.raises(web.TooManyAttempts):
+        limiter.check("login_email", "sam@example.com", now=moment)
+
+
+def test_the_window_is_fixed_and_expires_by_itself() -> None:
+    # Never a lockout: a sticky one, in a product with no password reset flow, locks a
+    # flatmate out permanently.
+    from datetime import timedelta
+
+    limiter = web.RateLimiter()
+    moment = at()
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        limiter.record_failure("login_email", "sam@example.com", now=moment)
+    with pytest.raises(web.TooManyAttempts):
+        limiter.check("login_email", "sam@example.com", now=moment)
+    just_inside = moment + web.LOGIN_WINDOW - timedelta(microseconds=1)
+    with pytest.raises(web.TooManyAttempts):
+        limiter.check("login_email", "sam@example.com", now=just_inside)
+    limiter.check("login_email", "sam@example.com", now=moment + web.LOGIN_WINDOW)
+    assert (
+        limiter.count("login_email", "sam@example.com", now=moment + web.LOGIN_WINDOW)
+        == 0
+    )
+
+
+def test_refusing_reports_whole_seconds_rounded_up() -> None:
+    from datetime import timedelta
+
+    limiter = web.RateLimiter()
+    moment = at()
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        limiter.record_failure("login_email", "sam@example.com", now=moment)
+    with pytest.raises(web.TooManyAttempts) as raised:
+        limiter.check(
+            "login_email", "sam@example.com", now=moment + timedelta(seconds=1)
+        )
+    assert raised.value.retry_after == 899
+    with pytest.raises(web.TooManyAttempts) as raised:
+        limiter.check(
+            "login_email",
+            "sam@example.com",
+            now=moment + timedelta(seconds=1, microseconds=1),
+        )
+    # Rounded up, because coming back at the instant the window is still closed is
+    # not an answer.
+    assert raised.value.retry_after == 899
+
+
+def test_a_success_clears_one_key_and_leaves_the_others() -> None:
+    limiter = web.RateLimiter()
+    moment = at()
+    limiter.record_failure("login_email", "sam@example.com", now=moment)
+    limiter.record_failure("login_address", "127.0.0.1", now=moment)
+    limiter.clear("login_email", "sam@example.com")
+    assert limiter.count("login_email", "sam@example.com", now=moment) == 0
+    assert limiter.count("login_address", "127.0.0.1", now=moment) == 1
+
+
+def test_each_map_is_capped_and_evicts_its_own_oldest_entry() -> None:
+    from datetime import timedelta
+
+    limiter = web.RateLimiter()
+    moment = at()
+    # All inside one window, so nothing is expired and the cap is what does the
+    # evicting rather than the clock.
+    for index in range(1024):
+        limiter.record_failure(
+            "login_email",
+            f"{index}@example.com",
+            now=moment + timedelta(milliseconds=index),
+        )
+    assert limiter.size("login_email") == 1024
+    later = moment + timedelta(milliseconds=1024)
+    limiter.record_failure("login_email", "one-too-many@example.com", now=later)
+    assert limiter.size("login_email") == 1024
+    assert limiter.count("login_email", "one-too-many@example.com", now=later) == 1
+    # The oldest window went, and only that one.
+    assert limiter.count("login_email", "0@example.com", now=later) == 0
+    assert limiter.count("login_email", "1@example.com", now=later) == 1
+
+
+def test_a_full_map_drops_its_expired_windows_before_it_evicts_a_live_one() -> None:
+    from datetime import timedelta
+
+    limiter = web.RateLimiter()
+    moment = at()
+    for index in range(1024):
+        limiter.record_failure(
+            "login_email",
+            f"{index}@example.com",
+            now=moment + timedelta(milliseconds=index),
+        )
+    # Every window above has fallen out of the fixed window by now, and a dead entry
+    # costs nothing to drop, so the cap never has to reach a live one.
+    later = moment + web.LOGIN_WINDOW + timedelta(seconds=10)
+    limiter.record_failure("login_email", "one-too-many@example.com", now=later)
+    assert limiter.size("login_email") == 1
+    assert limiter.count("login_email", "one-too-many@example.com", now=later) == 1
+
+
+def test_the_address_map_is_capped_separately_from_the_email_map() -> None:
+    from datetime import timedelta
+
+    # Address churn must not evict the email entry for the address being attacked.
+    limiter = web.RateLimiter()
+    moment = at()
+    limiter.record_failure("login_email", "sam@example.com", now=moment)
+    for index in range(4096 + 10):
+        limiter.record_failure(
+            "login_address",
+            f"10.0.{index // 256}.{index % 256}",
+            now=moment + timedelta(milliseconds=index),
+        )
+    assert limiter.size("login_address") == 4096
+    assert limiter.size("login_email") == 1
+    assert limiter.count("login_email", "sam@example.com", now=moment) == 1
+
+
+# --- Rate limiting through the API ------------------------------------------
+
+
+def test_the_tenth_failed_login_runs_and_the_eleventh_is_refused(client) -> None:
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        assert failed_login(client).status_code == 401
+    response = failed_login(client)
+    assert response.status_code == 429
+    assert response.get_json()["error"]["code"] == "too_many_attempts"
+    assert response.headers["Retry-After"].isdigit()
+    assert 0 < int(response.headers["Retry-After"]) <= 15 * 60
+
+
+def test_a_refused_login_never_runs_the_key_derivation(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The whole point of the limiter: scrypt costs 64 MiB and hundreds of
+    # milliseconds, so an unlimited login endpoint is a denial-of-service amplifier
+    # before it is a password oracle.
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        assert failed_login(client).status_code == 401
+
+    def must_not_run(*arguments, **keywords):
+        raise AssertionError("the KDF ran on a request the limiter had refused")
+
+    monkeypatch.setattr(web.accounts, "log_in", must_not_run)
+    assert failed_login(client).status_code == 429
+
+
+def test_a_successful_login_clears_that_email_and_leaves_the_address_alone(
+    app,
+) -> None:
+    client = app.test_client()
+    assert sign_up(client).status_code == 201
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL - 1):
+        assert log_in(client, password=OTHER_PASSWORD).status_code == 401
+    assert log_in(client).status_code == 200
+    # The email bucket was cleared, so the budget is whole again.
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        assert log_in(client, password=OTHER_PASSWORD).status_code == 401
+    assert log_in(client, password=OTHER_PASSWORD).status_code == 429
+
+
+def test_holding_one_valid_account_does_not_reset_the_address_budget(
+    app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = app.test_client()
+    exhaust_address_bucket(app)
+    assert sign_up(client, email="fresh@example.com").status_code == 201
+
+    def must_not_run(*arguments, **keywords):
+        raise AssertionError("the KDF ran on a request the limiter had refused")
+
+    monkeypatch.setattr(web.accounts, "log_in", must_not_run)
+    assert log_in(client, email="fresh@example.com").status_code == 429
+
+
+def test_fifty_correct_logins_in_one_window_are_never_limited(client) -> None:
+    assert sign_up(client).status_code == 201
+    for _ in range(50):
+        assert log_in(client).status_code == 200
+
+
+def test_the_refusal_says_the_same_thing_for_a_known_and_an_unknown_address(
+    app,
+) -> None:
+    known = app.test_client()
+    assert sign_up(known, email="known@example.com").status_code == 201
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        refused = log_in(known, email="known@example.com", password=OTHER_PASSWORD)
+        assert refused.status_code == 401
+    refused_known = log_in(known, email="known@example.com", password=OTHER_PASSWORD)
+
+    unknown = app.test_client()
+    for _ in range(web.LOGIN_LIMIT_PER_EMAIL):
+        assert log_in(unknown, email="unknown@example.com").status_code == 401
+    refused_unknown = log_in(unknown, email="unknown@example.com")
+
+    assert refused_known.status_code == 429
+    assert refused_unknown.status_code == 429
+    assert refused_known.data == refused_unknown.data
+    assert "known@example.com" not in refused_known.get_data(as_text=True)
+
+
+def test_signup_has_its_own_address_bucket(app) -> None:
+    client = app.test_client()
+    exhaust_address_bucket(app)
+    assert failed_login(client).status_code == 429
+    # The signup bucket is untouched by the login failures.
+    assert sign_up(client, email="fresh@example.com").status_code == 201
+
+
+def test_signup_is_limited_per_address_on_the_same_terms(app) -> None:
+    client = app.test_client()
+    for index in range(web.LOGIN_LIMIT_PER_ADDRESS):
+        # A blank display name is refused by the domain layer, so every one fails.
+        refused = sign_up(
+            client, email=f"person{index}@example.com", display_name=" "
+        )
+        assert refused.status_code == 400
+    response = sign_up(client, email="one-more@example.com")
+    assert response.status_code == 429
+    assert response.get_json()["error"]["code"] == "too_many_attempts"
+
+
+def code_string_constants(source: str) -> set[str]:
+    """Every string literal in the module that is not a docstring.
+
+    Read from the tree so a header named in prose, explaining why it is not trusted,
+    is not mistaken for code that reads it.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+        # A bare string statement documents the assignment above it, the way every
+        # module in this package documents its constants.
+        body = getattr(node, "body", [])
+        for statement in body if isinstance(body, list) else []:
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                docstrings.add(id(statement.value))
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    }
+
+
+def test_the_client_key_is_the_remote_address_and_never_a_header(app) -> None:
+    source = web_source()
+    literals = code_string_constants(source)
+    for header in ("X-Forwarded-For", "X-Real-IP", "Forwarded"):
+        assert header not in literals
+    assert "ProxyFix" not in source
+    assert "remote_addr" in source
+    # A second address has a second budget, which is what makes the key the address.
+    first = app.test_client()
+    for _ in range(web.LOGIN_LIMIT_PER_ADDRESS):
+        assert failed_login(first, "nobody@example.com").status_code in (401, 429)
+    other = app.test_client()
+    response = post(
+        other,
+        "/api/session",
+        {"email": "someone-else@example.com", "password": PASSWORD},
+        environ_base={"REMOTE_ADDR": "10.1.2.3"},
+    )
+    assert response.status_code == 401
+
+
+def test_the_limiter_needs_no_table_and_no_schema_change() -> None:
+    from splitwise_lite import store as store_module
+
+    assert store_module.SCHEMA_VERSION == 2
+    schema = store_module._SCHEMA_SQL.lower()
+    for word in ("attempt", "rate_limit", "throttle", "login_failure"):
+        assert word not in schema
+
+
+# --- The error contract -----------------------------------------------------
+
+
+ERROR_ROWS = [
+    (web.NotAuthenticated, 401, "not_authenticated"),
+    (web.accounts.SessionInvalid, 401, "session_invalid"),
+    (web.accounts.AuthenticationFailed, 401, "authentication_failed"),
+    (web.CsrfFailed, 403, "csrf_failed"),
+    (web.groups.MemberNotLinked, 403, "member_not_linked"),
+    (web.store.RecordNotFound, 404, "record_not_found"),
+    (web.accounts.EmailAlreadyRegistered, 409, "email_already_registered"),
+    (web.store.DuplicateRecord, 409, "duplicate_record"),
+    (web.store.ConstraintViolated, 409, "constraint_violated"),
+    (web.groups.GroupMismatch, 409, "group_mismatch"),
+    (web.groups.MemberAlreadyLinked, 409, "member_already_linked"),
+    (web.groups.UserAlreadyLinked, 409, "user_already_linked"),
+    (web.TooManyAttempts, 429, "too_many_attempts"),
+    (web.MalformedRequest, 400, "malformed_request"),
+    (web.accounts.InvalidEmail, 400, "invalid_email"),
+    (web.accounts.InvalidPassword, 400, "invalid_password"),
+    (web.money.InvalidAmount, 400, "invalid_amount"),
+    (web.money.InvalidCurrency, 400, "invalid_currency"),
+    (web.money.CurrencyMismatch, 400, "currency_mismatch"),
+    (web.split.InvalidSplit, 400, "invalid_split"),
+    (web.store.InvalidRecord, 400, "invalid_record"),
+    (web.store.AmountTooLarge, 400, "amount_too_large"),
+    (web.groups.NoGroupConfigured, 503, "no_group_configured"),
+    (web.groups.AmbiguousGroup, 503, "ambiguous_group"),
+    (web.accounts.PasswordHashInvalid, 500, "internal_error"),
+]
+
+
+@pytest.mark.parametrize(
+    "error, status, code", ERROR_ROWS, ids=[row[0].__name__ for row in ERROR_ROWS]
+)
+def test_every_mapped_error_carries_its_status_and_its_code(
+    error, status: int, code: str
+) -> None:
+    assert web.ERROR_STATUS[error] == status
+    assert web.ERROR_CODE[error] == code
+
+
+def test_the_two_tables_are_keyed_the_same_way_and_hold_exactly_these_rows() -> None:
+    assert set(web.ERROR_STATUS) == set(web.ERROR_CODE)
+    assert set(web.ERROR_STATUS) == {row[0] for row in ERROR_ROWS}
+
+
+DELIBERATELY_UNMAPPED = {
+    # Abstract bases. Every refusal is one of their concrete children, and giving a
+    # base a status would give one to something nothing raises.
+    "DomainError",
+    "AccountError",
+    "StoreError",
+    "GroupSetupError",
+    "WebError",
+    # Operational failures. One reaching the request layer means the deployment is
+    # broken, not the request, so the fallback 500 with a logged traceback is honest.
+    "CannotOpenStore",
+    "StoreClosed",
+    "StorageFailed",
+    "UnsupportedSQLiteVersion",
+    "UnsupportedSchemaVersion",
+    # Nothing a client body can provoke: every event this layer builds is checked
+    # against the roster and the resolver first, so reaching one is a bug here.
+    "InvalidEvent",
+    "InvalidAllocation",
+    "InvalidLedger",
+    "InvalidBalances",
+    # Raised only while reading an operator's roster file, which no endpoint does.
+    "InvalidGroupDefinition",
+}
+
+
+def test_no_domain_error_becomes_a_five_hundred_without_this_test_seeing_it() -> None:
+    from splitwise_lite import accounts as accounts_module
+    from splitwise_lite import balances as balances_module
+    from splitwise_lite import events as events_module
+    from splitwise_lite import groups as groups_module
+    from splitwise_lite import money as money_module
+    from splitwise_lite import simplify as simplify_module
+    from splitwise_lite import split as split_module
+    from splitwise_lite import store as store_module
+
+    modules = [
+        money_module,
+        events_module,
+        store_module,
+        accounts_module,
+        groups_module,
+        split_module,
+        balances_module,
+        simplify_module,
+        web,
+    ]
+    exported: set[str] = set()
+    for module in modules:
+        for name in module.__all__:
+            candidate = getattr(module, name)
+            if isinstance(candidate, type) and issubclass(
+                candidate, money_module.DomainError
+            ):
+                exported.add(name)
+    mapped = {error.__name__ for error in web.ERROR_STATUS}
+    assert mapped | DELIBERATELY_UNMAPPED == exported
+    assert not mapped & DELIBERATELY_UNMAPPED
+
+
+def test_a_subclass_of_a_mapped_error_inherits_its_row() -> None:
+    class SomethingMoreSpecific(web.store.RecordNotFound):
+        """A domain error a later task might add."""
+
+    assert web._status_and_code(SomethingMoreSpecific("gone")) == (
+        404,
+        "record_not_found",
+    )
+    assert web._status_and_code(RuntimeError("no idea")) == (500, "internal_error")
+
+
+@pytest.mark.parametrize(
+    "method, path, status",
+    [
+        ("GET", "/api/nope", 404),
+        ("PUT", "/api/session", 405),
+        ("GET", "/nothing-here.txt", 404),
+    ],
+)
+def test_every_error_body_is_the_one_json_shape(
+    client, method: str, path: str, status: int
+) -> None:
+    response = client.open(path, method=method)
+    assert response.status_code == status
+    assert response.headers["Content-Type"] == "application/json"
+    body = response.get_json()
+    assert set(body) == {"error"}
+    assert set(body["error"]) == {"code", "message"}
+    assert isinstance(body["error"]["code"], str)
+    assert isinstance(body["error"]["message"], str)
+
+
+def test_a_method_not_allowed_names_the_methods_that_are(client) -> None:
+    response = client.put("/api/session")
+    assert response.status_code == 405
+    allowed = {part.strip() for part in response.headers["Allow"].split(",")}
+    assert {"GET", "POST", "DELETE"} <= allowed
+    assert "PUT" not in allowed
+    assert response.get_json()["error"]["code"] == "method_not_allowed"
+
+
+def test_an_unknown_api_path_is_json_and_not_the_shell(client) -> None:
+    response = client.get("/api/nope")
+    assert response.status_code == 404
+    assert b"<!doctype html>" not in response.data
+    assert response.get_json()["error"]["code"] == "not_found"
+
+
+def test_a_body_over_the_cap_is_a_413_in_the_same_shape(client) -> None:
+    token = csrf_token(client)
+    oversized = b'{"email": "' + b"a" * (web.MAX_BODY_BYTES + 1) + b'"}'
+    response = client.post(
+        "/api/signup",
+        data=oversized,
+        content_type="application/json",
+        headers={web.CSRF_HEADER: token},
+    )
+    assert response.status_code == 413
+    body = response.get_json()
+    assert set(body["error"]) == {"code", "message"}
+    assert body["error"]["code"] == "request_too_large"
+
+
+def test_a_body_under_the_cap_is_not_refused_for_its_size(app, seeded: Path) -> None:
+    signed = linked_client(app, seeded)
+    padding = "a" * (web.MAX_BODY_BYTES - 500)
+    response = post(
+        signed,
+        "/api/expenses",
+        {
+            "description": padding,
+            "amount": "12.50",
+            "payer_id": "whoever",
+            "split": {"mode": "equal", "member_ids": []},
+        },
+    )
+    # Refused on its content, not on its size.
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "malformed_request"
+
+
+def test_a_five_hundred_hides_the_real_message_and_logs_it(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    import logging
+
+    signed = linked_client(app, seeded)
+    telling = "a frame naming C:/somewhere/private and a SELECT of its own"
+
+    def explode(*arguments, **keywords):
+        raise RuntimeError(telling)
+
+    monkeypatch.setattr(web.groups, "resolve_sole_group", explode)
+    with caplog.at_level(logging.ERROR):
+        response = signed.get("/api/session")
+    assert response.status_code == 500
+    assert response.headers["Content-Type"] == "application/json"
+    body = response.get_json()
+    assert body["error"]["code"] == "internal_error"
+    assert telling not in body["error"]["message"]
+    assert body["error"]["message"] == web._GENERIC_500_MESSAGE
+    assert telling in caplog.text
+    assert "Traceback" in caplog.text
+
+
+def test_an_unhandled_exception_is_not_werkzeugs_html_page(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+
+    def explode(*arguments, **keywords):
+        raise ZeroDivisionError("nowhere near a domain error")
+
+    monkeypatch.setattr(web.groups, "resolve_sole_group", explode)
+    response = signed.get("/api/session")
+    assert response.status_code == 500
+    assert b"<!doctype" not in response.data.lower()
+    assert b"<html" not in response.data.lower()
+    assert response.get_json()["error"]["code"] == "internal_error"
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (b"not json at all", "not valid JSON"),
+        (b"[1, 2, 3]", "must be a JSON object"),
+        (b'"a string"', "must be a JSON object"),
+        (b"null", "must be a JSON object"),
+    ],
+)
+def test_a_body_that_is_not_a_json_object_is_refused(
+    client, body: bytes, expected: str
+) -> None:
+    token = csrf_token(client)
+    response = client.post(
+        "/api/signup",
+        data=body,
+        content_type="application/json",
+        headers={web.CSRF_HEADER: token},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "malformed_request"
+    assert expected in response.get_json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "payload, named",
+    [
+        ({"display_name": "Sam", "password": PASSWORD}, "'email'"),
+        ({"email": "sam@example.com", "password": PASSWORD}, "'display_name'"),
+        ({"email": "sam@example.com", "display_name": "Sam"}, "'password'"),
+        ({"email": 12, "display_name": "Sam", "password": PASSWORD}, "'email'"),
+        (
+            {
+                "email": "sam@example.com",
+                "display_name": "Sam",
+                "password": PASSWORD,
+                "role": "admin",
+            },
+            "'role'",
+        ),
+    ],
+)
+def test_a_body_of_the_wrong_shape_names_the_key(client, payload, named: str) -> None:
+    response = post(client, "/api/signup", payload)
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert named in body["error"]["message"]
+
+
+@pytest.mark.parametrize("key", ["currency", "created_by", "created_at", "id", "now"])
+def test_an_expense_body_may_not_name_what_the_server_decides(
+    app, seeded: Path, key: str
+) -> None:
+    signed = linked_client(app, seeded)
+    members = signed.get("/api/members").get_json()["members"]
+    payload = {
+        "description": "Milk",
+        "amount": "12.50",
+        "payer_id": members[0]["id"],
+        "split": {"mode": "equal", "member_ids": [members[0]["id"]]},
+        key: "anything",
+    }
+    response = post(signed, "/api/expenses", payload)
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert repr(key) in body["error"]["message"]
+
+
+def test_no_message_or_log_record_ever_carries_a_password(app, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    secret = "a passphrase nobody should ever see again"
+    client = app.test_client()
+    responses = [
+        sign_up(client, email="not an address", password=secret),
+        sign_up(client, email="sam@example.com", password="short"),
+        post(
+            client,
+            "/api/signup",
+            {
+                "email": "sam@example.com",
+                "display_name": "Sam",
+                "password": secret,
+                "confirm_password": secret,
+            },
+        ),
+        post(client, "/api/session", {"email": "sam@example.com", "password": secret}),
+    ]
+    for response in responses:
+        assert response.status_code >= 400
+        text = response.get_data(as_text=True)
+        assert secret not in text
+        assert "scrypt$" not in text
+        assert ".sqlite3" not in text
+        assert "C:" not in text
+    assert secret not in caplog.text
+
+
+# --- Authentication and the member link -------------------------------------
+
+
+SIGNUP_BODY = {
+    "email": "stranger@example.com",
+    "display_name": "Stranger",
+    "password": PASSWORD,
+}
+LOGIN_BODY = {"email": "stranger@example.com", "password": PASSWORD}
+EXPENSE_BODY = {
+    "description": "Milk",
+    "amount": "12.50",
+    "payer_id": "whoever",
+    "split": {"mode": "equal", "member_ids": []},
+}
+
+# (method, path, body, the status with no cookies at all, the status with only the
+# CSRF gates met). The CSRF token is not a credential, so the second column is the
+# unauthenticated case the endpoints are specified against; the first is what a
+# request that proves nothing at all gets.
+ENDPOINT_ROWS = [
+    ("POST", "/api/signup", SIGNUP_BODY, 403, 201),
+    ("POST", "/api/session", LOGIN_BODY, 403, 401),
+    ("GET", "/api/session", None, 401, 401),
+    ("DELETE", "/api/session", None, 403, 204),
+    ("GET", "/api/members", None, 401, 401),
+    ("GET", "/api/expenses", None, 401, 401),
+    ("POST", "/api/expenses", EXPENSE_BODY, 403, 401),
+    ("GET", "/api/balances", None, 401, 401),
+]
+
+
+def test_the_endpoint_table_names_every_route_the_app_serves(app) -> None:
+    # Adding a route without adding a row fails here.
+    listed = {(method, path) for method, path, *_ in ENDPOINT_ROWS}
+    served = set()
+    for rule in app.url_map.iter_rules():
+        if not rule.rule.startswith("/api"):
+            continue
+        for method in (rule.methods or set()) - {"HEAD", "OPTIONS"}:
+            served.add((method, rule.rule))
+    assert listed == served
+
+
+@pytest.mark.parametrize(
+    "method, path, body, bare, gated",
+    ENDPOINT_ROWS,
+    ids=[f"{row[0]} {row[1]}" for row in ENDPOINT_ROWS],
+)
+def test_every_endpoint_refuses_an_unauthenticated_caller(
+    app, method: str, path: str, body, bare: int, gated: int
+) -> None:
+    bare_client = app.test_client()
+    response = bare_client.open(path, method=method, json={} if body is None else body)
+    assert response.status_code == bare, (method, path)
+
+    gated_client = app.test_client()
+    assert send(gated_client, method, path, body).status_code == gated, (method, path)
+
+
+UNLINKED_ROWS = [
+    (
+        "POST",
+        "/api/signup",
+        {
+            "email": "other@example.com",
+            "display_name": "Other",
+            "password": PASSWORD,
+        },
+        201,
+    ),
+    ("POST", "/api/session", {"email": "sam@example.com", "password": PASSWORD}, 200),
+    ("GET", "/api/session", None, 200),
+    ("DELETE", "/api/session", None, 204),
+    ("GET", "/api/members", None, 403),
+    ("GET", "/api/expenses", None, 403),
+    ("POST", "/api/expenses", EXPENSE_BODY, 403),
+    ("GET", "/api/balances", None, 403),
+]
+
+
+@pytest.mark.parametrize(
+    "method, path, body, status",
+    UNLINKED_ROWS,
+    ids=[f"{row[0]} {row[1]}" for row in UNLINKED_ROWS],
+)
+def test_a_signed_in_user_with_no_member_row_may_not_read_the_ledger(
+    app, method: str, path: str, body, status: int
+) -> None:
+    # Signup grants nothing at all: no group, no member link, no data. If an unlinked
+    # account could read the feed, any stranger who signed up could read the flat's
+    # spending.
+    client = app.test_client()
+    assert sign_up(client).status_code == 201
+    assert log_in(client).status_code == 200
+    response = send(client, method, path, body)
+    assert response.status_code == status, (method, path)
+    if status == 403:
+        assert response.get_json()["error"]["code"] == "member_not_linked"
+    if path == "/api/session" and method == "GET":
+        assert response.get_json()["member"] is None
+
+
+def test_the_member_requirement_is_the_default_and_the_exemptions_are_named() -> None:
+    assert web._MEMBER_OPTIONAL_ENDPOINTS == (
+        "signup",
+        "create_session",
+        "read_session",
+        "delete_session",
+    )
+    assert set(web._MEMBER_OPTIONAL_ENDPOINTS) < web._API_ENDPOINTS
+
+
+def test_authentication_is_checked_before_the_group_is_resolved(empty_app) -> None:
+    # An unauthenticated caller must not learn how the server is configured.
+    response = empty_app.test_client().get("/api/session")
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "not_authenticated"
+
+
+def test_a_signed_in_user_against_an_unconfigured_store_is_told_to_run_setup(
+    empty_app,
+) -> None:
+    client = empty_app.test_client()
+    assert sign_up(client).status_code == 201
+    # Signing in writes the session row and then cannot render the view, so the same
+    # 503 comes back. The cookie is still set, because the session genuinely exists
+    # and a live row the browser was never told about is a leak, not a tidy failure.
+    signing_in = log_in(client)
+    assert signing_in.status_code == 503
+    assert signing_in.get_json()["error"]["code"] == "no_group_configured"
+    assert set_cookies(signing_in)[web.SESSION_COOKIE]["max-age"] == "2592000"
+
+    response = client.get("/api/session")
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["error"]["code"] == "no_group_configured"
+    assert "setup_group.py" in body["error"]["message"]
+
+
+def test_two_groups_are_refused_with_both_ids_named(seeded: Path) -> None:
+    from splitwise_lite.events import GroupId, new_id
+    from splitwise_lite.store import Group
+
+    with open_store(seeded) as store:
+        first = store.list_groups()[0]
+        second = Group(GroupId(new_id()), "Flat 4", Currency("AUD"), at(10))
+        store.add_group(second)
+        ids = sorted([first.id, second.id])
+
+    app = web.create_app(
+        store_path=seeded, secure_cookies=False, scrypt_params=CHEAP
+    )
+    client = app.test_client()
+    assert sign_up(client).status_code == 201
+    assert log_in(client).status_code == 503
+    response = client.get("/api/session")
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["error"]["code"] == "ambiguous_group"
+    for group_id in ids:
+        assert group_id in body["error"]["message"]
