@@ -1,0 +1,889 @@
+/* Splitwise Lite shell harness: runs the shipped app/ files and asserts what a
+   person would see.
+
+   Why this exists. Task 9a's test for a refused sign-in sliced the body of
+   submitted() out of app/app.js and asserted substrings against that slice. The
+   defect it was written to pin is an ordering defect spread across three functions in
+   two files, announce() in api.js and showGate() and submitted() in app.js, so a test
+   that reads the text of one of them cannot see it by construction. Two mutants prove
+   it: both reintroduce the defect and leave the sliced function byte-identical, and
+   the structural test passed both.
+
+   The two mutants this harness is measured against, applied to the real source at run
+   time as anchored substitutions and never committed as copies:
+
+     A. app/app.js, inside show():  gate.hidden = which !== 'gate';
+        gains                       gateError.hidden = true;
+     B. app/api.js, inside announce(): handlers.unauthenticated(error);
+        becomes  setTimeout(function () { handlers.unauthenticated(error); }, 0);
+
+   Mutant B is only visible once the timer queue has drained, not just the microtask
+   queue, which is why settle() drains both.
+
+   What stays browser-only. The harness must not pretend to cover any of this, and no
+   scenario is named as if it did. These stay on the hand checklist in
+   plans/tasks/09a-application-server-and-http-api.md:
+
+     * Service worker registration, activation, scope, skipWaiting, clients.claim and
+       the /api bypass. The stub navigator deliberately has no serviceWorker.
+     * Cache Storage: what is in it, that there is one cache, and that bumping VERSION
+       clears the old ones.
+     * Installability: manifest parsing, the install affordance, launching standalone,
+       and whether an installed window shares the browser's cookie jar.
+     * Offline reload of the document itself. This stubs fetch, not a lost network.
+     * Real cookie enforcement. HttpOnly, SameSite and Secure are a browser's job, not
+       a fake document.cookie's.
+     * Console cleanliness in a real browser, including the service worker warning path
+       this never enters.
+     * Focus actually announcing a screen. focus() being called is recorded here;
+       whether a screen reader says anything is a different question.
+     * Layout: viewport, safe area insets, hit areas, font sizes, iOS auto-zoom.
+     * A disabled button really refusing a second click. Handlers are dispatched
+       directly here, so that cannot be proven and is not claimed.
+
+   Usage. pytest drives this through tests/test_shell_behaviour.py, passing a JSON
+   configuration on stdin and reading one JSON report from stdout. To run it by hand
+   against the unmodified files:
+
+       node tests/shell_harness.mjs < /dev/null
+
+   Exit status is 0 when every requested scenario passed, 1 when one or more failed,
+   and 2 for a harness error: unparseable stdin, an anchor that did not match exactly
+   once, a missing file, a script that threw while loading, or a run that would not
+   quiesce. The 1 and 2 distinction is not decoration: the mutant tests assert exit 1
+   so that a substitution which broke a file into a syntax error cannot be mistaken
+   for a killed mutant. */
+
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+
+/* Files are found from this file's own location, never from the working directory,
+   matching every other test file in this repo. */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = resolve(HERE, '..');
+const APP = join(REPO, 'app');
+
+/* The error codes the response fixtures name. They are the real ones, and
+   tests/test_shell_behaviour.py asserts each appears in src/splitwise_lite/web.py, so
+   a fixture cannot drift away from the contract it is imitating. */
+const CODES = {
+  authenticationFailed: 'authentication_failed',
+  memberNotLinked: 'member_not_linked',
+  internalError: 'internal_error'
+};
+
+/* A harness error, as opposed to a scenario failure: the run itself is broken, so it
+   exits 2 and reports nothing. */
+class HarnessError extends Error {}
+
+/* --- The document ---------------------------------------------------------- */
+
+/* index.html is parsed rather than declared, so a renamed id is a loud harness
+   failure instead of a hand-written stub that quietly drifts from the document the
+   browser loads. */
+const VOID_TAGS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr'
+]);
+
+const ATTRIBUTE = /([a-zA-Z][a-zA-Z0-9:_.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+
+function element(tag, attributes, sink) {
+  const own = {
+    tagName: tag.toUpperCase(),
+    attributes: attributes,
+    childNodes: [],
+    /* Every element carries these because a browser's does; they stay null unless a
+       shipped file assigns a loader callback to a <script> it created. */
+    onload: null,
+    onerror: null,
+    src: attributes.src === undefined ? '' : attributes.src,
+    /* The value property is not reflected back to the attribute, which is what a
+       browser does once a field has been typed into. */
+    value: attributes.value === undefined ? '' : attributes.value,
+    disabled: attributes.disabled !== undefined,
+
+    get hidden() {
+      return own.attributes.hidden !== undefined;
+    },
+    set hidden(on) {
+      if (on) {
+        own.attributes.hidden = '';
+      } else {
+        delete own.attributes.hidden;
+      }
+    },
+
+    get textContent() {
+      return own.childNodes
+        .map((node) => (node.tagName === undefined ? node.text : node.textContent))
+        .join('');
+    },
+    set textContent(text) {
+      own.childNodes = [{ text: String(text) }];
+    },
+
+    getAttribute(name) {
+      return own.attributes[name] === undefined ? null : own.attributes[name];
+    },
+    setAttribute(name, value) {
+      own.attributes[name] = String(value);
+    },
+    removeAttribute(name) {
+      delete own.attributes[name];
+    },
+    addEventListener(type, handler) {
+      const listeners = own.listeners[type] || [];
+      listeners.push(handler);
+      own.listeners[type] = listeners;
+    },
+    focus() {
+      /* Recorded rather than acted on, so a scenario can assert which element the
+         app moved focus to. Whether a screen reader announces it is browser-only. */
+      sink.focused = own.self;
+    },
+    querySelector(selector) {
+      return select(own, selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      return select(own, selector);
+    },
+    listeners: {},
+    classList: (attributes.class || '').split(/\s+/).filter(Boolean)
+  };
+  /* Everything else holds the guarded view, so the element hands that back rather
+     than its raw target and an identity comparison in a scenario means what it says. */
+  own.self = guarded(own, 'element <' + tag + '>');
+  return own.self;
+}
+
+/* Anything a shipped file reaches for that the stub does not provide throws with a
+   message naming it, rather than returning undefined and producing a confusing
+   failure three steps later. */
+function guarded(target, what) {
+  return new Proxy(target, {
+    get(object, property) {
+      if (typeof property === 'symbol' || property in object) {
+        return object[property];
+      }
+      throw new Error(
+        'the stub ' + what + ' has no ' + String(property) + '; the harness fakes ' +
+          'only what a shipped file uses, so widen it deliberately'
+      );
+    }
+  });
+}
+
+function parseDocument(html, sink) {
+  const root = element('#document', {}, sink);
+  const stack = [root];
+  const byId = new Map();
+  let index = 0;
+
+  const top = () => stack[stack.length - 1];
+  const addText = (text) => {
+    if (text !== '') {
+      top().childNodes.push({ text: text });
+    }
+  };
+
+  while (index < html.length) {
+    const open = html.indexOf('<', index);
+    if (open === -1) {
+      addText(html.slice(index));
+      break;
+    }
+    addText(html.slice(index, open));
+    if (html.startsWith('<!--', open)) {
+      const close = html.indexOf('-->', open);
+      if (close === -1) {
+        throw new HarnessError('app/index.html has an unterminated comment');
+      }
+      index = close + 3;
+      continue;
+    }
+    if (html.startsWith('<!', open)) {
+      index = html.indexOf('>', open) + 1;
+      continue;
+    }
+    const close = html.indexOf('>', open);
+    if (close === -1) {
+      throw new HarnessError('app/index.html has an unterminated tag');
+    }
+    let raw = html.slice(open + 1, close);
+    index = close + 1;
+    if (raw.startsWith('/')) {
+      const name = raw.slice(1).trim().toLowerCase();
+      if (top().tagName !== name.toUpperCase()) {
+        throw new HarnessError(
+          'app/index.html closes </' + name + '> inside <' + top().tagName + '>'
+        );
+      }
+      stack.pop();
+      continue;
+    }
+    const selfClosing = raw.endsWith('/');
+    if (selfClosing) {
+      raw = raw.slice(0, -1);
+    }
+    const space = raw.search(/\s/);
+    const tag = (space === -1 ? raw : raw.slice(0, space)).toLowerCase();
+    const attributes = {};
+    if (space !== -1) {
+      ATTRIBUTE.lastIndex = 0;
+      let found = ATTRIBUTE.exec(raw.slice(space));
+      while (found !== null) {
+        const value = found[2] !== undefined ? found[2] : found[3] !== undefined ? found[3] : found[4];
+        attributes[found[1]] = value === undefined ? '' : value;
+        found = ATTRIBUTE.exec(raw.slice(space));
+      }
+    }
+    const node = element(tag, attributes, sink);
+    top().childNodes.push(node);
+    if (attributes.id !== undefined) {
+      if (byId.has(attributes.id)) {
+        throw new HarnessError('app/index.html has two elements with id ' + attributes.id);
+      }
+      byId.set(attributes.id, node);
+    }
+    if (!selfClosing && !VOID_TAGS.has(tag)) {
+      stack.push(node);
+    }
+  }
+  return { root: root, byId: byId };
+}
+
+/* Exactly the four selector shapes app.js uses: #id, .class, ".class tag" and a bare
+   tag scoped to an element. Anything else throws rather than returning null, so a
+   screen task that introduces an attribute selector breaks the harness visibly and
+   someone widens it deliberately. */
+function simple(part, selector) {
+  if (/^#[A-Za-z][\w-]*$/.test(part)) {
+    return { kind: 'id', value: part.slice(1) };
+  }
+  if (/^\.[A-Za-z][\w-]*$/.test(part)) {
+    return { kind: 'class', value: part.slice(1) };
+  }
+  if (/^[a-z][a-z0-9]*$/.test(part)) {
+    return { kind: 'tag', value: part };
+  }
+  throw new Error(unsupported(selector));
+}
+
+function unsupported(selector) {
+  return (
+    'the stub supports #id, .class, ".class tag" and a bare tag; it cannot handle ' +
+    JSON.stringify(selector)
+  );
+}
+
+function matches(node, part) {
+  if (part.kind === 'id') {
+    return node.attributes.id === part.value;
+  }
+  if (part.kind === 'class') {
+    return node.classList.indexOf(part.value) !== -1;
+  }
+  return node.tagName === part.value.toUpperCase();
+}
+
+function descendants(node, found) {
+  node.childNodes.forEach((child) => {
+    if (child.tagName !== undefined) {
+      found.push(child);
+      descendants(child, found);
+    }
+  });
+  return found;
+}
+
+function select(root, selector) {
+  const parts = String(selector).trim().split(/\s+/);
+  if (parts.length > 2) {
+    throw new Error(unsupported(selector));
+  }
+  const steps = parts.map((part) => simple(part, selector));
+  if (steps.length === 2 && (steps[0].kind !== 'class' || steps[1].kind !== 'tag')) {
+    throw new Error(unsupported(selector));
+  }
+  const all = descendants(root, []);
+  const first = all.filter((node) => matches(node, steps[0]));
+  if (steps.length === 1) {
+    return first;
+  }
+  const found = [];
+  first.forEach((node) => {
+    descendants(node, []).forEach((child) => {
+      if (matches(child, steps[1]) && found.indexOf(child) === -1) {
+        found.push(child);
+      }
+    });
+  });
+  return found;
+}
+
+/* --- Response fixtures ------------------------------------------------------ */
+
+/* The shapes web.py actually returns. A response is answered to api.js, which reads
+   status, ok and json() and nothing else. */
+function ok(payload) {
+  return { status: 200, ok: true, json: () => Promise.resolve(payload) };
+}
+
+function failure(status, code, message) {
+  return {
+    status: status,
+    ok: false,
+    json: () => Promise.resolve({ error: { code: code, message: message } })
+  };
+}
+
+function unreadable(status) {
+  /* A body that is not JSON: api.js swallows this into a null payload and an
+     ApiError with an empty message. */
+  return {
+    status: status,
+    ok: false,
+    json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON'))
+  };
+}
+
+function noContent(sink) {
+  return {
+    status: 204,
+    ok: true,
+    json: () => {
+      /* A 204 has no body, so api.js must return null without ever calling this. */
+      sink.parsedANoContentBody = true;
+      throw new Error('json() was called on a 204 response');
+    }
+  };
+}
+
+function networkFailure() {
+  /* fetch itself rejects, which is what a real fetch does when the request never
+     gets an answer. */
+  return { rejectWith: () => new TypeError('Failed to fetch') };
+}
+
+/* --- One scenario ----------------------------------------------------------- */
+
+const SETTLE_STEPS = 1000;
+
+function page(scripts, name, provokeRunawayTimer) {
+  const sink = { focused: null, parsedANoContentBody: false };
+  const parsed = parseDocument(readFileSync(join(APP, 'index.html'), 'utf8'), sink);
+  const failures = [];
+  const calls = [];
+  const answers = new Map();
+  const consoleLines = [];
+  const missing = new Set();
+  const replaceStates = [];
+  const pushStates = [];
+  const windowEvents = [];
+  const timers = [];
+  let cookie = '';
+  let sequence = 0;
+  let declaredConsole = [];
+
+  const byId = (id) => {
+    const found = parsed.byId.get(id);
+    if (found === undefined) {
+      /* Never a silent null: a mistyped or renamed id is the one thing that turns
+         the boot wiring into a blank page. */
+      throw new HarnessError('app/index.html has no element with id ' + id);
+    }
+    return found;
+  };
+
+  const schedule = (handler, delay) => {
+    sequence += 1;
+    const timer = { id: sequence, at: Number(delay) || 0, order: sequence, handler: handler };
+    timers.push(timer);
+    return timer.id;
+  };
+
+  const setTimeoutStub = (handler, delay) => schedule(handler, delay);
+  const clearTimeoutStub = (id) => {
+    const at = timers.findIndex((timer) => timer.id === id);
+    if (at !== -1) {
+      timers.splice(at, 1);
+    }
+  };
+
+  const runNextTimer = () => {
+    /* The declared delay is ordering information only, never elapsed time: nothing
+       here sleeps and no assertion reads the wall clock. Equal delays run in
+       scheduling order. */
+    let pick = 0;
+    for (let index = 1; index < timers.length; index += 1) {
+      const candidate = timers[index];
+      const best = timers[pick];
+      if (candidate.at < best.at || (candidate.at === best.at && candidate.order < best.order)) {
+        pick = index;
+      }
+    }
+    const timer = timers.splice(pick, 1)[0];
+    timer.handler();
+  };
+
+  const loadScript = (node) => {
+    const source = String(node.src);
+    const path = join(APP, source);
+    if (!path.startsWith(APP)) {
+      throw new HarnessError('a script src escaped app/: ' + source);
+    }
+    /* A browser fetches the src and runs it as a macrotask, so api.js runs, then
+       onload fires, then wire() runs. Doing it synchronously here would hide that
+       ordering, which is exactly the kind of thing this harness exists to see. */
+    schedule(() => {
+      if (missing.has(source) || !existsSync(path)) {
+        if (node.onerror) {
+          node.onerror();
+        }
+        return;
+      }
+      const script = scripts.get(path);
+      if (script === undefined) {
+        throw new HarnessError('the harness has no compiled script for ' + source);
+      }
+      script.runInContext(sandbox);
+      if (node.onload) {
+        node.onload();
+      }
+    }, 0);
+  };
+
+  const head = byId === null ? null : select(parsed.root, 'head')[0];
+  head.appendChild = (node) => {
+    head.childNodes.push(node);
+    if (node.tagName === 'SCRIPT' && node.src !== '') {
+      loadScript(node);
+    }
+  };
+
+  const titleElement = select(parsed.root, 'title')[0];
+  const documentStub = guarded(
+    {
+      getElementById: byId,
+      querySelector: (selector) => select(parsed.root, selector)[0] || null,
+      querySelectorAll: (selector) => select(parsed.root, selector),
+      createElement: (tag) => element(String(tag).toLowerCase(), {}, sink),
+      head: head,
+      get title() {
+        return titleElement.textContent;
+      },
+      set title(text) {
+        titleElement.textContent = text;
+      },
+      get cookie() {
+        /* Read-only: no shipped file writes a cookie, and the session cookie is
+           HttpOnly anyway. The scenario owns the jar. */
+        return cookie;
+      }
+    },
+    'document'
+  );
+
+  const fetchStub = (url, options) => {
+    const method = String(options.method);
+    const headers = {};
+    Object.keys(options.headers || {}).forEach((key) => {
+      headers[key] = options.headers[key];
+    });
+    calls.push({
+      method: method,
+      url: String(url),
+      headers: headers,
+      body: options.body === undefined ? null : String(options.body),
+      credentials: options.credentials === undefined ? null : options.credentials
+    });
+    const key = method + ' ' + url;
+    const queue = answers.get(key);
+    if (queue === undefined || queue.length === 0) {
+      /* Never served the next thing in a queue: a call nobody registered an answer
+         for is a failure naming the method and the path, so a screen task that adds
+         a call at boot fails loudly and has to register its answer. */
+      throw new Error('no answer was registered for ' + key);
+    }
+    const answer = queue.length === 1 ? queue[0] : queue.shift();
+    if (answer.rejectWith) {
+      return Promise.reject(answer.rejectWith());
+    }
+    return Promise.resolve(answer);
+  };
+
+  const record = (method) => (...args) => {
+    consoleLines.push(method + ': ' + args.map((arg) => String(arg)).join(' '));
+  };
+
+  const sandbox = {};
+  vm.createContext(sandbox);
+  /* window is the context's own global, as in a browser, so window.SplitwiseApi set
+     by api.js is reachable as a bare SplitwiseApi from app.js. Assigning it from out
+     here would make window a different object from globalThis. */
+  vm.runInContext('globalThis.window = globalThis;', sandbox);
+  sandbox.document = documentStub;
+  sandbox.location = { hash: '' };
+  sandbox.history = guarded(
+    {
+      replaceState: (state, title, url) => {
+        replaceStates.push(String(url));
+        sandbox.location.hash = String(url);
+      },
+      /* Present only so a scenario can assert it was never called: "replace, never
+         push" is a decision task 8 made. */
+      pushState: (state, title, url) => {
+        pushStates.push(String(url));
+      }
+    },
+    'history'
+  );
+  /* No serviceWorker property, so 'serviceWorker' in navigator is false and the
+     registration branch is never entered. The harness does not pretend to cover
+     service workers, and this is how it stays honest about that. */
+  sandbox.navigator = {};
+  sandbox.console = {
+    log: record('log'),
+    info: record('info'),
+    warn: record('warn'),
+    error: record('error'),
+    debug: record('debug')
+  };
+  sandbox.setTimeout = setTimeoutStub;
+  sandbox.clearTimeout = clearTimeoutStub;
+  sandbox.fetch = fetchStub;
+  sandbox.addEventListener = (type, handler) => {
+    windowEvents.push(String(type));
+    const listeners = windowListeners[type] || [];
+    listeners.push(handler);
+    windowListeners[type] = listeners;
+  };
+  const windowListeners = {};
+
+  const drainMicrotasks = async () => {
+    /* Returning to the event loop drains the microtask queue to empty, so two hops
+       finish a chain that queued more work while the first drain was running. */
+    await new Promise((done) => setImmediate(done));
+    await new Promise((done) => setImmediate(done));
+  };
+
+  const settle = async () => {
+    /* Bounded on purpose: a run that will not quiesce fails with the scenario's name
+       rather than hanging the suite. */
+    for (let step = 0; step < SETTLE_STEPS; step += 1) {
+      await drainMicrotasks();
+      if (timers.length === 0) {
+        return;
+      }
+      runNextTimer();
+    }
+    throw new HarnessError(
+      'settle() did not quiesce within ' + SETTLE_STEPS + ' steps in scenario ' + name
+    );
+  };
+
+  const api = {
+    /* --- setting a scenario up, before boot --- */
+    respond(method, path, response) {
+      answers.set(method + ' /api' + path, [response]);
+    },
+    respondInOrder(method, path, responses) {
+      answers.set(method + ' /api' + path, responses.slice());
+    },
+    setCookie(text) {
+      cookie = String(text);
+    },
+    startAt(hash) {
+      sandbox.location.hash = String(hash);
+    },
+    absent(source) {
+      /* The file is on disk; the scenario declares it absent so app.js's onerror
+         path, which is real shipped code, gets a run. */
+      missing.add(source);
+    },
+    expectConsole(lines) {
+      declaredConsole = lines.slice();
+    },
+
+    /* --- driving --- */
+    async boot() {
+      if (provokeRunawayTimer) {
+        /* Harness-owned, and only when the configuration asks for it: a timer that
+           reschedules itself, to prove settle() is bounded. */
+        const again = () => schedule(again, 0);
+        schedule(again, 0);
+      }
+      scripts.get(join(APP, 'app.js')).runInContext(sandbox);
+      await settle();
+    },
+    async dispatch(element, type) {
+      const event = { type: type, defaultPrevented: false, preventDefault() { event.defaultPrevented = true; } };
+      (element.listeners[type] || []).forEach((handler) => handler(event));
+      await settle();
+      return event;
+    },
+    async dispatchWindow(type) {
+      (windowListeners[type] || []).forEach((handler) => handler({ type: type }));
+      await settle();
+    },
+    async settle() {
+      await settle();
+    },
+
+    /* --- looking --- */
+    el: byId,
+    query: (selector) => select(parsed.root, selector),
+    get calls() {
+      return calls;
+    },
+    get requests() {
+      return calls.map((call) => call.method + ' ' + call.url);
+    },
+    get focused() {
+      return sink.focused;
+    },
+    get hash() {
+      return sandbox.location.hash;
+    },
+    get title() {
+      return documentStub.title;
+    },
+    get replaceStates() {
+      return replaceStates;
+    },
+    get pushStates() {
+      return pushStates;
+    },
+    get parsedANoContentBody() {
+      return sink.parsedANoContentBody;
+    },
+    global(expression) {
+      return vm.runInContext(expression, sandbox);
+    },
+
+    /* --- asserting --- */
+    is(actual, expected, what) {
+      if (actual !== expected) {
+        failures.push(what + ': expected ' + show(expected) + ', got ' + show(actual));
+      }
+    },
+    same(actual, expected, what) {
+      const left = JSON.stringify(actual);
+      const right = JSON.stringify(expected);
+      if (left !== right) {
+        failures.push(what + ': expected ' + right + ', got ' + left);
+      }
+    },
+    ok(condition, what) {
+      if (!condition) {
+        failures.push(what);
+      }
+    },
+    fail(message) {
+      failures.push(message);
+    },
+
+    /* --- the record the runner reads --- */
+    failures: failures,
+    windowEvents: windowEvents,
+    finish() {
+      /* Any console output a scenario did not declare is a failure: a warning nobody
+         asked for is a change in behaviour. */
+      if (JSON.stringify(consoleLines) !== JSON.stringify(declaredConsole)) {
+        failures.push(
+          'console output: expected ' + JSON.stringify(declaredConsole) + ', got ' +
+            JSON.stringify(consoleLines)
+        );
+      }
+    }
+  };
+  return api;
+}
+
+function show(value) {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
+/* --- The scenarios ---------------------------------------------------------- */
+
+const A_MEMBER = {
+  account: { id: 'acc-1', email: 'sam@example.com', display_name: 'Sam' },
+  group: { id: 'grp-1', name: 'Flat', currency: 'AUD' },
+  member: { id: 'mem-1', display_name: 'Sam' }
+};
+const NO_MEMBER = {
+  account: { id: 'acc-1', email: 'sam@example.com', display_name: 'Sam' },
+  group: { id: 'grp-1', name: 'Flat', currency: 'AUD' },
+  member: null
+};
+const REFUSED = 'Those details did not match an account.';
+const SIGN_IN_FIRST = 'Sign in to continue.';
+
+const refusal = (message) => failure(401, CODES.authenticationFailed, message);
+const notLinked = () =>
+  failure(403, CODES.memberNotLinked, 'Nobody has linked you to a member yet.');
+const serverError = () => failure(500, CODES.internalError, 'Something went wrong.');
+
+function gateIsUp(page, what) {
+  page.is(page.el('gate').hidden, false, what + ': #gate visible');
+  page.is(page.query('.content')[0].hidden, true, what + ': the app frame hidden');
+  page.is(page.query('.tabbar')[0].hidden, true, what + ': the tab bar hidden');
+  page.is(page.el('notice').hidden, true, what + ': #notice hidden');
+}
+
+const SCENARIOS = [
+  {
+    name: 'boot_with_no_session_shows_the_gate',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      await page.boot();
+      gateIsUp(page, 'no session');
+      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
+      page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, '', '#gate-error text');
+      page.is(page.focused, page.el('gate-title'), 'focus');
+      page.same(page.requests, ['GET /api/session'], 'requests');
+    }
+  }
+];
+
+/* --- Running ---------------------------------------------------------------- */
+
+function readSource(relative, substitutions) {
+  const path = join(REPO, relative);
+  if (!path.startsWith(REPO)) {
+    throw new HarnessError('a substitution named a path outside the repository: ' + relative);
+  }
+  if (!existsSync(path)) {
+    throw new HarnessError('no such file: ' + relative);
+  }
+  let source = readFileSync(path, 'utf8');
+  substitutions
+    .filter((substitution) => substitution.file === relative)
+    .forEach((substitution) => {
+      const find = String(substitution.find);
+      const hits = source.split(find).length - 1;
+      if (hits !== 1) {
+        /* An anchor that rots into zero or many matches refuses the whole run rather
+           than quietly mutating something else, so a later task that edits the anchor
+           has to re-express the mutant. */
+        throw new HarnessError(
+          'the anchor ' + JSON.stringify(find) + ' matched ' + hits + ' times in ' +
+            relative + ', not exactly once'
+        );
+      }
+      source = source.replace(find, String(substitution.replace));
+    });
+  return source;
+}
+
+function compile(substitutions) {
+  const scripts = new Map();
+  ['app.js', 'api.js'].forEach((file) => {
+    const source = readSource('app/' + file, substitutions);
+    /* The real file path is the script filename, so an exception inside app.js
+       reports that path and a line number. */
+    scripts.set(join(APP, file), new vm.Script(source, { filename: join(APP, file) }));
+  });
+  return scripts;
+}
+
+async function main() {
+  const config = await readConfig();
+  const substitutions = config.substitutions || [];
+  substitutions.forEach((substitution) => {
+    if (substitution.file !== 'app/app.js' && substitution.file !== 'app/api.js') {
+      throw new HarnessError(
+        'a substitution named ' + JSON.stringify(String(substitution.file)) +
+          '; only app/app.js and app/api.js are loaded'
+      );
+    }
+  });
+  const scripts = compile(substitutions);
+
+  const wanted = config.scenarios;
+  if (wanted !== undefined) {
+    wanted.forEach((name) => {
+      if (!SCENARIOS.some((scenario) => scenario.name === name)) {
+        throw new HarnessError('there is no scenario named ' + name);
+      }
+    });
+  }
+  const chosen = SCENARIOS.filter(
+    (scenario) => wanted === undefined || wanted.indexOf(scenario.name) !== -1
+  );
+
+  const report = { scenarios: [], errorCodes: Object.keys(CODES).sort().map((key) => CODES[key]) };
+  for (const scenario of chosen) {
+    /* A fresh context and a freshly parsed document per scenario: api.js holds cached
+       and handlers, app.js holds current and creating, and no scenario may inherit
+       another's state. */
+    const driver = page(scripts, scenario.name, Boolean(config.provokeRunawayTimer));
+    try {
+      await scenario.run(driver);
+      driver.finish();
+    } catch (error) {
+      if (error instanceof HarnessError) {
+        throw error;
+      }
+      driver.fail('threw: ' + (error && error.stack ? error.stack : String(error)));
+    }
+    const passed = driver.failures.length === 0;
+    report.scenarios.push({
+      name: scenario.name,
+      passed: passed,
+      failures: driver.failures,
+      requests: driver.requests,
+      windowEvents: driver.windowEvents
+    });
+    process.stderr.write((passed ? 'ok   ' : 'FAIL ') + scenario.name + '\n');
+    driver.failures.forEach((failure) => process.stderr.write('       ' + failure + '\n'));
+  }
+  process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+  return report.scenarios.every((entry) => entry.passed) ? 0 : 1;
+}
+
+async function readConfig() {
+  /* No stdin at all means every scenario against the unmodified files, so a person
+     debugging one can run the harness directly. */
+  if (process.stdin.isTTY) {
+    return {};
+  }
+  let raw = '';
+  for await (const chunk of process.stdin) {
+    raw += chunk;
+  }
+  if (raw.trim() === '') {
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new HarnessError('the configuration on stdin is not JSON: ' + String(error));
+  }
+}
+
+try {
+  process.exitCode = await main();
+} catch (error) {
+  process.stderr.write(
+    (error instanceof HarnessError ? 'harness error: ' : 'harness crashed: ') +
+      (error && error.stack ? error.stack : String(error)) + '\n'
+  );
+  process.exitCode = 2;
+}
