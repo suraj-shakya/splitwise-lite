@@ -923,3 +923,446 @@ def test_no_source_or_test_file_carries_a_literal_group_id() -> None:
         pattern.search((REPO / "group.example.toml").read_text(encoding="utf-8"))
         is None
     )
+
+
+# --- Gaps the earlier sections leave -----------------------------------------
+
+
+def test_now_is_a_required_keyword_only_argument() -> None:
+    import inspect
+
+    parameter = inspect.signature(apply_group_definition).parameters["now"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        apply_group_definition(None, a_definition())  # type: ignore[call-arg]
+
+
+def test_link_and_acting_take_the_store_positionally_and_the_rest_by_keyword() -> None:
+    import inspect
+
+    for function, expected in (
+        (link_user_to_member, ["store", "group_id", "member_id", "user_id"]),
+        (acting_member, ["store", "group_id", "user_id"]),
+    ):
+        parameters = inspect.signature(function).parameters
+        assert list(parameters) == expected, function
+        assert parameters["store"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        for name in expected[1:]:
+            assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY, name
+
+
+def test_re_running_completes_a_roster_a_failed_run_left_part_way(
+    store: EventStore,
+) -> None:
+    """Apply is not one transaction across rows, and no criterion asks it to be.
+
+    A run that stopped after two members leaves two members, and the next run adds the
+    rest. That is what idempotency buys, and it is why no store method was added to
+    write a whole roster atomically.
+    """
+    first = apply_group_definition(store, a_definition(("Sam", "Ali")), now=at())
+    completing = apply_group_definition(store, a_definition(), now=at(60))
+    assert completing.group_created is False
+    assert names(completing.members_added) == ("Jo", "Kit")
+    assert names(completing.members_existing) == ("Sam", "Ali")
+    assert names(store.list_members(first.group.id)) == ROSTER
+
+
+@pytest.mark.parametrize("skew", [-60, 0, 60])
+def test_a_member_added_later_sorts_last_whatever_the_second_clock_says(
+    store: EventStore, skew: int
+) -> None:
+    """The microsecond-per-position trick has to survive a second process.
+
+    A second apply gets its ``now`` from an entirely different run, so file order
+    cannot rest on that clock being ahead of the first run's. The command is replayed,
+    or run on a machine whose clock is behind, or handed the same instant twice by a
+    test, and the member it adds still has to come last. Additions are therefore
+    anchored after every member already stored, not at ``now`` alone.
+    """
+    first = apply_group_definition(store, a_definition(), now=at())
+    before = store.list_members(first.group.id)
+    second = apply_group_definition(
+        store, a_definition(ROSTER + ("Max",)), now=at(skew)
+    )
+    assert names(second.members_added) == ("Max",)
+    after = store.list_members(first.group.id)
+    assert after[: len(ROSTER)] == before
+    assert names(after) == ROSTER + ("Max",)
+    assert after[-1].created_at > before[-1].created_at
+
+
+def test_two_members_added_by_one_later_run_keep_file_order(
+    store: EventStore,
+) -> None:
+    first = apply_group_definition(store, a_definition(("Sam", "Ali")), now=at())
+    second = apply_group_definition(store, a_definition(), now=at(-60))
+    assert names(second.members_added) == ("Jo", "Kit")
+    members = store.list_members(first.group.id)
+    assert names(members) == ROSTER
+    stamps = [member.created_at for member in members]
+    assert stamps == sorted(stamps)
+    assert len(set(stamps)) == len(stamps)
+
+
+def test_the_store_still_has_no_singleton_read() -> None:
+    """Task 6's criterion holds verbatim: the sole-group rule lives here, not there."""
+    source = Path(store_module.__file__).read_text(encoding="utf-8")
+    for forbidden in ("get_the_group", "sole_group", "DEFAULT_GROUP", "THE_GROUP"):
+        assert forbidden not in source, forbidden
+    assert not hasattr(store_module.EventStore, "get_the_group")
+
+
+# --- The user-to-member link -------------------------------------------------
+
+
+PASSWORD = "a long enough passphrase"
+
+
+def a_user(
+    store: EventStore,
+    params: ScryptParams,
+    *,
+    email: str = "sam@example.com",
+    display_name: str = "Sam",
+) -> User:
+    """A signed-up account, at cheap scrypt parameters. Linked to nothing."""
+    return sign_up(
+        store,
+        email=email,
+        display_name=display_name,
+        password=PASSWORD,
+        now=at(),
+        params=params,
+    )
+
+
+def a_flat_and_an_account(
+    store: EventStore, params: ScryptParams
+) -> tuple[GroupId, tuple[Member, ...], User]:
+    """A four-name roster, nobody linked, and one signed-up account beside it."""
+    result = apply_group_definition(store, a_definition(), now=at())
+    return result.group.id, store.list_members(result.group.id), a_user(store, params)
+
+
+def test_linking_points_a_member_with_no_user_at_one(
+    store: EventStore, params: ScryptParams
+) -> None:
+    group_id, members, user = a_flat_and_an_account(store, params)
+    sam = members[0]
+    assert sam.user_id is None
+    linked = link_user_to_member(
+        store, group_id=group_id, member_id=sam.id, user_id=user.id
+    )
+    assert isinstance(linked, Member)
+    assert linked.user_id == user.id
+    assert store.get_member(sam.id).user_id == user.id
+
+
+def test_linking_changes_the_user_id_and_nothing_else(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """There is no ``linked_at`` anywhere: a link records only that it exists."""
+    group_id, members, user = a_flat_and_an_account(store, params)
+    sam = members[0]
+    linked = link_user_to_member(
+        store, group_id=group_id, member_id=sam.id, user_id=user.id
+    )
+    assert linked.id == sam.id
+    assert linked.group_id == sam.group_id
+    assert linked.display_name == sam.display_name
+    assert linked.created_at == sam.created_at
+    assert list(Member.__dataclass_fields__) == [
+        "id",
+        "group_id",
+        "display_name",
+        "user_id",
+        "created_at",
+    ]
+    columns = {
+        row[1]
+        for row in store._connection.execute("PRAGMA table_info(members)").fetchall()
+    }
+    assert "linked_at" not in columns
+    assert columns == {"id", "group_id", "display_name", "user_id", "created_at"}
+
+
+def test_linking_a_member_to_the_user_it_already_points_at_is_a_no_op(
+    store: EventStore, params: ScryptParams
+) -> None:
+    group_id, members, user = a_flat_and_an_account(store, params)
+    sam = members[0]
+    linked = link_user_to_member(
+        store, group_id=group_id, member_id=sam.id, user_id=user.id
+    )
+    before = rows(store, "members")
+    again = link_user_to_member(
+        store, group_id=group_id, member_id=sam.id, user_id=user.id
+    )
+    assert again == linked
+    assert rows(store, "members") == before
+
+
+def test_a_member_pointing_at_another_user_is_refused_and_left_alone(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """Taking over a member row is account handover, which v1 does not do."""
+    group_id, members, one = a_flat_and_an_account(store, params)
+    two = a_user(store, params, email="ali@example.com", display_name="Ali")
+    sam = members[0]
+    link_user_to_member(store, group_id=group_id, member_id=sam.id, user_id=one.id)
+    before = rows(store, "members")
+    with pytest.raises(MemberAlreadyLinked) as caught:
+        link_user_to_member(store, group_id=group_id, member_id=sam.id, user_id=two.id)
+    message = str(caught.value)
+    assert one.id in message and two.id in message
+    assert store.get_member(sam.id).user_id == one.id
+    assert rows(store, "members") == before
+
+
+def test_a_user_another_member_of_that_group_holds_is_refused(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """One person is at most one member of one group. The partial index backs it up."""
+    group_id, members, user = a_flat_and_an_account(store, params)
+    sam, ali = members[0], members[1]
+    link_user_to_member(store, group_id=group_id, member_id=sam.id, user_id=user.id)
+    before = rows(store, "members")
+    with pytest.raises(UserAlreadyLinked) as caught:
+        link_user_to_member(store, group_id=group_id, member_id=ali.id, user_id=user.id)
+    message = str(caught.value)
+    assert sam.id in message and user.id in message
+    assert store.get_member(ali.id).user_id is None
+    assert rows(store, "members") == before
+
+
+def test_an_unknown_member_id_or_user_id_is_named(
+    store: EventStore, params: ScryptParams
+) -> None:
+    group_id, members, user = a_flat_and_an_account(store, params)
+    sam = members[0]
+    absent = new_id()
+    with pytest.raises(RecordNotFound) as caught:
+        link_user_to_member(
+            store, group_id=group_id, member_id=absent, user_id=user.id
+        )
+    assert absent in str(caught.value)
+    with pytest.raises(RecordNotFound) as caught:
+        link_user_to_member(store, group_id=group_id, member_id=sam.id, user_id=absent)
+    assert absent in str(caught.value)
+    assert store.get_member(sam.id).user_id is None
+
+
+def test_a_member_of_another_group_is_refused_naming_both_groups(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """Passing the group is what makes a cross-group link impossible, not unlikely."""
+    here = apply_group_definition(store, a_definition(("Sam", "Ali")), now=at())
+    elsewhere = a_second_group(store)
+    there = apply_group_definition(
+        store,
+        a_definition(("Jo", "Kit"), name="Flat 4", currency=NZD),
+        now=at(60),
+        group_id=elsewhere.id,
+    )
+    jo = store.list_members(there.group.id)[0]
+    user = a_user(store, params)
+    before = rows(store, "members")
+    with pytest.raises(GroupMismatch) as caught:
+        link_user_to_member(
+            store, group_id=here.group.id, member_id=jo.id, user_id=user.id
+        )
+    message = str(caught.value)
+    assert here.group.id in message and there.group.id in message
+    assert rows(store, "members") == before
+
+
+def test_one_user_may_act_for_a_member_in_each_of_two_groups(
+    store: EventStore, params: ScryptParams
+) -> None:
+    here = apply_group_definition(store, a_definition(("Sam", "Ali")), now=at())
+    elsewhere = a_second_group(store)
+    there = apply_group_definition(
+        store,
+        a_definition(("Sam", "Kit"), name="Flat 4", currency=NZD),
+        now=at(60),
+        group_id=elsewhere.id,
+    )
+    user = a_user(store, params)
+    mine = store.list_members(here.group.id)[0]
+    theirs = store.list_members(there.group.id)[0]
+    link_user_to_member(
+        store, group_id=here.group.id, member_id=mine.id, user_id=user.id
+    )
+    link_user_to_member(
+        store, group_id=there.group.id, member_id=theirs.id, user_id=user.id
+    )
+    assert mine.id != theirs.id
+    assert acting_member(store, group_id=here.group.id, user_id=user.id).id == mine.id
+    assert (
+        acting_member(store, group_id=there.group.id, user_id=user.id).id == theirs.id
+    )
+
+
+def test_nothing_unlinks(store: EventStore, params: ScryptParams) -> None:
+    """No function here clears members.user_id, and store.py gains none that can."""
+    assert not [name for name in dir(groups_module) if "unlink" in name.lower()]
+    assert not [
+        name for name in dir(store_module.EventStore) if "unlink" in name.lower()
+    ]
+    store_source = Path(store_module.__file__).read_text(encoding="utf-8")
+    assert "user_id = NULL" not in store_source
+    group_id, members, user = a_flat_and_an_account(store, params)
+    sam = members[0]
+    link_user_to_member(store, group_id=group_id, member_id=sam.id, user_id=user.id)
+    apply_group_definition(store, a_definition(), now=at(60))
+    assert store.get_member(sam.id).user_id == user.id
+
+
+def test_signing_up_links_nothing_even_when_every_name_matches(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """A signup address is unverified, so whoever claimed it first would become Sam."""
+    result = apply_group_definition(store, a_definition(), now=at())
+    before = rows(store, "members")
+    user = sign_up(
+        store,
+        email="sam@example.com",
+        display_name="Sam",
+        password=PASSWORD,
+        now=at(60),
+        params=params,
+    )
+    assert rows(store, "members") == before
+    for member in store.list_members(result.group.id):
+        assert member.user_id is None
+    with pytest.raises(MemberNotLinked):
+        acting_member(store, group_id=result.group.id, user_id=user.id)
+
+
+@pytest.mark.parametrize(
+    "forbidden", ["email", "Email", "startswith", "difflib", "SequenceMatcher"]
+)
+def test_the_module_compares_no_user_to_a_member_by_similarity(
+    forbidden: str,
+) -> None:
+    """Not by address, not by display name, not by anything else."""
+    assert forbidden not in groups_source()
+
+
+def test_a_definition_cannot_carry_an_address() -> None:
+    with pytest.raises(InvalidGroupDefinition) as caught:
+        parse_group_definition(
+            'name = "Flat 3"\ncurrency = "AUD"\nmembers = ["Sam"]\n'
+            'emails = ["sam@example.com"]'
+        )
+    assert "emails" in str(caught.value)
+    assert "email" not in list(GroupDefinition.__dataclass_fields__)
+
+
+# --- Resolving who is acting -------------------------------------------------
+
+
+def test_acting_member_returns_the_member_linked_to_that_user(
+    store: EventStore, params: ScryptParams
+) -> None:
+    group_id, members, user = a_flat_and_an_account(store, params)
+    ali = members[1]
+    assert ali.display_name == "Ali"
+    link_user_to_member(store, group_id=group_id, member_id=ali.id, user_id=user.id)
+    assert acting_member(
+        store, group_id=group_id, user_id=user.id
+    ) == store.get_member(ali.id)
+
+
+def test_an_unlinked_user_and_an_unknown_group_are_told_apart_by_type(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """Two different screens: nobody has linked you yet, against a bug."""
+    group_id, _, user = a_flat_and_an_account(store, params)
+    with pytest.raises(MemberNotLinked) as unlinked:
+        acting_member(store, group_id=group_id, user_id=user.id)
+    assert not isinstance(unlinked.value, RecordNotFound)
+    absent = new_id()
+    with pytest.raises(RecordNotFound) as missing:
+        acting_member(store, group_id=absent, user_id=user.id)
+    assert absent in str(missing.value)
+    assert not isinstance(missing.value, MemberNotLinked)
+
+
+def test_acting_member_never_returns_an_unclaimed_member(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """An unclaimed member row is a flatmate who has not signed up, not this user."""
+    here = apply_group_definition(store, a_definition(), now=at())
+    user = a_user(store, params)
+    for member in store.list_members(here.group.id):
+        assert member.user_id is None
+    with pytest.raises(MemberNotLinked):
+        acting_member(store, group_id=here.group.id, user_id=user.id)
+    elsewhere = a_second_group(store)
+    there = apply_group_definition(
+        store,
+        a_definition(("Sam",), name="Flat 4", currency=NZD),
+        now=at(60),
+        group_id=elsewhere.id,
+    )
+    theirs = store.list_members(there.group.id)[0]
+    link_user_to_member(
+        store, group_id=there.group.id, member_id=theirs.id, user_id=user.id
+    )
+    with pytest.raises(MemberNotLinked):
+        acting_member(store, group_id=here.group.id, user_id=user.id)
+
+
+def test_acting_member_writes_nothing(
+    store: EventStore, params: ScryptParams
+) -> None:
+    group_id, members, user = a_flat_and_an_account(store, params)
+    link_user_to_member(
+        store, group_id=group_id, member_id=members[0].id, user_id=user.id
+    )
+    before_members = rows(store, "members")
+    before_users = rows(store, "users")
+    acting_member(store, group_id=group_id, user_id=user.id)
+    with pytest.raises(MemberNotLinked):
+        acting_member(store, group_id=group_id, user_id=new_id())
+    assert rows(store, "members") == before_members
+    assert rows(store, "users") == before_users
+
+
+def test_the_whole_gap_from_a_fresh_flat_to_one_linked_user(
+    store: EventStore, params: ScryptParams
+) -> None:
+    """Four member rows and zero users is what the app looks like on install day."""
+    result = apply_group_definition(store, a_definition(), now=at())
+    members = store.list_members(result.group.id)
+    assert names(members) == ROSTER
+    assert all(member.user_id is None for member in members)
+    assert count(store, "users") == 0
+
+    user = sign_up(
+        store,
+        email="jo@example.com",
+        display_name="Jo",
+        password=PASSWORD,
+        now=at(60),
+        params=params,
+    )
+    assert isinstance(UserId(user.id), str)
+    with pytest.raises(MemberNotLinked):
+        acting_member(store, group_id=result.group.id, user_id=user.id)
+
+    jo = members[2]
+    assert jo.display_name == "Jo"
+    linked = link_user_to_member(
+        store, group_id=result.group.id, member_id=jo.id, user_id=user.id
+    )
+    assert linked.user_id == user.id
+    assert acting_member(store, group_id=result.group.id, user_id=user.id) == linked
+    assert [
+        member.user_id
+        for member in store.list_members(result.group.id)
+        if member.id != jo.id
+    ] == [None, None, None]
