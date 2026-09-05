@@ -705,7 +705,13 @@ def _check_csrf() -> None:
             f"a state-changing request must repeat the {CSRF_COOKIE} cookie in the "
             f"{CSRF_HEADER} header"
         )
-    if not hmac.compare_digest(submitted, stored):
+    # Compared as bytes, not as text. Werkzeug decodes a request header as latin-1,
+    # so any byte from 0x80 up arrives as a str with a codepoint above 0x7f, and
+    # ``compare_digest`` refuses two such strings outright. Handing it text would turn
+    # this refusal into a 500 with a logged traceback, which is a refusal the caller
+    # can spend the log on. Encoding first keeps the comparison constant time and
+    # makes the gate total over every string a header or a cookie can carry.
+    if not hmac.compare_digest(submitted.encode("utf-8"), stored.encode("utf-8")):
         raise CsrfFailed(
             f"the {CSRF_HEADER} header does not match the {CSRF_COOKIE} cookie"
         )
@@ -1326,10 +1332,18 @@ def _static_file(filename: str) -> flask.Response:
     encoded traversal, a backslash on Windows and a symlink all end at the same 404.
     """
     app_dir = _settings().app_dir.resolve()
-    candidate = (app_dir / filename).resolve()
-    if candidate != app_dir and app_dir not in candidate.parents:
-        flask.abort(404)
-    if not candidate.is_file():
+    try:
+        candidate = (app_dir / filename).resolve()
+        inside = candidate == app_dir or app_dir in candidate.parents
+        found = inside and candidate.is_file()
+    except (ValueError, OSError):
+        # A name the operating system will not even look at: an embedded null byte,
+        # a character it forbids, a path past its length limit. ``resolve`` and
+        # ``is_file`` raise on those *before* the containment check above can run, so
+        # a correct containment check is not on its own enough to keep every bad path
+        # at 404. It is refused here like any other one rather than becoming a 500.
+        found = False
+    if not found:
         flask.abort(404)
     content_type = EXTENSIONS.get(candidate.suffix.lower(), _DEFAULT_CONTENT_TYPE)
     return flask.Response(candidate.read_bytes(), content_type=content_type)

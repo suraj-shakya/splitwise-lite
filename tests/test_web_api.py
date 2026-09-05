@@ -2866,3 +2866,134 @@ def test_every_failure_says_exactly_the_same_thing(app, seeded: Path) -> None:
         assert response.status_code == 401
         assert response.get_json()["error"]["code"] == "authentication_failed"
     assert wrong_password.data == unknown_address.data == no_credential.data
+
+
+# --- The CSRF gate is total over every string a header can carry ---------------
+
+# Werkzeug decodes request headers as latin-1, so any byte from 0x80 up arrives as a
+# str with a codepoint above 0x7F. `hmac.compare_digest` refuses those outright, so a
+# gate that hands it two `str` objects turns a refusal into a 500 with a logged
+# traceback: not a bypass, but an unauthenticated caller with unbounded traceback
+# logging, and a `DELETE /api/session` that this task documents as never failing.
+NON_ASCII_TOKENS = [
+    "tokén",  # latin-1, one byte above 0x7f
+    "ÿ" * 43,  # every character above 0x7f, the right length
+    "abc def",  # a non-breaking space, which reads as ASCII and is not
+]
+
+
+@pytest.mark.parametrize("submitted", NON_ASCII_TOKENS)
+def test_a_non_ascii_csrf_header_is_refused_and_never_a_five_hundred(
+    client, caplog, submitted: str
+) -> None:
+    import logging
+
+    csrf_token(client)
+    with caplog.at_level(logging.ERROR):
+        response = client.post(
+            "/api/signup", json={}, headers={web.CSRF_HEADER: submitted}
+        )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "csrf_failed"
+    # Nothing was logged, so an unauthenticated caller cannot spend the log on this.
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize("submitted", NON_ASCII_TOKENS)
+def test_signing_out_is_never_a_five_hundred_whatever_the_header_carries(
+    client, submitted: str
+) -> None:
+    # DELETE /api/session is documented as never failing. It may refuse an untrusted
+    # request, but it may not fall over on one.
+    csrf_token(client)
+    response = client.delete(
+        "/api/session",
+        content_type="application/json",
+        headers={web.CSRF_HEADER: submitted},
+    )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "csrf_failed"
+
+
+def test_a_non_ascii_cookie_is_refused_rather_than_raising(client) -> None:
+    token = csrf_token(client)
+    client.set_cookie(web.CSRF_COOKIE, "støred")
+    response = client.post("/api/signup", json={}, headers={web.CSRF_HEADER: token})
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "csrf_failed"
+
+
+def test_the_gate_still_accepts_the_token_it_issued(client) -> None:
+    # The encoding fix must not make the ordinary path stop matching.
+    token = csrf_token(client)
+    response = client.post(
+        "/api/signup",
+        json={
+            "email": "sam@example.com",
+            "display_name": "Sam",
+            "password": PASSWORD,
+        },
+        headers={web.CSRF_HEADER: token},
+    )
+    assert response.status_code == 201
+
+
+def test_the_csrf_comparison_is_made_over_bytes() -> None:
+    # The reason the gate is total: `hmac.compare_digest` accepts any bytes and
+    # refuses two `str` objects that are not both ASCII.
+    import ast
+
+    tree = ast.parse(web_source())
+    gate = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_check_csrf"
+    )
+    comparison = next(
+        node
+        for node in ast.walk(gate)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "compare_digest"
+    )
+    for argument in comparison.args:
+        assert isinstance(argument, ast.Call), ast.dump(argument)
+        assert isinstance(argument.func, ast.Attribute)
+        assert argument.func.attr == "encode", ast.dump(argument)
+
+
+# --- A path the operating system will not look at is a 404, not a 500 ----------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/..%00/x",
+        "/%00",
+        "/a%00b.js",
+        "/index.html%00.txt",
+        "/%00../pyproject.toml",
+    ],
+)
+def test_a_null_byte_in_the_path_is_a_404_like_any_other_bad_path(
+    client, caplog, path: str
+) -> None:
+    # `Path.resolve` and `Path.is_file` raise before the containment check can run,
+    # so the check being correct is not enough on its own.
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get(path)
+    assert response.status_code == 404, path
+    assert response.get_json()["error"]["code"] == "not_found"
+    assert b"hatchling" not in response.data
+    assert "Traceback" not in caplog.text
+
+
+def test_a_name_the_filesystem_refuses_is_a_404_not_a_five_hundred(client) -> None:
+    # A path far longer than any filesystem accepts. It must be refused the same way
+    # a missing file is, rather than by whatever the operating system raises.
+    response = client.get("/" + ("a" * 5000) + ".js")
+    assert response.status_code in (404, 414)
+    if response.status_code == 404:
+        assert response.get_json()["error"]["code"] == "not_found"
