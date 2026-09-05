@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -273,3 +274,117 @@ def test_mutant_b_deferring_the_401_handler_is_killed() -> None:
     assert loaded["app/api.js"] != (REPO / "app" / "api.js").read_text(encoding="utf-8")
     assert loaded["app/app.js"] == shipped
     assert submitted_body(loaded["app/app.js"]) == submitted_body(shipped)
+
+
+# --- Harness errors, which are exit 2 and not exit 1 -----------------------
+
+
+def test_an_anchor_that_matches_nothing_refuses_the_run() -> None:
+    # An anchor that has rotted must not quietly mutate something else, or fail to
+    # mutate anything and report a green run that proved nothing.
+    anchor = "gate.hidden = which === 'gate';"
+    completed = run_harness(
+        {"substitutions": [{"file": "app/app.js", "find": anchor, "replace": "x"}]}
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert completed.stdout == ""
+    assert "app/app.js" in completed.stderr
+    assert anchor in completed.stderr
+
+
+def test_an_anchor_that_matches_more_than_once_refuses_the_run() -> None:
+    anchor = "document.getElementById("
+    completed = run_harness(
+        {"substitutions": [{"file": "app/app.js", "find": anchor, "replace": "x("}]}
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert completed.stdout == ""
+    assert "app/app.js" in completed.stderr
+    assert anchor in completed.stderr
+
+
+def test_a_run_that_will_not_quiesce_fails_and_names_the_scenario() -> None:
+    # settle() is bounded, so a timer that reschedules itself is a harness error with
+    # the scenario's name on it rather than a suite that hangs until the pytest run is
+    # killed. The provocation is the harness's own, and only when asked for.
+    scenario = "boot_with_no_session_shows_the_gate"
+    completed = run_harness(
+        {"scenarios": [scenario], "provokeRunawayTimer": True}
+    )
+    assert completed.returncode == 2, completed.stderr
+    assert scenario in completed.stderr
+    assert "settle" in completed.stderr
+
+
+# --- Determinism, isolation and the stub's honesty -------------------------
+
+
+def test_two_runs_of_the_same_configuration_report_the_same_bytes(
+    harness_run: subprocess.CompletedProcess[str],
+) -> None:
+    # No randomness, no Date.now, no locale-dependent formatting and no network, so a
+    # second run of the same configuration is byte-identical.
+    again = run_harness({})
+    assert again.returncode == harness_run.returncode
+    assert again.stdout == harness_run.stdout
+
+
+def test_every_error_code_the_harness_names_appears_in_web_py(
+    report: dict[str, Any],
+) -> None:
+    web = (REPO / "src" / "splitwise_lite" / "web.py").read_text(encoding="utf-8")
+    codes = report["errorCodes"]
+    assert codes
+    for code in codes:
+        assert f'"{code}"' in web, code
+
+
+def test_the_service_worker_registration_branch_is_never_entered(
+    report: dict[str, Any],
+) -> None:
+    # app.js registers a window 'load' listener only inside
+    # `if ('serviceWorker' in navigator)`, and the stub navigator has no such
+    # property. A 'load' listener showing up here would mean the branch ran, and the
+    # harness would be pretending to cover something it does not.
+    for entry in report["scenarios"]:
+        assert entry["windowEvents"] == ["hashchange"], entry["name"]
+
+
+def test_each_scenario_starts_from_a_fresh_context(report: dict[str, Any]) -> None:
+    # Two scenarios that both boot see two separate fetch recorders: a shared one
+    # would show the earlier scenario's call as well. And the second runs straight
+    # after a scenario that cached a session view inside api.js, where it asserts the
+    # cache is empty, so api.js's state does not survive either.
+    order = [entry["name"] for entry in report["scenarios"]]
+    linked = "boot_with_a_linked_session_shows_the_app"
+    after = "nothing_from_the_previous_scenario_survives_into_this_one"
+    assert order.index(linked) + 1 == order.index(after)
+    found = results(report)
+    for name in (linked, after):
+        assert found[name]["passed"], found[name]["failures"]
+        assert found[name]["requests"] == ["GET /api/session"]
+
+
+# --- Neither half depends on the working directory -------------------------
+
+
+def test_the_harness_finds_app_from_its_own_location(tmp_path: Path) -> None:
+    completed = run_harness({}, cwd=tmp_path)
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_the_suite_passes_when_pytest_runs_from_another_directory(
+    tmp_path: Path,
+) -> None:
+    # One test from this file, so the nested run cannot recurse into this one.
+    target = f"{Path(__file__).resolve()}::test_an_anchor_that_matches_nothing_refuses_the_run"
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", target],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+        cwd=str(tmp_path),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
