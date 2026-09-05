@@ -362,16 +362,20 @@ function unreadable(status) {
   };
 }
 
-function noContent(sink) {
-  return {
+function noContent() {
+  /* A 204 has no body, so api.js must return null without ever calling json(). The
+     count is on the response itself, so the scenario that registers it can assert it
+     stayed at zero. */
+  const response = {
     status: 204,
     ok: true,
+    jsonCalls: 0,
     json: () => {
-      /* A 204 has no body, so api.js must return null without ever calling this. */
-      sink.parsedANoContentBody = true;
+      response.jsonCalls += 1;
       throw new Error('json() was called on a 204 response');
     }
   };
+  return response;
 }
 
 function networkFailure() {
@@ -385,7 +389,7 @@ function networkFailure() {
 const SETTLE_STEPS = 1000;
 
 function page(scripts, name, provokeRunawayTimer) {
-  const sink = { focused: null, parsedANoContentBody: false };
+  const sink = { focused: null };
   const parsed = parseDocument(readFileSync(join(APP, 'index.html'), 'utf8'), sink);
   const failures = [];
   const calls = [];
@@ -669,9 +673,6 @@ function page(scripts, name, provokeRunawayTimer) {
     get pushStates() {
       return pushStates;
     },
-    get parsedANoContentBody() {
-      return sink.parsedANoContentBody;
-    },
     global(expression) {
       return vm.runInContext(expression, sandbox);
     },
@@ -738,6 +739,16 @@ const refusal = (message) => failure(401, CODES.authenticationFailed, message);
 const notLinked = () =>
   failure(403, CODES.memberNotLinked, 'Nobody has linked you to a member yet.');
 const serverError = () => failure(500, CODES.internalError, 'Something went wrong.');
+
+/* The name the document title carries, spelled out here rather than read back from
+   app.js: an assertion that borrows the subject's own constant asserts nothing. */
+const APP_NAME = 'Splitwise Lite';
+
+async function signIn(page, email, password) {
+  page.el('gate-email').value = email;
+  page.el('gate-password').value = password;
+  return page.dispatch(page.el('gate-form'), 'submit');
+}
 
 function noticeIsUp(page, which, what) {
   page.is(page.el('notice').hidden, false, what + ': #notice visible');
@@ -886,6 +897,167 @@ const SCENARIOS = [
       page.is(page.el('notice-unlinked').hidden, true, '#notice-unlinked hidden');
       page.is(page.el('notice-offline').hidden, true, '#notice-offline hidden');
       page.same(page.requests, ['GET /api/session', 'POST /api/session'], 'requests');
+    }
+  },
+
+  {
+    name: 'a_refused_sign_in_with_an_unreadable_body_still_says_something',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', unreadable(401));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      gateIsUp(page, 'an unreadable refusal');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, 'That did not work.', '#gate-error text');
+    }
+  },
+
+  {
+    /* The quiet branch: submitted() returns early, because the offline notice is
+       already up and the gate deliberately is not. */
+    name: 'a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', networkFailure());
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      noticeIsUp(page, 'offline', 'a sign-in that got no answer');
+      page.is(page.el('gate-error').textContent, '', '#gate-error text');
+      page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
+      /* Enabled again anyway, so the person can try once the network is back. */
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
+    }
+  },
+
+  {
+    name: 'a_successful_sign_in_keeps_the_screen_the_person_was_on',
+    async run(page) {
+      page.startAt('#/balances');
+      page.respondInOrder('GET', '/session', [refusal(SIGN_IN_FIRST), ok(A_MEMBER)]);
+      page.respond('POST', '/session', ok(A_MEMBER));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'a successful sign-in');
+      page.is(page.hash, '#/balances', 'location.hash');
+      page.is(page.el('screen-balances').hidden, false, '#screen-balances visible');
+      page.is(page.el('screen-feed').hidden, true, '#screen-feed hidden');
+      page.is(page.el('screen-add').hidden, true, '#screen-add hidden');
+      page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
+      page.is(page.el('gate-password').value, '', '#gate-password cleared');
+      page.same(
+        page.requests,
+        ['GET /api/session', 'POST /api/session', 'GET /api/session'],
+        'requests'
+      );
+    }
+  },
+
+  {
+    /* This one pins what the shipped code does today: the sign-in succeeds, the
+       session read behind it 401s, and the person is returned to a blank gate with no
+       explanation. Reported rather than fixed: changing app/ is not this task. */
+    name: 'a_session_that_dies_between_sign_in_and_session_read_returns_to_the_gate',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', ok(A_MEMBER));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      gateIsUp(page, 'a session that died');
+      page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, '', '#gate-error text');
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
+      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
+      page.same(
+        page.requests,
+        ['GET /api/session', 'POST /api/session', 'GET /api/session'],
+        'requests'
+      );
+    }
+  },
+
+  {
+    /* Signup issues no session, so the client signs in straight after it. */
+    name: 'creating_an_account_signs_in_straight_after',
+    async run(page) {
+      page.respondInOrder('GET', '/session', [refusal(SIGN_IN_FIRST), ok(A_MEMBER)]);
+      page.respond('POST', '/signup', ok({ account: A_MEMBER.account }));
+      page.respond('POST', '/session', ok(A_MEMBER));
+      await page.boot();
+      await page.dispatch(page.el('gate-mode'), 'click');
+      page.is(page.focused, page.el('gate-email'), 'focus after switching mode');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.same(
+        page.requests,
+        [
+          'GET /api/session',
+          'POST /api/signup',
+          'POST /api/session',
+          'GET /api/session'
+        ],
+        'requests'
+      );
+      appIsUp(page, 'creating an account');
+      page.is(page.el('gate-title').textContent, 'Sign in', '#gate-title text');
+    }
+  },
+
+  {
+    name: 'the_gate_switches_the_password_autocomplete_with_the_mode',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      await page.boot();
+      const password = page.el('gate-password');
+      page.is(password.getAttribute('autocomplete'), 'current-password', 'signing in');
+      await page.dispatch(page.el('gate-mode'), 'click');
+      page.is(password.getAttribute('autocomplete'), 'new-password', 'creating');
+      await page.dispatch(page.el('gate-mode'), 'click');
+      page.is(password.getAttribute('autocomplete'), 'current-password', 'back again');
+    }
+  },
+
+  {
+    /* Without preventDefault the browser navigates and the whole app blanks. */
+    name: 'the_form_never_lets_the_browser_navigate',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      const event = await signIn(page, 'sam@example.com', 'hunter2');
+      page.is(event.defaultPrevented, true, 'preventDefault on the submit event');
+    }
+  },
+
+  {
+    name: 'the_email_is_trimmed_and_the_password_is_not',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      await signIn(page, '  sam@example.com  ', ' hunter2');
+      const sent = page.calls[1];
+      page.is(sent.method, 'POST', 'the method');
+      page.is(sent.url, '/api/session', 'the path');
+      page.is(
+        sent.body,
+        '{"email":"sam@example.com","password":" hunter2"}',
+        'the request body'
+      );
+    }
+  },
+
+  {
+    name: 'signing_out_returns_to_the_gate',
+    async run(page) {
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('DELETE', '/session', noContent());
+      await page.boot();
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
+      page.is(page.el('gate-title').textContent, 'Sign in', '#gate-title text');
+      page.is(page.el('gate-submit').textContent, 'Sign in', '#gate-submit text');
+      page.same(page.requests, ['GET /api/session', 'DELETE /api/session'], 'requests');
     }
   },
 

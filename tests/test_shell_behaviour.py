@@ -48,6 +48,15 @@ SCENARIOS = [
     "the_api_client_failing_to_load_shows_the_offline_message",
     # Signing in
     "a_refused_sign_in_tells_the_person_why",
+    "a_refused_sign_in_with_an_unreadable_body_still_says_something",
+    "a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone",
+    "a_successful_sign_in_keeps_the_screen_the_person_was_on",
+    "a_session_that_dies_between_sign_in_and_session_read_returns_to_the_gate",
+    "creating_an_account_signs_in_straight_after",
+    "the_gate_switches_the_password_autocomplete_with_the_mode",
+    "the_form_never_lets_the_browser_navigate",
+    "the_email_is_trimmed_and_the_password_is_not",
+    "signing_out_returns_to_the_gate",
     # Routing
     "an_unknown_hash_is_replaced_not_pushed",
 ]
