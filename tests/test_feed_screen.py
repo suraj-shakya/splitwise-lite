@@ -345,3 +345,80 @@ def test_no_anchor_in_the_document_points_outside_the_three_routes() -> None:
         assert "://" not in href, href
         assert not href.startswith("//"), href
         assert href in ROUTES, href
+
+
+# --- Token bans over app/app.js ---------------------------------------------
+#
+# Each of these is falsifiable by the file itself: a reader opens `app/app.js` and
+# sees whether the token is there. None of them claims a feature works. That second
+# kind of test is what PR #30 disproved, and rendering behaviour lives on the task
+# file's hand checklist instead.
+
+
+def app_js() -> str:
+    return (APP / "app.js").read_text(encoding="utf-8")
+
+
+def test_app_js_builds_the_dom_without_ever_parsing_markup() -> None:
+    # Every piece of user data reaches the DOM through textContent, so an expense
+    # described as `<img src=x onerror=alert(1)>` renders as literal characters.
+    source = app_js()
+    for banned in (
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+    ):
+        assert banned not in source, banned
+
+
+def test_app_js_imposes_no_ordering_of_its_own() -> None:
+    # web.py owns the ordering rule and has it written down. A second one here would
+    # be a second contract to keep in step with the first.
+    source = app_js()
+    assert "sort(" not in source
+    assert "reverse(" not in source
+
+
+def test_app_js_never_reads_the_client_clock() -> None:
+    # `new Date(created_at)` renders the server's instant in the reader's timezone.
+    # A Date with no argument would be the client clock, which nothing here may read:
+    # relative time is task 16's vocabulary.
+    source = app_js()
+    assert "Date.now(" not in source
+    assert "new Date()" not in source
+
+
+def test_the_feed_adds_no_history_entry_and_no_second_replace_state() -> None:
+    """Toggling a row changes no URL and pushes nothing onto the history stack.
+
+    `replaceState` is counted rather than banned outright. Task 8's router already
+    holds one, so a whole-file ban would fail against `master` before this task wrote
+    a line; see the correction dated 2026-09-06 in plans/tasks/11-expense-feed.md.
+    Pinning the single occurrence to the router's own line keeps "the feed adds no
+    second one" falsifiable instead of dropping the guard.
+    """
+    source = app_js()
+    assert "pushState" not in source
+    assert re.search(r"location\.hash\s*=[^=]", source) is None
+    carrying = [line.strip() for line in source.splitlines() if "replaceState" in line]
+    assert carrying == ["window.history.replaceState(null, '', DEFAULT_ROUTE);"]
+
+
+def test_the_feed_keeps_nothing_in_browser_storage() -> None:
+    # No response is cached anywhere that outlives the render: a copy of server state
+    # kept in the browser is how a signed-out page keeps showing a ledger.
+    source = app_js()
+    for banned in ("localStorage", "sessionStorage", "indexedDB", "document.cookie"):
+        assert banned not in source, banned
+
+
+def test_the_feed_never_polls_or_refreshes_itself() -> None:
+    # It loads when its route becomes current and when the frame is shown, and at no
+    # other time. No polling, no timer, no interval, no visibility handler and no
+    # reload when the window regains focus.
+    source = app_js()
+    for banned in ("setInterval", "setTimeout", "visibilitychange", "requestAnimationFrame"):
+        assert banned not in source, banned
