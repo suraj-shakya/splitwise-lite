@@ -403,6 +403,7 @@ function page(scripts, name, provokeRunawayTimer) {
   let cookie = '';
   let sequence = 0;
   let declaredConsole = [];
+  let declaredRequests = null;
 
   const byId = (id) => {
     const found = parsed.byId.get(id);
@@ -521,8 +522,15 @@ function page(scripts, name, provokeRunawayTimer) {
     if (queue === undefined || queue.length === 0) {
       /* Never served the next thing in a queue: a call nobody registered an answer
          for is a failure naming the method and the path, so a screen task that adds
-         a call at boot fails loudly and has to register its answer. */
-      throw new Error('no answer was registered for ' + key);
+         a call at boot fails loudly and has to register its answer.
+
+         Recorded as a failure here rather than left to the throw below. api.js
+         swallows a rejection in more than one place, and a guarantee that depends on
+         an exception escaping a promise chain is not a guarantee: the throw alone
+         would let a call made inside a .then() slip past silently. */
+      const unregistered = 'no answer was registered for ' + key;
+      failures.push(unregistered);
+      throw new Error(unregistered);
     }
     /* One registered answer stands for every matching request; a list registered
        with respondInOrder is consumed in order and its last entry stands for
@@ -628,6 +636,13 @@ function page(scripts, name, provokeRunawayTimer) {
     expectConsole(lines) {
       declaredConsole = lines.slice();
     },
+    expectRequests(list) {
+      /* Every scenario declares the whole ordered list, and finish() fails one that
+         does not. A recorded call the scenario never expected is then a failure even
+         when the app swallowed the rejection it caused, and a call that stopped
+         happening is a failure too. */
+      declaredRequests = list.slice();
+    },
 
     /* --- driving --- */
     async boot() {
@@ -717,6 +732,18 @@ function page(scripts, name, provokeRunawayTimer) {
     failures: failures,
     windowEvents: windowEvents,
     finish() {
+      if (declaredRequests === null) {
+        failures.push(
+          'this scenario declared no expected requests; every scenario must call ' +
+            'expectRequests, so a call nobody registered an answer for cannot slip ' +
+            'through a promise chain that swallowed the rejection'
+        );
+      } else if (JSON.stringify(api.requests) !== JSON.stringify(declaredRequests)) {
+        failures.push(
+          'requests: expected ' + JSON.stringify(declaredRequests) + ', got ' +
+            JSON.stringify(api.requests)
+        );
+      }
       /* Any console output a scenario did not declare is a failure: a warning nobody
          asked for is a change in behaviour. */
       if (JSON.stringify(consoleLines) !== JSON.stringify(declaredConsole)) {
@@ -775,6 +802,11 @@ async function signIn(page, email, password) {
 
 const SCREENS = ['screen-feed', 'screen-add', 'screen-balances'];
 
+/* The methods that change nothing, so they carry no body, no content type and no CSRF
+   token. Spelled out here rather than read from api.js's UNSAFE set: a request whose
+   method the back end gates is exactly the one an assertion must not take on trust. */
+const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+
 function visibleScreens(page) {
   return SCREENS.filter((id) => !page.el(id).hidden);
 }
@@ -786,8 +818,81 @@ function currentTabs(page) {
     .map((tab) => tab.getAttribute('href'));
 }
 
-function noticeIsUp(page, which, what) {
-  page.is(page.el('notice').hidden, false, what + ': #notice visible');
+/* Prose in index.html wraps, so a text node carries whatever newline and indentation
+   the document happens to use. Collapsing runs of whitespace keeps a comparison exact
+   without pinning where a line breaks, the way test_web_shell.py reads a paragraph. */
+function flatText(node) {
+  return node.textContent.replace(/\s+/g, ' ').trim();
+}
+
+/* The gate's standing copy. Nothing in app.js writes it, so a message that lands here
+   instead of in #gate-error would otherwise pass unseen. */
+const GATE_LEDE = 'Use the address whoever set the flat up linked to your name.';
+
+/* setMode()'s four effects are one behaviour: what the gate says it is for. Asserting
+   one of them leaves a create-account form headed "Sign in" with a "Sign in" button. */
+const GATE_MODES = {
+  'signing in': {
+    title: 'Sign in',
+    submit: 'Sign in',
+    other: 'Create an account',
+    autocomplete: 'current-password'
+  },
+  creating: {
+    title: 'Create an account',
+    submit: 'Create account',
+    other: 'I already have an account',
+    autocomplete: 'new-password'
+  }
+};
+
+function gateReads(page, mode, what) {
+  const expected = GATE_MODES[mode];
+  page.is(flatText(page.el('gate-title')), expected.title, what + ': #gate-title text');
+  page.is(
+    flatText(page.el('gate-submit')),
+    expected.submit,
+    what + ': #gate-submit text'
+  );
+  page.is(flatText(page.el('gate-mode')), expected.other, what + ': #gate-mode text');
+  page.is(
+    page.el('gate-password').getAttribute('autocomplete'),
+    expected.autocomplete,
+    what + ': #gate-password autocomplete'
+  );
+}
+
+/* The three curtains and the sign out control, always asserted together and never one
+   at a time. A screen assertion that names only the curtain it expects leaves the other
+   two free to be wrong, which is how a live tab bar ends up sitting over an empty
+   frame on the offline screen. */
+function curtains(page, which, what, signOutVisible) {
+  page.is(page.el('gate').hidden, which !== 'gate', what + ': #gate hidden');
+  page.is(page.el('notice').hidden, which !== 'notice', what + ': #notice hidden');
+  page.is(
+    page.query('.content')[0].hidden,
+    which !== 'app',
+    what + ': the app frame hidden'
+  );
+  page.is(
+    page.query('.tabbar')[0].hidden,
+    which !== 'app',
+    what + ': the tab bar hidden'
+  );
+  page.is(page.el('sign-out').hidden, !signOutVisible, what + ': #sign-out hidden');
+}
+
+function gateIsUp(page, what) {
+  /* showGate() hides the sign out control, and every route to the gate goes through
+     it, so it is hidden whenever the gate is up. */
+  curtains(page, 'gate', what, false);
+  page.is(page.el('notice-unlinked').hidden, true, what + ': #notice-unlinked hidden');
+  page.is(page.el('notice-offline').hidden, true, what + ': #notice-offline hidden');
+  page.is(flatText(page.el('gate-lede')), GATE_LEDE, what + ': #gate-lede text');
+}
+
+function noticeIsUp(page, which, what, signOutVisible) {
+  curtains(page, 'notice', what, signOutVisible);
   page.is(
     page.el('notice-unlinked').hidden,
     which !== 'unlinked',
@@ -798,24 +903,11 @@ function noticeIsUp(page, which, what) {
     which !== 'offline',
     what + ': #notice-offline hidden'
   );
-  page.is(page.el('gate').hidden, true, what + ': #gate hidden');
-  page.is(page.query('.content')[0].hidden, true, what + ': the app frame hidden');
   page.is(page.focused, page.el('notice-title'), what + ': focus');
 }
 
 function appIsUp(page, what) {
-  page.is(page.query('.content')[0].hidden, false, what + ': the app frame visible');
-  page.is(page.query('.tabbar')[0].hidden, false, what + ': the tab bar visible');
-  page.is(page.el('gate').hidden, true, what + ': #gate hidden');
-  page.is(page.el('notice').hidden, true, what + ': #notice hidden');
-  page.is(page.el('sign-out').hidden, false, what + ': #sign-out visible');
-}
-
-function gateIsUp(page, what) {
-  page.is(page.el('gate').hidden, false, what + ': #gate visible');
-  page.is(page.query('.content')[0].hidden, true, what + ': the app frame hidden');
-  page.is(page.query('.tabbar')[0].hidden, true, what + ': the tab bar hidden');
-  page.is(page.el('notice').hidden, true, what + ': #notice hidden');
+  curtains(page, 'app', what, true);
 }
 
 const SCENARIOS = [
@@ -825,11 +917,11 @@ const SCENARIOS = [
       page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
       await page.boot();
       gateIsUp(page, 'no session');
-      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
+      gateReads(page, 'signing in', 'no session');
       page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
       page.is(page.el('gate-error').textContent, '', '#gate-error text');
       page.is(page.focused, page.el('gate-title'), 'focus');
-      page.same(page.requests, ['GET /api/session'], 'requests');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -849,7 +941,7 @@ const SCENARIOS = [
         true,
         'SplitwiseApi as a bare global'
       );
-      page.same(page.requests, ['GET /api/session'], 'requests');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -863,7 +955,7 @@ const SCENARIOS = [
       page.respond('GET', '/session', notLinked());
       await page.boot();
       page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
-      page.same(page.requests, ['GET /api/session'], 'requests');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -872,8 +964,8 @@ const SCENARIOS = [
     async run(page) {
       page.respond('GET', '/session', ok(NO_MEMBER));
       await page.boot();
-      noticeIsUp(page, 'unlinked', 'an unlinked session');
-      page.is(page.el('sign-out').hidden, false, '#sign-out visible');
+      noticeIsUp(page, 'unlinked', 'an unlinked session', true);
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -883,8 +975,8 @@ const SCENARIOS = [
     async run(page) {
       page.respond('GET', '/session', notLinked());
       await page.boot();
-      noticeIsUp(page, 'unlinked', 'a 403 member_not_linked');
-      page.is(page.el('sign-out').hidden, false, '#sign-out visible');
+      noticeIsUp(page, 'unlinked', 'a 403 member_not_linked', true);
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -893,11 +985,12 @@ const SCENARIOS = [
     async run(page) {
       page.respond('GET', '/session', networkFailure());
       await page.boot();
-      noticeIsUp(page, 'offline', 'a network failure');
+      noticeIsUp(page, 'offline', 'a network failure', false);
       /* Explicitly, because the offline notice being up is not enough on its own:
          prompting for a password on a page that cannot send it is how a person types
          their password into nothing, repeatedly. */
       page.is(page.el('gate').hidden, true, '#gate hidden');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -906,8 +999,9 @@ const SCENARIOS = [
     async run(page) {
       page.respond('GET', '/session', serverError());
       await page.boot();
-      noticeIsUp(page, 'offline', 'a 500');
+      noticeIsUp(page, 'offline', 'a 500', false);
       page.is(page.el('gate').hidden, true, '#gate hidden');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -916,9 +1010,9 @@ const SCENARIOS = [
     async run(page) {
       page.absent('api.js');
       await page.boot();
-      noticeIsUp(page, 'offline', 'the client failing to load');
+      noticeIsUp(page, 'offline', 'the client failing to load', false);
       /* Nothing is ever wired, so nothing is ever asked of the back end. */
-      page.same(page.requests, [], 'requests');
+      page.expectRequests([]);
       page.is(page.global('typeof window.SplitwiseApi'), 'undefined', 'SplitwiseApi');
     }
   },
@@ -931,16 +1025,13 @@ const SCENARIOS = [
       page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
-      page.el('gate-email').value = 'sam@example.com';
-      page.el('gate-password').value = 'hunter2';
-      await page.dispatch(page.el('gate-form'), 'submit');
+      await signIn(page, 'sam@example.com', 'hunter2');
       gateIsUp(page, 'a refused sign-in');
+      gateReads(page, 'signing in', 'a refused sign-in');
       page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
       page.is(page.el('gate-error').textContent, REFUSED, '#gate-error text');
       page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
-      page.is(page.el('notice-unlinked').hidden, true, '#notice-unlinked hidden');
-      page.is(page.el('notice-offline').hidden, true, '#notice-offline hidden');
-      page.same(page.requests, ['GET /api/session', 'POST /api/session'], 'requests');
+      page.expectRequests(['GET /api/session', 'POST /api/session']);
     }
   },
 
@@ -952,8 +1043,14 @@ const SCENARIOS = [
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
       gateIsUp(page, 'an unreadable refusal');
+      gateReads(page, 'signing in', 'an unreadable refusal');
       page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
-      page.is(page.el('gate-error').textContent, 'That did not work.', '#gate-error text');
+      page.is(
+        page.el('gate-error').textContent,
+        'That did not work.',
+        '#gate-error text'
+      );
+      page.expectRequests(['GET /api/session', 'POST /api/session']);
     }
   },
 
@@ -966,11 +1063,12 @@ const SCENARIOS = [
       page.respond('POST', '/session', networkFailure());
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
-      noticeIsUp(page, 'offline', 'a sign-in that got no answer');
+      noticeIsUp(page, 'offline', 'a sign-in that got no answer', false);
       page.is(page.el('gate-error').textContent, '', '#gate-error text');
       page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
       /* Enabled again anyway, so the person can try once the network is back. */
       page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
+      page.expectRequests(['GET /api/session', 'POST /api/session']);
     }
   },
 
@@ -984,39 +1082,48 @@ const SCENARIOS = [
       await signIn(page, 'sam@example.com', 'hunter2');
       appIsUp(page, 'a successful sign-in');
       page.is(page.hash, '#/balances', 'location.hash');
-      page.is(page.el('screen-balances').hidden, false, '#screen-balances visible');
-      page.is(page.el('screen-feed').hidden, true, '#screen-feed hidden');
-      page.is(page.el('screen-add').hidden, true, '#screen-add hidden');
+      page.same(visibleScreens(page), ['screen-balances'], 'the screens on show');
       page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
       page.is(page.el('gate-password').value, '', '#gate-password cleared');
-      page.same(
-        page.requests,
-        ['GET /api/session', 'POST /api/session', 'GET /api/session'],
-        'requests'
-      );
+      page.expectRequests([
+        'GET /api/session',
+        'POST /api/session',
+        'GET /api/session'
+      ]);
     }
   },
 
   {
-    /* This one pins what the shipped code does today: the sign-in succeeds, the
-       session read behind it 401s, and the person is returned to a blank gate with no
-       explanation. Reported rather than fixed: changing app/ is not this task. */
-    name: 'a_session_that_dies_between_sign_in_and_session_read_returns_to_the_gate',
+    /* KNOWN DEFECT, PINNED ON PURPOSE. The sign-in succeeds, the session read behind
+       it 401s, and the person is dropped back on a gate with no message at all: the
+       401 handler calls showGate(''), and submitted()'s success path never writes
+       anything. This scenario asserts that blankness so the behaviour cannot change
+       unnoticed, not because it is right. If it starts failing because someone fixed
+       the screen, update this scenario to the new behaviour: do not revert the fix.
+       Reported for its own task rather than fixed here, because changing app/ is out
+       of scope for a test harness. */
+    name: 'a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate',
     async run(page) {
       page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
       page.respond('POST', '/session', ok(A_MEMBER));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
       gateIsUp(page, 'a session that died');
+      gateReads(page, 'signing in', 'a session that died');
+      /* The defect, written down: no message, on a gate the person just signed in at
+         successfully. */
       page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
       page.is(page.el('gate-error').textContent, '', '#gate-error text');
       page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
-      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
-      page.same(
-        page.requests,
-        ['GET /api/session', 'POST /api/session', 'GET /api/session'],
-        'requests'
-      );
+      /* The sign-in cached a session view; the 401 behind it has to drop that copy.
+         A copy of server state left in the browser is how a signed-out page keeps
+         showing a ledger. */
+      page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+      page.expectRequests([
+        'GET /api/session',
+        'POST /api/session',
+        'GET /api/session'
+      ]);
     }
   },
 
@@ -1031,22 +1138,34 @@ const SCENARIOS = [
       await page.dispatch(page.el('gate-mode'), 'click');
       page.is(page.focused, page.el('gate-email'), 'focus after switching mode');
       await signIn(page, 'sam@example.com', 'hunter2');
-      page.same(
-        page.requests,
-        [
-          'GET /api/session',
-          'POST /api/signup',
-          'POST /api/session',
-          'GET /api/session'
-        ],
-        'requests'
-      );
+      page.expectRequests([
+        'GET /api/session',
+        'POST /api/signup',
+        'POST /api/session',
+        'GET /api/session'
+      ]);
       appIsUp(page, 'creating an account');
-      page.is(page.el('gate-title').textContent, 'Sign in', '#gate-title text');
+      /* Back to signing in, because the account now exists. */
+      gateReads(page, 'signing in', 'after creating an account');
     }
   },
 
   {
+    name: 'the_gate_says_whether_it_is_signing_in_or_creating_an_account',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      await page.boot();
+      gateReads(page, 'signing in', 'at first');
+      await page.dispatch(page.el('gate-mode'), 'click');
+      gateReads(page, 'creating', 'after switching');
+      await page.dispatch(page.el('gate-mode'), 'click');
+      gateReads(page, 'signing in', 'after switching back');
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* So a password manager offers to save a new secret rather than fill an old one. */
     name: 'the_gate_switches_the_password_autocomplete_with_the_mode',
     async run(page) {
       page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
@@ -1057,6 +1176,7 @@ const SCENARIOS = [
       page.is(password.getAttribute('autocomplete'), 'new-password', 'creating');
       await page.dispatch(page.el('gate-mode'), 'click');
       page.is(password.getAttribute('autocomplete'), 'current-password', 'back again');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -1069,6 +1189,7 @@ const SCENARIOS = [
       await page.boot();
       const event = await signIn(page, 'sam@example.com', 'hunter2');
       page.is(event.defaultPrevented, true, 'preventDefault on the submit event');
+      page.expectRequests(['GET /api/session', 'POST /api/session']);
     }
   },
 
@@ -1087,6 +1208,7 @@ const SCENARIOS = [
         '{"email":"sam@example.com","password":" hunter2"}',
         'the request body'
       );
+      page.expectRequests(['GET /api/session', 'POST /api/session']);
     }
   },
 
@@ -1098,10 +1220,8 @@ const SCENARIOS = [
       await page.boot();
       await page.dispatch(page.el('sign-out'), 'click');
       gateIsUp(page, 'after signing out');
-      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
-      page.is(page.el('gate-title').textContent, 'Sign in', '#gate-title text');
-      page.is(page.el('gate-submit').textContent, 'Sign in', '#gate-submit text');
-      page.same(page.requests, ['GET /api/session', 'DELETE /api/session'], 'requests');
+      gateReads(page, 'signing in', 'after signing out');
+      page.expectRequests(['GET /api/session', 'DELETE /api/session']);
     }
   },
 
@@ -1115,6 +1235,7 @@ const SCENARIOS = [
       page.same(currentTabs(page), ['#/balances'], 'aria-current');
       page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
       page.is(page.focused, page.el('title-balances'), 'focus');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -1128,6 +1249,7 @@ const SCENARIOS = [
       page.same(page.pushStates, [], 'history.pushState');
       page.is(page.hash, '#/feed', 'location.hash');
       page.same(visibleScreens(page), ['screen-feed'], 'the screens on show');
+      page.expectRequests(['GET /api/session']);
     }
   },
 
@@ -1135,30 +1257,38 @@ const SCENARIOS = [
     name: 'every_request_goes_to_the_api_with_credentials',
     async run(page) {
       page.setCookie('sl_csrf=a-token');
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('DELETE', '/session', noContent());
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
+      await page.dispatch(page.el('sign-out'), 'click');
       await signIn(page, 'sam@example.com', 'hunter2');
-      page.same(
-        page.requests,
-        ['GET /api/session', 'POST /api/session'],
-        'requests'
-      );
+      page.expectRequests([
+        'GET /api/session',
+        'DELETE /api/session',
+        'POST /api/session'
+      ]);
+      /* Every recorded call, never a spot check of the first two: the request whose
+         method decides whether a CSRF token is sent is exactly the one a spot check
+         leaves out, and the back end refuses a DELETE without that header. */
       page.calls.forEach((call, index) => {
-        page.ok(
-          call.url.indexOf('/api/') === 0,
-          'call ' + index + ' goes to /api/, not ' + call.url
-        );
-        page.is(call.credentials, 'same-origin', 'call ' + index + ' credentials');
+        const at = 'call ' + index + ' (' + call.method + ' ' + call.url + ')';
+        page.ok(call.url.indexOf('/api/') === 0, at + ' does not go to /api/');
+        page.is(call.credentials, 'same-origin', at + ' credentials');
+        if (SAFE_METHODS.indexOf(call.method) === -1) {
+          page.same(
+            Object.keys(call.headers),
+            ['Accept', 'Content-Type', 'X-CSRF-Token'],
+            at + ' headers'
+          );
+          page.ok(call.body !== null, at + ' sends a body');
+        } else {
+          /* A safe method changes nothing, so it carries neither a body, a content
+             type, nor a token. */
+          page.same(Object.keys(call.headers), ['Accept'], at + ' headers');
+          page.is(call.body, null, at + ' body');
+        }
       });
-      /* A safe method sends neither, because it changes nothing and needs no token. */
-      page.same(Object.keys(page.calls[0].headers), ['Accept'], 'the GET headers');
-      page.is(page.calls[0].body, null, 'the GET body');
-      page.same(
-        Object.keys(page.calls[1].headers),
-        ['Accept', 'Content-Type', 'X-CSRF-Token'],
-        'the POST headers'
-      );
     }
   },
 
@@ -1174,11 +1304,11 @@ const SCENARIOS = [
       await signIn(page, 'sam@example.com', 'hunter2');
       page.setCookie('sl_csrf=second-token');
       await signIn(page, 'sam@example.com', 'hunter2');
-      page.same(
-        page.requests,
-        ['GET /api/session', 'POST /api/session', 'POST /api/session'],
-        'requests'
-      );
+      page.expectRequests([
+        'GET /api/session',
+        'POST /api/session',
+        'POST /api/session'
+      ]);
       page.is(page.calls[1].headers['X-CSRF-Token'], 'first-token', 'the first POST');
       page.is(page.calls[2].headers['X-CSRF-Token'], 'second-token', 'the second POST');
     }
@@ -1195,6 +1325,7 @@ const SCENARIOS = [
       page.is(answer.jsonCalls, 0, 'json() calls on the 204');
       page.is(page.el('gate').hidden, false, '#gate visible');
       page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+      page.expectRequests(['GET /api/session', 'DELETE /api/session']);
     }
   },
 
@@ -1217,6 +1348,7 @@ const SCENARIOS = [
         message !== null && message.indexOf('a[href]') !== -1,
         'the message names the selector, and was: ' + message
       );
+      page.expectRequests(['GET /api/session']);
     }
   }
 ];
