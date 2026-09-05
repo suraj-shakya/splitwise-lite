@@ -74,13 +74,43 @@
   <section class="screen screen--feed" id="screen-feed" aria-labelledby="title-feed">
     <h1 class="screen-title" id="title-feed" tabindex="-1">Feed</h1>
     <p class="lede">Every expense the group has recorded, newest first.</p>
-    <div class="card">
-      <p class="marker">Placeholder. Task 11 fills this with the expense feed.</p>
-      <ul class="notes">
-        <li>Each entry says who paid and how the cost was shared.</li>
-        <li>Nothing is recorded yet, so there is nothing to show.</li>
-      </ul>
+
+    <!-- Four states, and never two of them at once: the in-flight line, the empty
+         statement, the failure notice and the list. All four start hidden, so the
+         first paint shows one state at most and never all four. A blank feed area
+         while a request is in flight is indistinguishable from a group that has
+         recorded nothing, so the in-flight state says so in one plain line. No
+         animation, no skeleton and no spinner: a skeleton reads as broken, and a
+         phantom row on a money app reads as data. -->
+    <p class="feed-status" id="feed-loading" hidden>Fetching the group's expenses.</p>
+
+    <!-- Not an error, and not a settled ledger either. It says what is true: nothing
+         has been recorded, and the app only knows what people enter. The link is a
+         plain anchor, because routing is anchors plus hashchange and no click
+         handler is registered on it. -->
+    <div class="feed-panel" id="feed-empty" hidden>
+      <p class="feed-panel-lead">Nobody has recorded an expense in this group yet.</p>
+      <p class="feed-panel-text">The app only knows what people enter. Once someone
+        adds a spend it appears here, newest first.</p>
+      <a class="feed-action" href="#/add">Add the first expense</a>
     </div>
+
+    <!-- Claims nothing about what the ledger holds: a request that did not arrive is
+         not an empty group, and must never read as one. -->
+    <div class="feed-panel feed-panel--failed" id="feed-error" hidden>
+      <p class="feed-panel-text">The feed did not arrive. Nothing you have recorded
+        is lost.</p>
+      <button class="feed-retry" id="feed-retry" type="button">Try again</button>
+    </div>
+
+    <!-- The group's one currency code, filled from the response and shown only once
+         one has arrived. Never a symbol: the server formats amounts without one on
+         purpose, and the front end does not overrule that. -->
+    <p class="feed-currency" id="feed-currency" hidden></p>
+
+    <!-- Filled by the feed block in app.js, and empty here. No sample row: on a money
+         app a plausible fake amount is indistinguishable from a wrong real one. -->
+    <ul class="feed-list" id="feed-list"></ul>
   </section>
 
   <section class="screen screen--add" id="screen-add" aria-labelledby="title-add" hidden>
@@ -97,13 +127,42 @@
 
   <section class="screen screen--balances" id="screen-balances" aria-labelledby="title-balances" hidden>
     <h1 class="screen-title" id="title-balances" tabindex="-1">Balances</h1>
-    <p class="lede">Who owes who, and the trail of confirmed payments behind it.</p>
-    <div class="card">
-      <p class="marker">Placeholder. Task 12 fills this with balances and settle up.</p>
-      <ul class="notes">
-        <li>Figures will be derived from recorded events, never stored.</li>
-        <li>Nothing is derived yet, so no figures appear.</li>
-      </ul>
+    <p class="lede">Who owes who, in the fewest payments.</p>
+
+    <!-- Always visible, and never hidden by any state. Balances are folded out of
+         the event log on every read and are never stored, and the one thing this
+         screen cannot tell you is whether an expense was left unrecorded, so it
+         says so rather than looking complete. Task 16 owns the real signal. -->
+    <p class="balances-note" id="balances-derived">These figures are worked out from
+      the recorded expenses each time this screen opens, and are never stored. An
+      expense nobody recorded is not in them.</p>
+
+    <h2 class="balances-heading">Net positions</h2>
+    <!-- The currency is named once, above the list, and never repeated per row: at
+         320px a code on every line is noise. The code is filled in from the
+         payload's currency field, never hard-coded, and no currency symbol appears
+         anywhere on this screen, in markup, in CSS or in JavaScript. -->
+    <p class="balances-note" id="balances-currency" hidden>Amounts are in <span id="balances-currency-code"></span>.</p>
+    <!-- Both lists ship empty: every row comes from the API or there is no row. -->
+    <ul class="balances-list" id="balances-net"></ul>
+
+    <h2 class="balances-heading">Suggested payments</h2>
+    <ul class="balances-list" id="balances-transfers"></ul>
+
+    <!-- Every fixed sentence the screen can show lives here, hidden, and the code
+         only toggles `hidden`: prose that sits in markup is prose a Python test can
+         pin exactly and a reviewer can read in a diff, and there is no JavaScript
+         test runner in this repo. The only text the code composes is a row.
+         The region sits below the transfer list because "No payments needed" takes
+         that list's place; at most one of the four is ever visible. -->
+    <div id="balances-status" role="status">
+      <p class="balances-message" id="balances-busy" hidden>Working these out.</p>
+      <p class="balances-message" id="balances-error" hidden>These figures could not
+        be worked out just now.</p>
+      <p class="balances-message" id="balances-none" hidden>No payments needed. Every
+        net position is zero.</p>
+      <p class="balances-message" id="balances-empty-roster" hidden>This group has no
+        members yet, so there is nothing to work out.</p>
     </div>
   </section>
 
