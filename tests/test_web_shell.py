@@ -605,7 +605,6 @@ def test_every_screen_names_the_task_that_fills_it() -> None:
     text = document().text
     assert "Placeholder. Task 11 fills this with the expense feed." in text
     assert "Placeholder. Task 10 fills this with expense entry." in text
-    assert "Placeholder. Task 12 fills this with balances and settle up." in text
 
 
 def test_no_screen_shows_invented_data() -> None:
@@ -839,3 +838,142 @@ def test_one_document_says_how_to_clear_a_stuck_service_worker() -> None:
 def test_no_document_claims_the_shell_shows_real_data() -> None:
     combined = claude_md() + readme()
     assert "placeholder" in combined.lower()
+
+
+# --- Task 12: the balances screen, the markup ------------------------------
+
+# Every id this task adds is prefixed `balances-`; the section id and the heading id
+# are task 8's and are left alone.
+BALANCES_IDS = {
+    "balances-derived",
+    "balances-status",
+    "balances-busy",
+    "balances-error",
+    "balances-none",
+    "balances-empty-roster",
+    "balances-currency",
+    "balances-currency-code",
+    "balances-net",
+    "balances-transfers",
+}
+
+# Every fixed sentence the screen can show lives in the markup, so a Python test can
+# pin it exactly and a reviewer can read it in a diff. The code only toggles `hidden`
+# and composes one row: a name, a verb and an amount.
+BALANCES_MESSAGES = {
+    "balances-busy": "Working these out.",
+    "balances-error": "These figures could not be worked out just now.",
+    "balances-none": "No payments needed. Every net position is zero.",
+    "balances-empty-roster": (
+        "This group has no members yet, so there is nothing to work out."
+    ),
+}
+
+BALANCES_DERIVED = (
+    "These figures are worked out from the recorded expenses each time this screen "
+    "opens, and are never stored. An expense nobody recorded is not in them."
+)
+
+
+def balances_section() -> str:
+    """The raw markup of `<section id="screen-balances">`, and nothing else."""
+    found = re.search(
+        r'<section\b[^>]*\bid="screen-balances".*?</section>', markup(), re.S
+    )
+    assert found is not None, "index.html carries a balances section"
+    return found.group(0)
+
+
+def balances_markup() -> Document:
+    return Document(balances_section())
+
+
+def inner(source: str, element_id: str, tag: str) -> str:
+    """The inner markup of one element, with its line wrapping flattened.
+
+    Prose wraps in the source, so a sentence can straddle a newline; comparing the
+    raw text would make these assertions depend on where a line happens to break.
+    """
+    found = re.search(
+        rf'<{tag}\b[^>]*\bid="{element_id}"[^>]*>(.*?)</{tag}>', source, re.S
+    )
+    assert found is not None, element_id
+    return " ".join(found.group(1).split())
+
+
+def test_the_balances_section_carries_every_id_the_screen_toggles() -> None:
+    # A mistyped id is a blank screen and there is no browser here to catch it, so
+    # the set is pinned exactly rather than checked one at a time.
+    present = {attrs["id"] for _, attrs in balances_markup().tags if attrs.get("id")}
+    assert present == BALANCES_IDS | {"screen-balances", "title-balances"}
+
+
+def test_the_balances_heading_and_lede_say_what_the_screen_is() -> None:
+    section = balances_section()
+    heading = re.search(
+        r'<h1\b[^>]*\bid="title-balances"[^>]*>(.*?)</h1>', section, re.S
+    )
+    assert heading is not None
+    assert " ".join(heading.group(1).split()) == "Balances"
+    lede = re.search(r'<p class="lede">(.*?)</p>', section, re.S)
+    assert lede is not None
+    assert " ".join(lede.group(1).split()) == "Who owes who, in the fewest payments."
+
+
+def test_the_balances_section_keeps_its_router_attributes() -> None:
+    # The router hides the section, labels it by its heading and moves focus there,
+    # so none of these may drift while the screen is being filled.
+    doc = balances_markup()
+    section = doc.find("section", id="screen-balances")[0]
+    assert section["class"] == "screen screen--balances"
+    assert section["aria-labelledby"] == "title-balances"
+    assert "hidden" in section
+    assert doc.find("h1", id="title-balances")[0]["tabindex"] == "-1"
+
+
+def test_the_derived_note_is_always_visible_and_says_nothing_is_stored() -> None:
+    # Balances are folded out of the event log on every read and never stored. This
+    # note is the screen's one honest sentence about that, so it never hides.
+    note = balances_markup().find("p", id="balances-derived")[0]
+    assert "hidden" not in note
+    assert inner(balances_section(), "balances-derived", "p") == BALANCES_DERIVED
+
+
+def test_the_status_region_announces_and_ships_every_message_hidden() -> None:
+    doc = balances_markup()
+    assert doc.find("div", id="balances-status")[0]["role"] == "status"
+    section = balances_section()
+    for element_id, sentence in BALANCES_MESSAGES.items():
+        assert "hidden" in doc.find("p", id=element_id)[0], element_id
+        assert inner(section, element_id, "p") == sentence
+
+
+def test_the_two_lists_ship_empty_under_headings_in_the_stated_order() -> None:
+    section = balances_section()
+    headings = [
+        " ".join(text.split())
+        for text in re.findall(r"<h2\b[^>]*>(.*?)</h2>", section, re.S)
+    ]
+    assert headings == ["Net positions", "Suggested payments"]
+    # No invented rows: the lists are filled from the API or not at all.
+    for element_id in ("balances-net", "balances-transfers"):
+        assert inner(section, element_id, "ul") == "", element_id
+
+
+def test_the_currency_line_ships_hidden_with_no_code_in_it() -> None:
+    # The code comes from the payload's `currency` field and is never hard-coded,
+    # so the span is empty in the committed markup and the line starts hidden.
+    section = balances_section()
+    assert "hidden" in balances_markup().find("p", id="balances-currency")[0]
+    assert (
+        inner(section, "balances-currency", "p")
+        == 'Amounts are in <span id="balances-currency-code"></span>.'
+    )
+    assert inner(section, "balances-currency-code", "span") == ""
+
+
+def test_the_balances_placeholder_is_gone() -> None:
+    section = balances_section()
+    assert "Placeholder" not in section
+    assert 'class="marker"' not in section
+    assert 'class="notes"' not in section
