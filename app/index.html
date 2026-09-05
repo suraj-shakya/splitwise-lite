@@ -74,13 +74,43 @@
   <section class="screen screen--feed" id="screen-feed" aria-labelledby="title-feed">
     <h1 class="screen-title" id="title-feed" tabindex="-1">Feed</h1>
     <p class="lede">Every expense the group has recorded, newest first.</p>
-    <div class="card">
-      <p class="marker">Placeholder. Task 11 fills this with the expense feed.</p>
-      <ul class="notes">
-        <li>Each entry says who paid and how the cost was shared.</li>
-        <li>Nothing is recorded yet, so there is nothing to show.</li>
-      </ul>
+
+    <!-- Four states, and never two of them at once: the in-flight line, the empty
+         statement, the failure notice and the list. All four start hidden, so the
+         first paint shows one state at most and never all four. A blank feed area
+         while a request is in flight is indistinguishable from a group that has
+         recorded nothing, so the in-flight state says so in one plain line. No
+         animation, no skeleton and no spinner: a skeleton reads as broken, and a
+         phantom row on a money app reads as data. -->
+    <p class="feed-status" id="feed-loading" hidden>Fetching the group's expenses.</p>
+
+    <!-- Not an error, and not a settled ledger either. It says what is true: nothing
+         has been recorded, and the app only knows what people enter. The link is a
+         plain anchor, because routing is anchors plus hashchange and no click
+         handler is registered on it. -->
+    <div class="feed-panel" id="feed-empty" hidden>
+      <p class="feed-panel-lead">Nobody has recorded an expense in this group yet.</p>
+      <p class="feed-panel-text">The app only knows what people enter. Once someone
+        adds a spend it appears here, newest first.</p>
+      <a class="feed-action" href="#/add">Add the first expense</a>
     </div>
+
+    <!-- Claims nothing about what the ledger holds: a request that did not arrive is
+         not an empty group, and must never read as one. -->
+    <div class="feed-panel feed-panel--failed" id="feed-error" hidden>
+      <p class="feed-panel-text">The feed did not arrive. Nothing you have recorded
+        is lost.</p>
+      <button class="feed-retry" id="feed-retry" type="button">Try again</button>
+    </div>
+
+    <!-- The group's one currency code, filled from the response and shown only once
+         one has arrived. Never a symbol: the server formats amounts without one on
+         purpose, and the front end does not overrule that. -->
+    <p class="feed-currency" id="feed-currency" hidden></p>
+
+    <!-- Filled by the feed block in app.js, and empty here. No sample row: on a money
+         app a plausible fake amount is indistinguishable from a wrong real one. -->
+    <ul class="feed-list" id="feed-list"></ul>
   </section>
 
   <section class="screen screen--add" id="screen-add" aria-labelledby="title-add" hidden>

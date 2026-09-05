@@ -458,7 +458,7 @@ def test_the_nav_names_itself_and_lists_the_three_screens_in_order() -> None:
     assert len(navs) == 1
     assert navs[0]["aria-label"] == "Screens"
     # Add sits in the middle: the highest-frequency action gets the easiest thumb.
-    hrefs = [attrs["href"] for attrs in doc.find("a") if attrs.get("href")]
+    hrefs = [attrs["href"] for attrs in doc.find("a", **{"class": "tab"})]
     assert hrefs == ["#/feed", "#/add", "#/balances"]
 
 
@@ -603,7 +603,6 @@ def test_a_noscript_block_explains_that_the_app_needs_javascript() -> None:
 
 def test_every_screen_names_the_task_that_fills_it() -> None:
     text = document().text
-    assert "Placeholder. Task 11 fills this with the expense feed." in text
     assert "Placeholder. Task 10 fills this with expense entry." in text
 
 
