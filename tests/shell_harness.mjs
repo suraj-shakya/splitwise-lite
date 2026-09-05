@@ -759,6 +759,42 @@ const SCENARIOS = [
       page.is(page.focused, page.el('gate-title'), 'focus');
       page.same(page.requests, ['GET /api/session'], 'requests');
     }
+  },
+
+  {
+    /* The replacement for the deleted structural test, and the scenario both mutants
+       are measured against. */
+    name: 'a_refused_sign_in_tells_the_person_why',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      page.el('gate-email').value = 'sam@example.com';
+      page.el('gate-password').value = 'hunter2';
+      await page.dispatch(page.el('gate-form'), 'submit');
+      gateIsUp(page, 'a refused sign-in');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, REFUSED, '#gate-error text');
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
+      page.is(page.el('notice-unlinked').hidden, true, '#notice-unlinked hidden');
+      page.is(page.el('notice-offline').hidden, true, '#notice-offline hidden');
+      page.same(page.requests, ['GET /api/session', 'POST /api/session'], 'requests');
+    }
+  },
+
+  {
+    name: 'an_unknown_hash_is_replaced_not_pushed',
+    async run(page) {
+      page.startAt('#/nope');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      await page.boot();
+      page.same(page.replaceStates, ['#/feed'], 'history.replaceState');
+      page.same(page.pushStates, [], 'history.pushState');
+      page.is(page.hash, '#/feed', 'location.hash');
+      page.is(page.el('screen-feed').hidden, false, '#screen-feed visible');
+      page.is(page.el('screen-add').hidden, true, '#screen-add hidden');
+      page.is(page.el('screen-balances').hidden, true, '#screen-balances hidden');
+    }
   }
 ];
 
