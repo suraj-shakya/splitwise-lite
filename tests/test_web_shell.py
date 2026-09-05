@@ -531,6 +531,51 @@ def test_the_document_says_what_an_unlinked_account_sees() -> None:
     assert "The app cannot reach the server" in text
 
 
+def gate_submit_handler() -> str:
+    """The body of app.js's form submit handler, so the assertions below are about
+    the one function that decides what a rejected sign-in shows."""
+    router = (APP / "app.js").read_text(encoding="utf-8")
+    start = router.index("function submitted(")
+    end = router.index("function wire(", start)
+    return router[start:end]
+
+
+def test_a_refused_sign_in_tells_the_person_why() -> None:
+    """A wrong password must put a message on the gate.
+
+    The regression this pins: the 401 handler re-shows the gate with a blank message,
+    so a submit handler that skips 401 leaves the button greying and un-greying as the
+    entire feedback for a wrong password. There is no JavaScript runner in this repo
+    and no browser in this suite, so this is asserted over the source of the one
+    function involved rather than by driving it. It is named here as a structural
+    check, not as a substitute for opening the page.
+    """
+    handler = gate_submit_handler()
+    # The exact exclusion that caused it. 401 is the commonest refusal this form
+    # produces, not one to stay quiet about.
+    assert "status !== 401" not in handler
+    assert "!== 401" not in handler
+    # It writes the message and reveals the element that carries it.
+    assert "gateError.textContent = error.message" in handler
+    assert "gateError.hidden = false" in handler
+    # And it re-shows the gate, because the 401 handler has just replaced what is on
+    # screen and blanked the message.
+    assert "show('gate')" in handler
+    # The only thing it stays quiet about is a request that got no answer, because
+    # the offline notice is up instead and the gate deliberately is not.
+    assert "error.status === 0" in handler
+    assert "error.status >= 500" in handler
+
+
+def test_the_gate_carries_somewhere_to_put_that_message() -> None:
+    doc = document()
+    error = doc.find("p", id="gate-error")
+    assert len(error) == 1
+    # Announced when it appears, because it appears in response to an action.
+    assert error[0]["role"] == "alert"
+    assert "hidden" in error[0]
+
+
 def test_every_element_the_router_reaches_for_exists_in_the_document() -> None:
     """The boot wiring is the one thing a mistyped id turns into a blank page.
 

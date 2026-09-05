@@ -191,10 +191,17 @@
         return refresh();
       })
       .catch(function (error) {
-        if (error && error.status !== 401 && error.status !== 0) {
-          gateError.textContent = error.message || 'That did not work.';
-          gateError.hidden = false;
+        if (!error || error.status === 0 || error.status >= 500) {
+          /* No answer came back at all. The offline notice is already up and the
+             gate deliberately is not, so there is nothing to say here. */
+          return;
         }
+        /* Everything else is something the person can act on, a wrong password most
+           of all. The 401 handler has just re-shown the gate with a blank message,
+           so this runs after it and is what they actually read. */
+        gateError.textContent = error.message || 'That did not work.';
+        gateError.hidden = false;
+        show('gate');
       })
       .then(function () {
         gateSubmit.disabled = false;
