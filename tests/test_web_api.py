@@ -279,6 +279,7 @@ def test_the_root_serves_the_shell_document(client) -> None:
     "path, content_type",
     [
         ("/app.js", "text/javascript; charset=utf-8"),
+        ("/api.js", "text/javascript; charset=utf-8"),
         ("/sw.js", "text/javascript; charset=utf-8"),
         ("/styles.css", "text/css; charset=utf-8"),
         ("/manifest.json", "application/json"),
@@ -371,6 +372,7 @@ def test_a_missing_static_path_does_not_fall_back_to_the_shell(client) -> None:
     [
         "/",
         "/app.js",
+        "/api.js",
         "/sw.js",
         "/styles.css",
         "/manifest.json",

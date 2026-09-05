@@ -278,6 +278,8 @@ APP_FILES = {
     "index.html",
     "styles.css",
     "app.js",
+    # Task 9a: the one file under app/ that talks to the back end.
+    "api.js",
     "sw.js",
     "manifest.json",
     "icons/icon-192.png",
@@ -290,6 +292,7 @@ SHELL_PRECACHE = [
     "index.html",
     "styles.css",
     "app.js",
+    "api.js",
     "manifest.json",
     "icons/icon-192.png",
     "icons/icon-512.png",
@@ -300,6 +303,11 @@ SHELL_PRECACHE = [
 VIEWPORT = "width=device-width, initial-scale=1, viewport-fit=cover"
 
 SCREEN_IDS = ["screen-feed", "screen-add", "screen-balances"]
+
+# Task 9a: the gate and the two notices. Deliberately not sections and deliberately
+# without an h1, so the three screens stay the only sections and the only headings
+# the router knows about.
+GATE_IDS = ["gate", "notice"]
 
 
 class Document(HTMLParser):
@@ -482,6 +490,47 @@ def test_only_the_default_screen_starts_visible() -> None:
     assert hidden == {"screen-feed": False, "screen-add": True, "screen-balances": True}
 
 
+def test_the_gate_is_not_a_fourth_route() -> None:
+    # The router owns the route-to-screen mapping, and the gate is shown in place of
+    # <main> and the tab bar rather than being routed to, so the current hash is left
+    # alone and signing in returns the user to the screen they were on.
+    router = (APP / "app.js").read_text(encoding="utf-8")
+    found = re.search(r"var ROUTES = \{(.*?)\};", router, re.S)
+    assert found is not None
+    assert re.findall(r"'(#/[a-z]+)'", found.group(1)) == [
+        "#/feed",
+        "#/add",
+        "#/balances",
+    ]
+    doc = document()
+    for gate_id in GATE_IDS:
+        assert len(doc.find("div", id=gate_id)) == 1
+        assert "hidden" in doc.find("div", id=gate_id)[0]
+    assert not doc.find("section", id="gate")
+
+
+def test_the_gate_has_both_fields_both_controls_and_a_way_out() -> None:
+    doc = document()
+    email = doc.find("input", id="gate-email")[0]
+    assert email["type"] == "email"
+    assert email["autocomplete"] == "username"
+    password = doc.find("input", id="gate-password")[0]
+    assert password["type"] == "password"
+    assert password["autocomplete"] == "current-password"
+    # Switched to new-password when the gate is creating an account, so a password
+    # manager offers to save a new secret rather than to fill an old one.
+    assert "'new-password'" in (APP / "app.js").read_text(encoding="utf-8")
+    assert doc.find("button", id="gate-submit")
+    assert doc.find("button", id="gate-mode")
+    assert doc.find("button", id="sign-out")
+
+
+def test_the_document_says_what_an_unlinked_account_sees() -> None:
+    text = document().text
+    assert "Nobody has linked you to a member yet." in text
+    assert "The app cannot reach the server" in text
+
+
 def test_a_noscript_block_explains_that_the_app_needs_javascript() -> None:
     assert document().find("noscript")
     assert "JavaScript" in document().text
@@ -515,14 +564,76 @@ def test_no_shell_file_reaches_outside_the_origin(name: str) -> None:
     assert b"https://" not in data
 
 
+# Task 9a gave the shell a back end to call and narrowed this rule rather than
+# removing it. `api.js` is the one network chokepoint, so there is one answer to a
+# 401 and one place to change when the contract does; `sw.js` may name `/api` only so
+# that it can refuse to cache it. Everything else is still forbidden everywhere, and
+# `XMLHttpRequest`, `EventSource` and `WebSocket` are still forbidden outright:
+# nothing here needs them.
+FETCH_ALLOWED = {"api.js"}
+API_PATH_ALLOWED = {"api.js", "sw.js"}
+
+
 @pytest.mark.parametrize("name", sorted(APP_FILES))
-def test_no_shell_file_calls_a_back_end(name: str) -> None:
-    # The shell is deliberately parallel to the whole 2 to 7 chain and has nothing
-    # to call. The worker answers from its precache, so it never calls out either,
-    # and no request can be cached beyond the shell files listed above.
+def test_only_the_api_client_calls_the_back_end(name: str) -> None:
     data = (APP / name).read_bytes()
-    for forbidden in (b"fetch(", b"XMLHttpRequest", b"EventSource", b"WebSocket", b"/api"):
-        assert forbidden not in data
+    for forbidden in (b"XMLHttpRequest", b"EventSource", b"WebSocket"):
+        assert forbidden not in data, name
+    if name not in FETCH_ALLOWED:
+        assert b"fetch(" not in data, name
+    if name not in API_PATH_ALLOWED:
+        assert b"/api" not in data, name
+
+
+def test_the_narrowed_rule_still_bites() -> None:
+    # The companion to the test above: proof that narrowing it to one file left a
+    # rule that still refuses the thing it was written to refuse. Without this, a
+    # screen task could add its own fetch to app.js and only the loosened rule would
+    # be there to notice.
+    router = (APP / "app.js").read_bytes()
+    assert b"fetch(" not in router
+    assert b"/api" not in router
+
+    callers = {
+        name for name in APP_FILES if b"fetch(" in (APP / name).read_bytes()
+    }
+    assert callers == {"api.js"}
+
+    builders = {
+        name for name in APP_FILES if b"/api" in (APP / name).read_bytes()
+    }
+    assert builders == {"api.js", "sw.js"}
+
+    # And the client really is a client: it is the file the rule was widened for.
+    assert b"fetch(" in (APP / "api.js").read_bytes()
+    assert b"/api" in (APP / "api.js").read_bytes()
+
+
+def test_the_api_client_holds_no_state_of_its_own() -> None:
+    # The session cookie is HttpOnly and unreadable here by design, and a copy of
+    # server state kept in the browser is how a signed-out page keeps showing a
+    # ledger.
+    source = (APP / "api.js").read_text(encoding="utf-8")
+    for forbidden in ("localStorage", "sessionStorage", "indexedDB", "document.cookie ="):
+        assert forbidden not in source
+    assert "credentials: 'same-origin'" in source
+    # Read at request time, never cached, so a rotated token is picked up next time.
+    assert "readCookie(CSRF_COOKIE)" in source
+
+
+def test_the_client_names_its_three_failure_paths() -> None:
+    # A 401, a 403 member_not_linked and a request that got no answer are three
+    # different screens, and which is which is decided in one file.
+    source = (APP / "api.js").read_text(encoding="utf-8")
+    for named in ("member_not_linked", "onUnauthenticated", "onNotLinked", "onOffline"):
+        assert named in source
+
+
+def test_the_worker_refuses_to_cache_the_api() -> None:
+    # An offline write must fail loudly rather than looking like a success.
+    source = (APP / "sw.js").read_text(encoding="utf-8")
+    assert "pathname.indexOf('/api') === 0" in source
+    assert "'/api'" in source
 
 
 def test_no_rule_sets_a_font_size_below_sixteen_pixels() -> None:
@@ -570,7 +681,7 @@ def test_every_precache_entry_resolves_to_a_file() -> None:
 
 # --- Docs ------------------------------------------------------------------
 
-RUN_COMMAND = "uv run python scripts/serve.py"
+RUN_COMMAND = "uv run python scripts/serve.py --store ledger.sqlite3"
 
 
 def claude_md() -> str:

@@ -3,9 +3,10 @@
 A shared expense ledger for small groups. See `plans/spec.md` for scope and
 `plans/backlog.md` for the build order.
 
-Status: the domain layer is under way and the mobile web shell runs. The shell's
-three screens are placeholders: it shows no expenses, no members and no balances,
-because nothing is wired to the domain layer yet.
+Status: the domain layer is under way, and one process now serves the mobile web
+shell and a JSON API on the same origin. You can sign up, sign in and be told who you
+are. The three screens are still placeholders: they show no expenses, no members and
+no balances, because tasks 10, 11 and 12 fill them.
 
 ## Setup
 
@@ -43,13 +44,24 @@ database and prints what it did.
 
 ## Run the app
 
-    uv run python scripts/serve.py
+    uv run python scripts/serve.py --store ledger.sqlite3
 
-Then open `http://localhost:8000`. The optional first argument is a port. There is no
-build step and no npm: `scripts/serve.py` serves the plain files in `app/`. An edit to
-one of the eight shell files will not show on reload, though, because `app/sw.js`
-precaches them and serves them from its cache: bump `VERSION` in `app/sw.js` and reload
-to pick the change up.
+Then open `http://localhost:8000`. `--store` is required and has no default; the
+optional second argument is a port. One process serves both halves: the shell in
+`app/` and the JSON API under `/api`, on the same origin.
+
+It is a development server bound to `127.0.0.1`, not a production one. There is no
+TLS, so the session cookie is sent without `Secure`, and loopback is the whole of what
+makes that safe.
+
+Sign up on the gate the app shows, then ask whoever set the flat up to link your
+account to your name with `setup_group.py link`. Until they do, the app says so and
+shows no ledger: signing up on its own grants nothing.
+
+There is no build step and no npm: `scripts/serve.py` serves the plain files in
+`app/`. An edit to one of the nine shell files will not show on reload, though,
+because `app/sw.js` precaches them and serves them from its cache: bump `VERSION` in
+`app/sw.js` and reload to pick the change up. The worker never caches `/api`.
 
 To clear a worker that is stuck entirely, open DevTools, Application, Service Workers,
 and press Unregister, then reload.

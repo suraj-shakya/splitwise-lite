@@ -50,6 +50,9 @@ body {
 
 .topbar {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   background: var(--theme);
   color: #ffffff;
   padding: 14px calc(var(--gutter) + env(safe-area-inset-right, 0px)) 14px calc(var(--gutter) + env(safe-area-inset-left, 0px));
@@ -57,8 +60,8 @@ body {
 }
 
 .wordmark {
-  margin: 0 auto;
-  max-width: var(--column);
+  flex: 1 1 auto;
+  margin: 0;
   font-size: 17px;
   font-weight: 700;
 }
@@ -144,6 +147,128 @@ body {
 
 .notes li + li {
   margin-top: 6px;
+}
+
+/* The gate and the two notices ------------------------------------------- */
+
+/* Shown in place of the scrolling area and the tab bar, so the header stays and
+   nothing below it can be reached while it is up. */
+.curtain {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  max-width: var(--column);
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px var(--gutter) 32px;
+}
+
+.curtain-title {
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.curtain-title:focus-visible {
+  outline: 3px solid var(--theme);
+  outline-offset: 4px;
+}
+
+.curtain-text {
+  margin: 0 0 20px;
+  font-size: 17px;
+  color: var(--muted);
+}
+
+.curtain-error {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid #9f1239;
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
+  color: #9f1239;
+}
+
+.gate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.field-label {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* 17px, comfortably over the 16px below which iOS zooms the page on focus. */
+.field {
+  min-height: 48px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 17px;
+  color: var(--text);
+}
+
+.field:focus-visible {
+  outline: 3px solid var(--theme);
+  outline-offset: 1px;
+}
+
+.button {
+  min-height: 48px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--theme);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  touch-action: manipulation;
+}
+
+.button[disabled] {
+  opacity: 0.6;
+}
+
+.button:focus-visible,
+.link-button:focus-visible,
+.signout:focus-visible {
+  outline: 3px solid var(--theme);
+  outline-offset: 2px;
+}
+
+.link-button {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--theme);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  text-decoration: underline;
+  touch-action: manipulation;
+}
+
+.signout {
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: none;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  touch-action: manipulation;
 }
 
 /* Bottom nav -------------------------------------------------------------- */
