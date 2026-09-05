@@ -7,15 +7,16 @@ web shell in `app/` whose three screens are still placeholders.
 
 - Install deps: `uv sync` (project-local `.venv`, host Python stays untouched)
 - Run tests: `uv run python -m pytest`
-- Run the app: `uv run python scripts/serve.py`, then open `http://localhost:8000`
+- Run the app: `uv run python scripts/serve.py --store ledger.sqlite3`, then open `http://localhost:8000`. `--store` is required and has no default. It serves `app/` and the JSON API from one process, binds `127.0.0.1` only, and is a development server, not a production one
 - Set up the group: `uv run python scripts/setup_group.py apply --store PATH --definition group.toml`; safe to re-run. `link` connects a signed-up account to a
   member row, `show` prints the roster
 
 There is no build step and no npm: the files in `app/` are what the browser runs. An
-edit to one of the eight shell files will not show on reload, though, because
+edit to one of the nine shell files will not show on reload, though, because
 `app/sw.js` precaches them and serves them from its cache: bump `VERSION` in
 `app/sw.js` and reload, or unregister the worker (DevTools, Application, Service
-Workers, Unregister).
+Workers, Unregister). The worker never caches `/api`, so data is never stale behind
+it.
 
 Reach the app on `localhost` or `127.0.0.1` only. A LAN address is not a secure context,
 so the service worker will not register there and the app will not offer to install.
@@ -35,13 +36,23 @@ Dependencies are added to `pyproject.toml` deliberately, then installed with `uv
 Never run `pip install` or `uv pip install` ad hoc: it puts the lockfile and the venv
 out of step with the declared project. Dev-only tools go in the `dev` group.
 
+Flask is the one runtime dependency, and it is a dependency of
+`src/splitwise_lite/web.py` and of nothing else. The store is synchronous `sqlite3`
+and every domain function is a blocking call, so a threaded, synchronous WSGI app is
+the shape that matches what already exists. The domain layer stays framework free and
+imports with Flask absent, which is what keeps that choice reversible; a test asserts
+it.
+
 ## Where things live
 
 - `plans/spec.md`: what the product is, what is in and out of scope, open questions
 - `plans/backlog.md`: numbered tasks, dependencies, build order
 - `src/splitwise_lite/`: the package
-- `app/`: the static front end shell, served as plain files and never imported by
-  the package
+- `src/splitwise_lite/web.py`: the HTTP layer. The one module that imports a web
+  framework, and the one place that decides cookies, CSRF, rate limiting and what a
+  `DomainError` becomes on the wire
+- `app/`: the front end shell, served as plain files and never imported by the
+  package. `app/api.js` is the only file in it that calls the back end
 - `scripts/`: the dev server, the icon generator and the group setup command; no
   dependency beyond the standard library and the package itself
 - `group.example.toml`: the shape of the roster `setup_group.py` applies. The real

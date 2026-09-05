@@ -10,7 +10,7 @@
    older cache, so exactly one entry stays in Cache Storage. To clear a worker that
    is stuck: DevTools, Application, Service Workers, Unregister. */
 
-var VERSION = 'v1';
+var VERSION = 'v2';
 var CACHE = 'splitwise-lite-shell-' + VERSION;
 
 /* Exactly the shell. Relative, like every other URL in app/, so the directory can
@@ -19,6 +19,7 @@ var SHELL = [
   'index.html',
   'styles.css',
   'app.js',
+  'api.js',
   'manifest.json',
   'icons/icon-192.png',
   'icons/icon-512.png',
@@ -85,6 +86,12 @@ function fromShell(url) {
 self.addEventListener('fetch', function (event) {
   var request = event.request;
   if (request.method !== 'GET') {
+    return;
+  }
+  /* Never touch the API. No response from it is ever cached, so a balance cannot
+     go stale behind a cache nobody remembers exists, and an offline write fails
+     loudly rather than looking like a success. */
+  if (new URL(request.url).pathname.indexOf('/api') === 0) {
     return;
   }
   /* Every route is the same document, so a navigation is answered with the cached

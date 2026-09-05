@@ -26,7 +26,43 @@
      telling the user what they are looking at. -->
 <header class="topbar">
   <p class="wordmark">Splitwise Lite</p>
+  <!-- Inside the app frame, hidden until there is a session to end. -->
+  <button class="signout" id="sign-out" type="button" hidden>Sign out</button>
 </header>
+
+<!-- The auth gate. Not a fourth route: it is shown in place of <main> and the tab
+     bar, so ROUTES in app.js still holds exactly three entries and the current hash
+     is left alone, which returns the user to the screen they were on. A div, not a
+     section, so the three screens stay the only sections the document has. -->
+<div class="curtain gate" id="gate" hidden>
+  <h2 class="curtain-title" id="gate-title" tabindex="-1">Sign in</h2>
+  <p class="curtain-text" id="gate-lede">Use the address whoever set the flat up
+    linked to your name.</p>
+  <p class="curtain-error" id="gate-error" role="alert" hidden></p>
+  <form class="gate-form" id="gate-form" novalidate>
+    <label class="field-label" for="gate-email">Email</label>
+    <input class="field" id="gate-email" name="email" type="email"
+           autocomplete="username" inputmode="email" autocapitalize="none"
+           autocorrect="off" spellcheck="false" required>
+    <label class="field-label" for="gate-password">Password</label>
+    <input class="field" id="gate-password" name="password" type="password"
+           autocomplete="current-password" required>
+    <button class="button" id="gate-submit" type="submit">Sign in</button>
+  </form>
+  <p class="curtain-text">
+    <button class="link-button" id="gate-mode" type="button">Create an account</button>
+  </p>
+</div>
+
+<!-- The two states that are not a sign-in problem, so neither shows the gate. -->
+<div class="curtain notice" id="notice" hidden>
+  <p class="curtain-title" id="notice-title" tabindex="-1">Not ready yet</p>
+  <p class="curtain-text" id="notice-unlinked" hidden>Nobody has linked you to a
+    member yet. Whoever set the flat up can connect your account to your name, and
+    then this page will show the ledger.</p>
+  <p class="curtain-text" id="notice-offline" hidden>The app cannot reach the server
+    right now. Nothing you have recorded is lost; try again in a moment.</p>
+</div>
 
 <main class="content">
 

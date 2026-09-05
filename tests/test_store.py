@@ -1529,11 +1529,60 @@ def test_a_round_trip_raises_no_deprecation_warning(tmp_path: Path) -> None:
             opened.list_events("g1")
 
 
-def test_the_project_still_declares_no_runtime_dependency() -> None:
+# Task 9a made Flask the first runtime dependency. The guard was narrowed rather than
+# deleted: "zero dependencies" became "exactly one, and it is Flask", so a second
+# runtime dependency, a loosened cap or a quietly added dev tool still fails here.
+# The manifest string is only half the guard, though, because a transitive package is
+# importable without being declared. The test below it is the other half, and the two
+# live next to each other so somebody deleting one sees its partner.
+
+FRAMEWORK_PACKAGE = "flask"
+"""The one declared runtime dependency, and the only one any module may import."""
+
+TRANSITIVE_PACKAGES = frozenset(
+    {"werkzeug", "jinja2", "itsdangerous", "markupsafe", "click", "blinker"}
+)
+"""What installing Flask drags in. None of them is declared, so importing one directly
+would make the manifest a lie about what this project depends on."""
+
+FRAMEWORK_MODULE = "web"
+"""The one module in the package allowed to know a web framework exists."""
+
+
+def test_the_project_declares_exactly_one_runtime_dependency() -> None:
     root = Path(store_module.__file__).parents[2]
     manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert manifest["project"]["dependencies"] == []
-    assert manifest["dependency-groups"] == {"dev": ["pytest>=8.0"]}
+    assert manifest["project"]["dependencies"] == ["flask>=3.0,<4"]
+    assert manifest["dependency-groups"] == {"dev": ["pytest>=8.0,<10"]}
+
+
+def imported_top_level_packages(source: str) -> set[str]:
+    """Every top-level package name ``source`` imports, from its AST.
+
+    Read from the tree rather than by searching the text, so a package named inside a
+    docstring, a comment or a string literal is not mistaken for an import, and an
+    ``import a.b`` or a ``from a.b import c`` still counts as importing ``a``.
+    """
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found.add(alias.name.partition(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.add(node.module.partition(".")[0])
+    return found
+
+
+def test_only_the_web_module_imports_the_framework() -> None:
+    package = Path(store_module.__file__).parent
+    modules = sorted(package.glob("*.py"))
+    assert len(modules) >= 9, [path.name for path in modules]
+    for path in modules:
+        imported = imported_top_level_packages(path.read_text(encoding="utf-8"))
+        assert not imported & TRANSITIVE_PACKAGES, path.name
+        if path.stem == FRAMEWORK_MODULE:
+            continue
+        assert FRAMEWORK_PACKAGE not in imported, path.name
 
 
 def test_the_store_is_re_exported_from_the_package_root() -> None:
