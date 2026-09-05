@@ -977,3 +977,114 @@ def test_the_balances_placeholder_is_gone() -> None:
     assert "Placeholder" not in section
     assert 'class="marker"' not in section
     assert 'class="notes"' not in section
+
+
+# --- Task 12: the balances screen, the router region -----------------------
+
+# These are bans, and a ban is falsified by a single occurrence. Nothing below
+# claims a rendering behaviour works because a string appears in app.js: PR #30
+# demonstrated that such a test passes against a mutant that reintroduces the bug.
+# What the screen renders is on the hand checklist in the task file instead.
+
+
+def balances_region() -> str:
+    """The task 12 region of app.js: its banner comment to the end of the file."""
+    source = (APP / "app.js").read_text(encoding="utf-8")
+    marker = "/* --- The balances screen ---"
+    assert marker in source, "app.js opens the balances region with a banner comment"
+    return source[source.index(marker) :]
+
+
+def test_the_balances_screen_reimplements_no_money_handling() -> None:
+    # `format_amount` in src/splitwise_lite/money.py is the one display edge. Amount
+    # strings arrive formatted and are inserted exactly as received, and the verb on
+    # a row comes from `direction` alone, so nothing here ever reads "0.00".
+    source = (APP / "app.js").read_text(encoding="utf-8")
+    for forbidden in (
+        "toFixed",
+        "parseFloat",
+        "parseInt",
+        "Number(",
+        "Math.round",
+        "Math.floor",
+        "/ 100",
+        "Intl",
+        "toLocaleString",
+        "NumberFormat",
+        "0.00",
+    ):
+        assert forbidden not in source, forbidden
+
+
+def test_the_shell_builds_rows_without_parsing_markup() -> None:
+    # Every server-provided string reaches the DOM as text, so a display name holding
+    # `<`, `&` or a quote renders as those characters and is never parsed as markup.
+    source = (APP / "app.js").read_text(encoding="utf-8")
+    for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert forbidden not in source, forbidden
+
+
+def test_the_shell_never_reorders_what_the_server_sent() -> None:
+    # `net` is roster order and `transfers` is (from_member_id, to_member_id) order,
+    # both fixed in the domain layer. The screen preserves them exactly.
+    source = (APP / "app.js").read_text(encoding="utf-8")
+    assert ".sort(" not in source
+    assert ".reverse(" not in source
+
+
+def test_the_balances_screen_keeps_no_copy_of_a_derived_figure() -> None:
+    # The spec forbids a stored balance outright, and a figure held over from a
+    # previous visit is "authoritative while being wrong" in miniature. There is also
+    # no polling, no timer and no automatic retry.
+    region = balances_region()
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+        "setInterval",
+        "setTimeout",
+        "requestAnimationFrame",
+    ):
+        assert forbidden not in region, forbidden
+
+
+def test_the_balances_screen_registers_none_of_the_three_global_handlers() -> None:
+    # A 401, a 403 member_not_linked and a request that got no answer are task 9a's
+    # three screens, reused unchanged. This screen owns only "anything else", and
+    # shows no sign-in prompt, no "not linked" notice and no offline message.
+    region = balances_region()
+    for forbidden in ("onUnauthenticated", "onNotLinked", "onOffline", "location.hash ="):
+        assert forbidden not in region, forbidden
+
+
+def test_no_transfer_row_pretends_to_be_tappable() -> None:
+    # Task 13 makes a transfer row expand into the pairwise debts it absorbed. Until
+    # then an affordance that does nothing is worse than none, so the row is not an
+    # anchor, a button or a disclosure, carries no interactive role or tab stop, and
+    # has no click, key or pointer handler.
+    region = balances_region()
+    for forbidden in (
+        "createElement('a')",
+        "createElement('button')",
+        "createElement('details')",
+        "createElement('summary')",
+        "aria-expanded",
+        "tabindex",
+        "setAttribute('role'",
+        "addEventListener('click'",
+        "addEventListener('keydown'",
+        "addEventListener('keyup'",
+        "addEventListener('keypress'",
+        "addEventListener('pointerdown'",
+        "addEventListener('touchstart'",
+        "onclick",
+    ):
+        assert forbidden not in region, forbidden
+
+
+def test_nothing_asks_for_provenance_that_is_not_in_the_payload() -> None:
+    # `payer_debts` and `receiver_credits` are task 13's, along with the payload
+    # change that carries them.
+    source = (APP / "app.js").read_text(encoding="utf-8")
+    assert "payer_debts" not in source
+    assert "receiver_credits" not in source
