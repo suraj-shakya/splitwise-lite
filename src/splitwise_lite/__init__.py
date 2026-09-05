@@ -18,6 +18,10 @@ The domain vocabulary lives in six modules and is re-exported here:
 * ``groups``: reading a roster file, creating the one group and its members from it
   idempotently, finding that group without hardcoding its id, and the deliberate
   operator action that links a signed-up user to a member row.
+
+``splitwise_lite.web`` is the HTTP layer. It is imported directly, never from here and
+never re-exported, so the package stays importable with Flask uninstalled and the
+domain layer stays framework free.
 """
 
 from .accounts import (
