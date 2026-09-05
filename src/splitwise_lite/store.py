@@ -887,6 +887,15 @@ _UPDATE_CREDENTIAL: Final[str] = (
     "UPDATE user_credentials SET password_hash = ?, updated_at = ? WHERE user_id = ?"
 )
 
+# The one statement in this module that writes to members after creation, and the
+# reason it is allowed: members is reference data, so it carries none of the
+# append-only triggers the four event tables do. It is a plain UPDATE guarded by
+# "AND user_id IS NULL", never an upsert, so a row that already names a user is left
+# exactly as it is and the caller is told rather than overwritten.
+_UPDATE_MEMBER_USER: Final[str] = (
+    "UPDATE members SET user_id = ? WHERE id = ? AND user_id IS NULL"
+)
+
 _EXISTS_CREDENTIAL: Final[str] = "SELECT 1 FROM user_credentials WHERE user_id = ?"
 
 _SELECT_CREDENTIAL: Final[str] = (
@@ -1331,6 +1340,50 @@ class EventStore:
                     _encode_timestamp(member.created_at),
                 ),
             )
+
+    def set_member_user(self, member_id: str, user_id: str) -> None:
+        """Point a member with no account at ``user_id``.
+
+        The only write to ``members`` after creation, and the whole of it: a member's
+        ``user_id`` moves from NULL to a value and no other column is touched. There
+        is no ``linked_at`` and no timestamp argument, because nothing about a link is
+        recorded except that it exists.
+
+        A row that already names a user is never overwritten, not even with the same
+        user: the statement is guarded by ``user_id IS NULL`` and the case is refused
+        before it runs. Deciding that re-linking the same pair is a harmless no-op is
+        ``groups.py``'s, which can see the member it already read.
+
+        Nothing here clears a link. There is no method that writes NULL back.
+
+        Raises:
+            TypeError: if either argument is of a type this module never binds.
+            RecordNotFound: if no member has that id, or no user does, naming it.
+            DuplicateRecord: if the member already points at a user, naming both, or
+                if another member of that group already points at that user, naming
+                both members.
+        """
+        with self._writing("linking a member to a user") as connection:
+            row = connection.execute(_SELECT_MEMBER, _params(member_id)).fetchone()
+            if row is None:
+                raise RecordNotFound(f"no member with id {member_id!r}")
+            group_id, held = row[1], row[3]
+            if connection.execute(_EXISTS_USER, _params(user_id)).fetchone() is None:
+                raise RecordNotFound(f"no user with id {user_id!r}")
+            if held is not None:
+                raise DuplicateRecord(
+                    f"member {member_id!r} is already linked to user {held!r}, so it "
+                    f"cannot be linked to user {user_id!r}"
+                )
+            taken = connection.execute(
+                _SELECT_MEMBER_FOR_USER, _params(group_id, user_id)
+            ).fetchone()
+            if taken is not None:
+                raise DuplicateRecord(
+                    f"member {taken[0]!r} of group {group_id!r} is already linked to "
+                    f"user {user_id!r}, so member {member_id!r} cannot be"
+                )
+            connection.execute(_UPDATE_MEMBER_USER, _params(user_id, member_id))
 
     # --- Writes: credentials and sessions -----------------------------------
 
