@@ -486,7 +486,24 @@ through source, and they are not this task's business.
   scenario.
 - `fetch` records method, URL, headers, body and `credentials` for every call, and answers
   from responses registered by method and path. A request with no registered answer fails
-  the scenario with a message naming the method and the path.
+  the scenario with a message naming the method and the path. **Noted 2026-09-06, during
+  implementation.** Recording those five fields is not asserting them, and the first two
+  rounds of review asserted only method and path, then only header *names*. That passes a
+  `Content-Type` of `text/plain`, an `Accept` that takes anything, an added
+  `mode: 'no-cors'`, a CSRF header carrying the raw undecoded cookie, and a `signUp` that
+  sends the password where the display name belongs. `web.py` refuses the first and the
+  fourth outright, so each is a shipping bug the harness would have called green. Every
+  recorded call is now held to the whole contract in `finish()`, header values, the shape
+  of the options object and `credentials` included, and a call that changes something must
+  declare its exact body or the scenario fails. The rule to carry forward: a field the
+  stub records but nothing asserts is a field that can be rewritten silently.
+- **Fixed 2026-09-06, during implementation.** The stub snapshotted `classList` when the
+  document was parsed, so `setAttribute('class', ...)` and `className` were both accepted
+  and neither reflected. Tasks 11 and 12 set `className` on every node they build, so the
+  first `.class` selector scenario written against those screens would have matched nothing
+  and read as a passing test. Both now reflect the attribute, and the guarded proxy refuses
+  a *set* of any property the stub does not define, the way it already refused a get.
+  Silent acceptance is the one behaviour a stub must never have.
 - A 401, a 403 `member_not_linked`, a 500, a 204, a body whose `json()` rejects, and a
   `fetch` that rejects with a `TypeError` are all expressible, and each is used by at least
   one scenario.

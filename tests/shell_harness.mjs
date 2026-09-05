@@ -71,8 +71,23 @@ const APP = join(REPO, 'app');
 const CODES = {
   authenticationFailed: 'authentication_failed',
   memberNotLinked: 'member_not_linked',
+  csrfFailed: 'csrf_failed',
+  emailAlreadyRegistered: 'email_already_registered',
   internalError: 'internal_error'
 };
+
+/* The wire contract every request is held to, spelled out here rather than read back
+   from api.js: an assertion that borrows the subject's own constants asserts nothing.
+   web.py gates a state-changing request on the CSRF header and on the content type, so
+   a request that carries the wrong value for either is refused by the real server while
+   a check of header names alone stays green. */
+const CSRF_COOKIE = 'sl_csrf';
+const CSRF_HEADER = 'X-CSRF-Token';
+const ACCEPTS = 'application/json';
+const SENDS = 'application/json';
+/* The methods that change nothing, so they carry no body, no content type and no
+   token. */
+const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
 /* A harness error, as opposed to a scenario failure: the run itself is broken, so it
    exits 2 and reports nothing. */
@@ -181,7 +196,21 @@ function element(tag, attributes, sink) {
       return select(own, selector);
     },
     listeners: {},
-    classList: (attributes.class || '').split(/\s+/).filter(Boolean)
+
+    /* Derived from the attribute on every read, never snapshotted at parse time. A
+       snapshot accepts setAttribute('class', ...) and className silently and never
+       reflects it, so a .class selector finds nothing and the scenario that relies on
+       it passes while asserting nothing. Tasks 11 and 12 set className on every node
+       they build. */
+    get classList() {
+      return String(own.attributes.class || '').split(/\s+/).filter(Boolean);
+    },
+    get className() {
+      return own.attributes.class === undefined ? '' : own.attributes.class;
+    },
+    set className(value) {
+      own.attributes.class = String(value);
+    }
   };
   /* Everything else holds the guarded view, so the element hands that back rather
      than its raw target and an identity comparison in a scenario means what it says. */
@@ -202,6 +231,19 @@ function guarded(target, what) {
         'the stub ' + what + ' has no ' + String(property) + '; the harness fakes ' +
           'only what a shipped file uses, so widen it deliberately'
       );
+    },
+    set(object, property, value) {
+      /* A property nobody defined is refused rather than quietly created. Accepting
+         it would leave a shipped file writing into a stub that reflects nothing,
+         which reads as a passing test. */
+      if (typeof property !== 'symbol' && !(property in object)) {
+        throw new Error(
+          'the stub ' + what + ' has no ' + String(property) + ' to set; the harness ' +
+            'fakes only what a shipped file uses, so widen it deliberately'
+        );
+      }
+      object[property] = value;
+      return true;
     }
   });
 }
@@ -354,6 +396,21 @@ function select(root, selector) {
   return found;
 }
 
+/* The harness's own reading of the cookie jar, deliberately a second implementation
+   of api.js's readCookie rather than a call into it. It is the oracle the CSRF header
+   is checked against, so a request carrying the raw or untrimmed value fails here. */
+function jarValue(jar, name) {
+  const parts = String(jar || '').split(';');
+  for (let index = 0; index < parts.length; index += 1) {
+    const pair = parts[index];
+    const split = pair.indexOf('=');
+    if (split !== -1 && pair.slice(0, split).trim() === name) {
+      return decodeURIComponent(pair.slice(split + 1));
+    }
+  }
+  return null;
+}
+
 /* --- Response fixtures ------------------------------------------------------ */
 
 /* The shapes web.py actually returns. A response is answered to api.js, which reads
@@ -414,6 +471,7 @@ function page(scripts, name, provokeRunawayTimer) {
   const answers = new Map();
   const consoleLines = [];
   const missing = new Set();
+  const watchers = [];
   const replaceStates = [];
   const pushStates = [];
   const windowEvents = [];
@@ -533,9 +591,24 @@ function page(scripts, name, provokeRunawayTimer) {
       url: String(url),
       headers: headers,
       body: options.body === undefined ? null : String(options.body),
-      credentials: options.credentials === undefined ? null : options.credentials
+      credentials: options.credentials === undefined ? null : options.credentials,
+      /* The whole options object's shape, so an added mode, cache or redirect is a
+         failure rather than an invisible change of what the browser is asked to do. */
+      optionKeys: Object.keys(options),
+      /* The token the jar held when this request went out, read by the harness rather
+         than by api.js, so the header can be checked against what it should have
+         carried. */
+      csrf: jarValue(cookie, CSRF_COOKIE)
     });
     const key = method + ' ' + url;
+    /* Watchers see the page as it was when the request went out. Nothing is asserted
+       here: a scenario records what it saw and asserts after settle, because some
+       states, a control disabled in flight among them, exist at no other moment. */
+    watchers.forEach((watcher) => {
+      if (watcher.key === key) {
+        watcher.watch();
+      }
+    });
     const queue = answers.get(key);
     if (queue === undefined || queue.length === 0) {
       /* Never served the next thing in a queue: a call nobody registered an answer
@@ -658,8 +731,17 @@ function page(scripts, name, provokeRunawayTimer) {
       /* Every scenario declares the whole ordered list, and finish() fails one that
          does not. A recorded call the scenario never expected is then a failure even
          when the app swallowed the rejection it caused, and a call that stopped
-         happening is a failure too. */
+         happening is a failure too.
+
+         An entry is either 'METHOD /api/path' for a safe method, or, for a method
+         that changes something, { method, path, body } carrying the exact body. The
+         body is not optional there: a request whose payload nobody asserts is a
+         request whose payload can be rewritten silently, which is how signUp could
+         send the password as the display name and stay green. */
       declaredRequests = list.slice();
+    },
+    onRequest(method, path, watch) {
+      watchers.push({ key: method + ' /api' + path, watch: watch });
     },
 
     /* --- driving --- */
@@ -750,17 +832,42 @@ function page(scripts, name, provokeRunawayTimer) {
     failures: failures,
     windowEvents: windowEvents,
     finish() {
+      calls.forEach((call, index) => wellFormed(call, index, failures));
       if (declaredRequests === null) {
         failures.push(
           'this scenario declared no expected requests; every scenario must call ' +
             'expectRequests, so a call nobody registered an answer for cannot slip ' +
             'through a promise chain that swallowed the rejection'
         );
-      } else if (JSON.stringify(api.requests) !== JSON.stringify(declaredRequests)) {
-        failures.push(
-          'requests: expected ' + JSON.stringify(declaredRequests) + ', got ' +
-            JSON.stringify(api.requests)
+      } else {
+        const lines = declaredRequests.map((entry) =>
+          typeof entry === 'string' ? entry : entry.method + ' /api' + entry.path
         );
+        if (JSON.stringify(api.requests) !== JSON.stringify(lines)) {
+          failures.push(
+            'requests: expected ' + JSON.stringify(lines) + ', got ' +
+              JSON.stringify(api.requests)
+          );
+        } else {
+          calls.forEach((call, index) => {
+            const entry = declaredRequests[index];
+            const declared = typeof entry === 'string' ? undefined : entry.body;
+            const at = 'call ' + index + ' (' + call.method + ' ' + call.url + ')';
+            if (SAFE_METHODS.indexOf(call.method) !== -1) {
+              api.is(call.body, null, at + ' body');
+              if (declared !== undefined) {
+                failures.push(at + ' is a safe method and sends no body to declare');
+              }
+            } else if (declared === undefined) {
+              failures.push(
+                at + ' changes something, so declare the exact body it sends: ' +
+                  JSON.stringify(call.body)
+              );
+            } else {
+              api.is(call.body, declared, at + ' body');
+            }
+          });
+        }
       }
       /* Any console output a scenario did not declare is a failure: a warning nobody
          asked for is a change in behaviour. */
@@ -773,6 +880,48 @@ function page(scripts, name, provokeRunawayTimer) {
     }
   };
   return api;
+}
+
+/* Every recorded call, held to the whole wire contract and not to its method and path.
+   Applied in finish() to every call of every scenario, so no scenario can inspect the
+   easy half: a Content-Type of text/plain, an Accept header that takes anything, an
+   added mode: 'no-cors' and a CSRF header carrying the raw cookie value are all either
+   refused by web.py or a change to what the browser is asked to do, and all four are
+   invisible to a check of header names. */
+function wellFormed(call, index, failures) {
+  const at = 'call ' + index + ' (' + call.method + ' ' + call.url + ')';
+  const safe = SAFE_METHODS.indexOf(call.method) !== -1;
+  const note = (what, expected, actual) => {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      failures.push(
+        at + ' ' + what + ': expected ' + JSON.stringify(expected) + ', got ' +
+          JSON.stringify(actual)
+      );
+    }
+  };
+
+  if (call.url.indexOf('/api/') !== 0) {
+    failures.push(at + ' does not go to /api/');
+  }
+  note('credentials', 'same-origin', call.credentials);
+  note(
+    'the options it was given',
+    safe
+      ? ['method', 'credentials', 'headers']
+      : ['method', 'credentials', 'headers', 'body'],
+    call.optionKeys
+  );
+
+  const headers = { Accept: ACCEPTS };
+  if (!safe) {
+    headers['Content-Type'] = SENDS;
+    if (call.csrf !== null) {
+      /* The decoded, trimmed value the jar held, so a token sent raw or read with the
+         wrong name fails here rather than at the server. */
+      headers[CSRF_HEADER] = call.csrf;
+    }
+  }
+  note('headers', headers, call.headers);
 }
 
 function show(value) {
@@ -800,6 +949,14 @@ const NO_MEMBER = {
   group: { id: 'grp-1', name: 'Flat', currency: 'AUD' },
   member: null
 };
+/* The exact payloads, spelled out rather than rebuilt from the values the scenario
+   typed in, so a client that sends the password where the display name belongs fails
+   here instead of shipping. */
+const SIGN_IN_BODY = '{"email":"sam@example.com","password":"hunter2"}';
+const SIGN_UP_BODY =
+  '{"email":"sam@example.com","display_name":"sam@example.com","password":"hunter2"}';
+const NO_BODY = '{}';
+
 const REFUSED = 'Those details did not match an account.';
 const SIGN_IN_FIRST = 'Sign in to continue.';
 
@@ -823,6 +980,11 @@ function screensLoad(page) {
 const refusal = (message) => failure(401, CODES.authenticationFailed, message);
 const notLinked = () =>
   failure(403, CODES.memberNotLinked, 'Nobody has linked you to a member yet.');
+/* A 403 that is not member_not_linked, and a 4xx that is neither a sign-in problem nor
+   a server one. Both exist to pin which branch of announce() they land in. */
+const csrfRefused = () => failure(403, CODES.csrfFailed, 'That form went stale.');
+const alreadyRegistered = () =>
+  failure(409, CODES.emailAlreadyRegistered, 'That address already has an account.');
 const serverError = () => failure(500, CODES.internalError, 'Something went wrong.');
 
 /* The name the document title carries, spelled out here rather than read back from
@@ -837,10 +999,6 @@ async function signIn(page, email, password) {
 
 const SCREENS = ['screen-feed', 'screen-add', 'screen-balances'];
 
-/* The methods that change nothing, so they carry no body, no content type and no CSRF
-   token. Spelled out here rather than read from api.js's UNSAFE set: a request whose
-   method the back end gates is exactly the one an assertion must not take on trust. */
-const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
 function visibleScreens(page) {
   return SCREENS.filter((id) => !page.el(id).hidden);
@@ -1021,6 +1179,24 @@ const SCENARIOS = [
   },
 
   {
+    /* announce() reads the code as well as the status, and only member_not_linked is
+       the not-linked screen. Any other 403 lands in none of its three branches, so
+       nothing on screen changes: the app frame stays as the document loaded it, with
+       no data in it. Pinned as what ships, not as what is ideal. */
+    name: 'a_403_that_is_not_member_not_linked_is_not_the_not_linked_screen',
+    async run(page) {
+      page.respond('GET', '/session', csrfRefused());
+      await page.boot();
+      page.is(page.el('notice').hidden, true, '#notice hidden');
+      page.is(page.el('notice-unlinked').hidden, true, '#notice-unlinked hidden');
+      page.is(page.el('notice-offline').hidden, true, '#notice-offline hidden');
+      page.is(page.el('gate').hidden, true, '#gate hidden');
+      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
     name: 'a_network_failure_shows_the_offline_message_and_never_the_gate',
     async run(page) {
       page.respond('GET', '/session', networkFailure());
@@ -1071,7 +1247,10 @@ const SCENARIOS = [
       page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
       page.is(page.el('gate-error').textContent, REFUSED, '#gate-error text');
       page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
-      page.expectRequests(['GET /api/session', 'POST /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
     }
   },
 
@@ -1090,7 +1269,10 @@ const SCENARIOS = [
         'That did not work.',
         '#gate-error text'
       );
-      page.expectRequests(['GET /api/session', 'POST /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
     }
   },
 
@@ -1108,7 +1290,10 @@ const SCENARIOS = [
       page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
       /* Enabled again anyway, so the person can try once the network is back. */
       page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
-      page.expectRequests(['GET /api/session', 'POST /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
     }
   },
 
@@ -1128,7 +1313,7 @@ const SCENARIOS = [
       page.is(page.el('gate-password').value, '', '#gate-password cleared');
       page.expectRequests([
         'GET /api/session',
-        'POST /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
         'GET /api/session',
         'GET /api/members',
         'GET /api/balances'
@@ -1164,7 +1349,7 @@ const SCENARIOS = [
       page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
       page.expectRequests([
         'GET /api/session',
-        'POST /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
         'GET /api/session'
       ]);
     }
@@ -1184,8 +1369,8 @@ const SCENARIOS = [
       await signIn(page, 'sam@example.com', 'hunter2');
       page.expectRequests([
         'GET /api/session',
-        'POST /api/signup',
-        'POST /api/session',
+        { method: 'POST', path: '/signup', body: SIGN_UP_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
         'GET /api/session',
         'GET /api/expenses',
         'GET /api/members'
@@ -1193,6 +1378,58 @@ const SCENARIOS = [
       appIsUp(page, 'creating an account');
       /* Back to signing in, because the account now exists. */
       gateReads(page, 'signing in', 'after creating an account');
+    }
+  },
+
+  {
+    /* A 409 is neither a sign-in problem nor a server one, so announce() leaves it
+       alone and the gate says what happened. The offline notice would be a lie: the
+       server answered, and it answered clearly. */
+    name: 'creating_an_account_that_already_exists_says_so_on_the_gate',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/signup', alreadyRegistered());
+      await page.boot();
+      await page.dispatch(page.el('gate-mode'), 'click');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      gateIsUp(page, 'an address that already has an account');
+      /* Still creating: only a successful sign-in switches the gate back. */
+      gateReads(page, 'creating', 'an address that already has an account');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(
+        page.el('gate-error').textContent,
+        'That address already has an account.',
+        '#gate-error text'
+      );
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/signup', body: SIGN_UP_BODY }
+      ]);
+    }
+  },
+
+  {
+    /* The control is disabled for exactly as long as the request is in flight, which
+       is the only thing stopping a second submit. It is observed when the request goes
+       out, because that is the only moment it exists, and asserted after settle. */
+    name: 'the_submit_control_is_disabled_while_the_sign_in_is_in_flight',
+    async run(page) {
+      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      let inFlight = null;
+      page.onRequest('POST', '/session', () => {
+        inFlight = page.el('gate-submit').disabled;
+      });
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit before');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.is(inFlight, true, '#gate-submit while the request was in flight');
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit afterwards');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
     }
   },
 
@@ -1235,7 +1472,10 @@ const SCENARIOS = [
       await page.boot();
       const event = await signIn(page, 'sam@example.com', 'hunter2');
       page.is(event.defaultPrevented, true, 'preventDefault on the submit event');
-      page.expectRequests(['GET /api/session', 'POST /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
     }
   },
 
@@ -1254,7 +1494,14 @@ const SCENARIOS = [
         '{"email":"sam@example.com","password":" hunter2"}',
         'the request body'
       );
-      page.expectRequests(['GET /api/session', 'POST /api/session']);
+      page.expectRequests([
+        'GET /api/session',
+        {
+          method: 'POST',
+          path: '/session',
+          body: '{"email":"sam@example.com","password":" hunter2"}'
+        }
+      ]);
     }
   },
 
@@ -1272,7 +1519,7 @@ const SCENARIOS = [
         'GET /api/session',
         'GET /api/expenses',
         'GET /api/members',
-        'DELETE /api/session'
+        { method: 'DELETE', path: '/session', body: NO_BODY }
       ]);
     }
   },
@@ -1294,6 +1541,37 @@ const SCENARIOS = [
         'GET /api/members',
         'GET /api/members',
         'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* Leaving a screen and coming back reads it again: nothing is kept between visits,
+       so a screen never shows figures from a previous one. This is also the only
+       scenario that returns to a route it has already been on, which is what makes a
+       screen's own hashchange listener visible at all. */
+    name: 'going_back_to_a_screen_reads_it_again',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      await page.boot();
+      page.same(visibleScreens(page), ['screen-feed'], 'at first');
+      page.is(page.title, 'Feed - ' + APP_NAME, 'document.title at first');
+      await page.goTo('#/balances');
+      page.same(visibleScreens(page), ['screen-balances'], 'after leaving');
+      page.is(page.title, 'Balances - ' + APP_NAME, 'document.title after leaving');
+      await page.goTo('#/feed');
+      page.same(visibleScreens(page), ['screen-feed'], 'after coming back');
+      page.is(page.title, 'Feed - ' + APP_NAME, 'document.title after coming back');
+      page.is(page.focused, page.el('title-feed'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/members',
+        'GET /api/balances',
+        'GET /api/expenses',
+        'GET /api/members'
       ]);
     }
   },
@@ -1321,7 +1599,10 @@ const SCENARIOS = [
     name: 'every_request_goes_to_the_api_with_credentials',
     async run(page) {
       screensLoad(page);
-      page.setCookie('sl_csrf=a-token');
+      /* Two cookies, so the second needs its name trimmed, and a value that needs
+         decoding: exactly what readCookie does, and what a request would carry raw if
+         it stopped doing it. */
+      page.setCookie('sl_session=opaque; sl_csrf=a%20token');
       page.respond('GET', '/session', ok(A_MEMBER));
       page.respond('DELETE', '/session', noContent());
       page.respond('POST', '/session', refusal(REFUSED));
@@ -1332,29 +1613,29 @@ const SCENARIOS = [
         'GET /api/session',
         'GET /api/expenses',
         'GET /api/members',
-        'DELETE /api/session',
-        'POST /api/session'
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
       ]);
-      /* Every recorded call, never a spot check of the first two: the request whose
-         method decides whether a CSRF token is sent is exactly the one a spot check
-         leaves out, and the back end refuses a DELETE without that header. */
+      /* Header values and not header names, on every recorded call. A name-only check
+         passes a Content-Type of text/plain and an Accept that takes anything, and
+         web.py refuses a state-changing request that carries either. The token is the
+         decoded, trimmed value the jar held, so a raw or untrimmed one fails here. */
       page.calls.forEach((call, index) => {
         const at = 'call ' + index + ' (' + call.method + ' ' + call.url + ')';
-        page.ok(call.url.indexOf('/api/') === 0, at + ' does not go to /api/');
         page.is(call.credentials, 'same-origin', at + ' credentials');
-        if (SAFE_METHODS.indexOf(call.method) === -1) {
-          page.same(
-            Object.keys(call.headers),
-            ['Accept', 'Content-Type', 'X-CSRF-Token'],
-            at + ' headers'
-          );
-          page.ok(call.body !== null, at + ' sends a body');
-        } else {
-          /* A safe method changes nothing, so it carries neither a body, a content
-             type, nor a token. */
-          page.same(Object.keys(call.headers), ['Accept'], at + ' headers');
-          page.is(call.body, null, at + ' body');
-        }
+        page.same(
+          call.headers,
+          SAFE_METHODS.indexOf(call.method) === -1
+            ? {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': 'a token'
+              }
+            : /* A safe method changes nothing, so it carries neither a content type
+                 nor a token. */
+              { Accept: 'application/json' },
+          at + ' headers'
+        );
       });
     }
   },
@@ -1364,20 +1645,20 @@ const SCENARIOS = [
        has to carry, so it is read from the cookie at request time and never cached. */
     name: 'the_csrf_token_is_read_at_request_time_not_cached',
     async run(page) {
-      page.setCookie('sl_csrf=first-token');
+      page.setCookie('sl_session=opaque; sl_csrf=first%20token');
       page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
-      page.setCookie('sl_csrf=second-token');
+      page.setCookie('sl_session=opaque; sl_csrf=second%20token');
       await signIn(page, 'sam@example.com', 'hunter2');
       page.expectRequests([
         'GET /api/session',
-        'POST /api/session',
-        'POST /api/session'
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
       ]);
-      page.is(page.calls[1].headers['X-CSRF-Token'], 'first-token', 'the first POST');
-      page.is(page.calls[2].headers['X-CSRF-Token'], 'second-token', 'the second POST');
+      page.is(page.calls[1].headers['X-CSRF-Token'], 'first token', 'the first POST');
+      page.is(page.calls[2].headers['X-CSRF-Token'], 'second token', 'the second POST');
     }
   },
 
@@ -1397,7 +1678,7 @@ const SCENARIOS = [
         'GET /api/session',
         'GET /api/expenses',
         'GET /api/members',
-        'DELETE /api/session'
+        { method: 'DELETE', path: '/session', body: NO_BODY }
       ]);
     }
   },

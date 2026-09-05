@@ -44,6 +44,7 @@ SCENARIOS = [
     "nothing_from_the_previous_scenario_survives_into_this_one",
     "boot_with_an_unlinked_session_shows_the_not_linked_message",
     "a_403_member_not_linked_shows_the_not_linked_message",
+    "a_403_that_is_not_member_not_linked_is_not_the_not_linked_screen",
     "a_network_failure_shows_the_offline_message_and_never_the_gate",
     "a_server_error_is_the_same_screen_as_being_offline",
     "the_api_client_failing_to_load_shows_the_offline_message",
@@ -54,6 +55,8 @@ SCENARIOS = [
     "a_successful_sign_in_keeps_the_screen_the_person_was_on",
     "a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate",
     "creating_an_account_signs_in_straight_after",
+    "creating_an_account_that_already_exists_says_so_on_the_gate",
+    "the_submit_control_is_disabled_while_the_sign_in_is_in_flight",
     "the_gate_says_whether_it_is_signing_in_or_creating_an_account",
     "the_gate_switches_the_password_autocomplete_with_the_mode",
     "the_form_never_lets_the_browser_navigate",
@@ -61,6 +64,7 @@ SCENARIOS = [
     "signing_out_returns_to_the_gate",
     # Routing
     "routing_shows_one_screen_and_moves_focus",
+    "going_back_to_a_screen_reads_it_again",
     "an_unknown_hash_is_replaced_not_pushed",
     # The client
     "every_request_goes_to_the_api_with_credentials",
