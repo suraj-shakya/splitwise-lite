@@ -396,9 +396,12 @@ function select(root, selector) {
   return found;
 }
 
-/* The harness's own reading of the cookie jar, deliberately a second implementation
-   of api.js's readCookie rather than a call into it. It is the oracle the CSRF header
-   is checked against, so a request carrying the raw or untrimmed value fails here. */
+/* The harness's own reading of the cookie jar, used to check what the CSRF header
+   should have carried. Be clear about how much that is worth: this is a second copy of
+   api.js's readCookie, not an independent one, so a mutation this copy would mirror is
+   not caught here. What catches those is the two cookie-bearing scenarios asserting the
+   literal decoded token, 'a token' and 'first token', which no copy of the subject can
+   agree with by accident. */
 function jarValue(jar, name) {
   const parts = String(jar || '').split(';');
   for (let index = 0; index < parts.length; index += 1) {

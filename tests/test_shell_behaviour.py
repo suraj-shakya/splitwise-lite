@@ -157,9 +157,23 @@ def harness_run() -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture(scope="session")
 def report(harness_run: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    if harness_run.returncode != 0:
+    """The report, whatever verdict it carries.
+
+    **Exit 1 is not an error here.** It is the harness's normal answer when a scenario
+    fails, and it has to flow through to the per-scenario results below: a guard on it
+    turns one real defect into an error on every test in this file, all carrying the
+    same blob, with the scenario that names the defect indistinguishable from the ones
+    that passed. That is worse than no harness at all, and it is the opposite of what
+    this file's docstring promises.
+
+    Only a harness error stops the file, and it stops it here because then there is no
+    report to read: exit 2, stdout that will not parse, or a timeout, each with its own
+    message.
+    """
+    if harness_run.returncode not in (0, 1):
         pytest.fail(
-            f"tests/shell_harness.mjs exited {harness_run.returncode}.\n"
+            f"tests/shell_harness.mjs failed as a harness rather than reporting a "
+            f"scenario failure: it exited {harness_run.returncode}.\n"
             f"stderr:\n{harness_run.stderr}"
         )
     return parse_report(harness_run)
