@@ -274,7 +274,7 @@ welcome, fewer are not.
 | `a_refused_sign_in_with_an_unreadable_body_still_says_something` | A 401 whose body will not parse still puts `That did not work.` on the gate |
 | `a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone` | The quiet branch: offline notice up, gate hidden, no message written, and the submit control enabled again anyway |
 | `a_successful_sign_in_keeps_the_screen_the_person_was_on` | Start on `#/balances`, sign in, land on the app with the hash unchanged and balances still the visible screen |
-| `a_session_that_dies_between_sign_in_and_session_read_returns_to_the_gate` | 200 on the sign in, 401 on the following `GET /api/session`: the gate comes back and the submit control is usable again |
+| `a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate` | 200 on the sign in, 401 on the following `GET /api/session`: the gate comes back **blank** and the submit control is usable again |
 | `creating_an_account_signs_in_straight_after` | Toggle to create mode, submit, and see `POST /api/signup` then `POST /api/session` in that order, because signup issues no session |
 | `the_gate_switches_the_password_autocomplete_with_the_mode` | `new-password` while creating, `current-password` after switching back |
 | `the_form_never_lets_the_browser_navigate` | `preventDefault` called on the submit event. Without it the browser navigates and the whole app blanks |
@@ -296,10 +296,23 @@ welcome, fewer are not.
 | `the_csrf_token_is_read_at_request_time_not_cached` | Change the cookie jar between two POSTs and see the second request carry the second token. Today this is a substring assertion in `test_web_shell.py`; here it is the behaviour |
 | `a_204_is_not_parsed_as_json` | Sign out succeeds against a response whose `json()` would throw if it were called |
 
-`a_session_that_dies_between_sign_in_and_session_read_returns_to_the_gate` is the one to
+`a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate` is the one to
 read carefully. The harness pins whatever the shipped code does today. If the resulting
 screen looks wrong to the engineer, **raise it; do not edit `app/` to change it.** Fixing
 front end behaviour is not this task.
+
+**Corrected 2026-09-06, during implementation.** That scenario was named
+`..._returns_to_the_gate` in this file, here and in the table above and in the out of
+scope list below. The name described correct behaviour, but the scenario pins a known
+defect: the sign-in succeeds, the session read behind it 401s, and the person is
+returned to a gate carrying **no message at all**, because the 401 handler calls
+`showGate('')` and the success path never writes one. A name that reads as correct
+behaviour means that whoever eventually fixes that screen sees this test go red with
+no hint that going red is the point, and the likely reaction is to revert the fix. The
+new name says the gate comes back blank, and the scenario carries a comment saying it
+pins a defect and that a later fix updates the scenario rather than reverting. The
+criterion below requiring the names in these tables "spelled the same way" reads
+against the corrected spelling.
 
 ## What stays browser-only
 
@@ -461,7 +474,14 @@ through source, and they are not this task's business.
 - `location.hash` is mutable, and `history.replaceState` updates it. `history.pushState`
   exists only so a scenario can assert it was never called.
 - `navigator` has no `serviceWorker` property, and a test asserts the service worker
-  registration branch in `app.js` is never entered.
+  registration branch in `app.js` is never entered. **Noted 2026-09-06, during
+  implementation.** Each scenario reports the window events `app.js` subscribed to and
+  the test asserts that set is exactly `{"hashchange"}`, so a `load` listener, which
+  only that branch registers, fails it. A set and not a list: tasks 11 and 12 each
+  register a `hashchange` listener of their own and the screens after them will add
+  more, so pinning the count would fail on an unrelated change. The isolation test was
+  tightened in the same commit to pin each scenario's exact request list, which is a
+  stronger statement than the one it replaced, so nothing was traded away here.
 - `console` is recorded, and any console output a scenario did not declare fails that
   scenario.
 - `fetch` records method, URL, headers, body and `credentials` for every call, and answers
@@ -540,7 +560,7 @@ through source, and they are not this task's business.
 - **Any change to `app/`.** Not `index.html`, not `app.js`, not `api.js`, not `styles.css`,
   not `sw.js`, not the manifest, not the icons. This task tests what is there. If a scenario
   exposes a bug, it is reported and fixed in its own task, not here.
-- **Fixing the front end.** If `a_session_that_dies_between_sign_in_and_session_read_returns_to_the_gate`
+- **Fixing the front end.** If `a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate`
   or any other scenario documents behaviour that looks wrong, the harness pins the current
   behaviour and the engineer raises it. Changing the app and its test in one commit is how a
   test ends up asserting whatever the code happens to do.
@@ -587,9 +607,35 @@ through source, and they are not this task's business.
   second owns updating the scenario. **The fix is never to weaken a scenario into a
   source-text assertion, and never to delete one.** If a scenario cannot be kept honest,
   stop and raise it.
-- Do not modify anything under `src/splitwise_lite/`, `scripts/`, `plans/` other than this
-  file's own existence, `.claude/`, `pyproject.toml`, `uv.lock`, `group.example.toml`, or any
-  test file other than the two named above.
+- **Happened 2026-09-06, during implementation.** Tasks 11 and 12 landed on `master`
+  while this branch was open, so this task landed second and owned the update. Both read
+  as soon as the app frame appears, the feed loading the expenses and the roster and the
+  balances screen loading the roster and the figures, and the harness refused every one
+  of those calls with `no answer was registered for GET /api/expenses`. **That is the
+  design working, not breakage.** Whoever adds the next screen will hit the same wall and
+  should read it that way. What it took: four more element members in the stub
+  (`appendChild`, `removeChild`, `replaceChildren`, `firstChild`), an answer registered
+  for each new read using the empty valid payload shape, and the longer request list
+  declared in the eight scenarios that reach the app frame. No scenario was weakened and
+  none was deleted. This task added no scenario about what those two screens draw: that
+  belongs to the tasks that own them. One thing to know if the harness ever dies with a
+  bare Node stack and no report: an error escaping into a promise nobody handled is now
+  recorded against the scenario that was running, which is how the first of these
+  failures was found.
+- Do not modify anything under `src/splitwise_lite/`, `scripts/`, `plans/`, `.claude/`,
+  `pyproject.toml`, `uv.lock`, `group.example.toml`, or any test file other than the two
+  named above.
+- **This file is the one exception, and only for a statement that is provably wrong,**
+  following the precedent tasks 5, 9 and 11 set: it is created by this PR and nothing on
+  `master` depends on it. Sharpening a criterion, re-scoping one or softening one to suit
+  an implementation is not covered and stays forbidden. Every correction carries a dated
+  marker saying what the file used to say, what it says now and why, so the next reader
+  inherits the reasoning instead of a choice between two contradictory lines. One was
+  made on 2026-09-06 and is marked in place: the scenario name
+  `..._returns_to_the_gate`, which described correct behaviour while the scenario pins a
+  known defect. Two other markers in this file record what implementation found rather
+  than correcting anything. A spec left contradicting the code its own PR produced is
+  how four agents rediscovered the `group_id` contradiction on this project.
 - `plans/backlog.md` is not edited. Issue #31 is the backlog entry for this task.
 - **No dependency in either language.** No `package.json` and no addition to
   `pyproject.toml`. `.claude/hooks/guard-deps.hs.sh` blocks the ad hoc Python route already;
