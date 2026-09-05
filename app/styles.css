@@ -556,3 +556,72 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Balances ---------------------------------------------------------------- */
+
+/* Task 12, appended as one block with every selector prefixed `.balances-`, so it
+   cannot collide with a name from another screen or restyle a component they share.
+   Nothing here moves, so the reduced-motion block above has nothing to switch off,
+   and nothing here is tappable: the transfer drill-down is task 13's, and a row that
+   looks interactive while doing nothing is worse than one that looks inert. */
+
+.balances-note {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.balances-heading {
+  margin: 24px 0 8px;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.balances-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* Already 44px tall, so nothing about the row shifts when task 13 makes it
+   tappable. The rows sit in normal document order and nothing reorders them: the
+   name is always read before the amount that belongs to it. */
+.balances-row {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 14px;
+  font-size: 17px;
+}
+
+/* A rule between rows rather than alternating tints: no row's meaning is carried
+   by colour, and "owes" and "is owed" are told apart by the words first. */
+.balances-row + .balances-row {
+  border-top: 1px solid var(--line);
+}
+
+/* The name is the part that gives way. A 40-character name at 320px wraps onto
+   another line; it is never clipped, never ellipsised, never overlapped by the
+   amount and never pushes the page into a horizontal scroll. */
+.balances-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* The one rule allowed to refuse a wrap, so an amount never breaks mid-number. The
+   figure is a string the server formatted; nothing here adds a symbol to it. */
+.balances-figure {
+  white-space: nowrap;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.balances-message {
+  margin: 12px 0 0;
+  font-size: 17px;
+  color: var(--muted);
+}
