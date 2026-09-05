@@ -1088,3 +1088,97 @@ def test_nothing_asks_for_provenance_that_is_not_in_the_payload() -> None:
     source = (APP / "app.js").read_text(encoding="utf-8")
     assert "payer_debts" not in source
     assert "receiver_credits" not in source
+
+
+# --- Task 12: the balances screen, the layout ------------------------------
+
+
+def balances_styles() -> str:
+    """The task 12 block of styles.css: its banner comment to the end of the file."""
+    css = styles()
+    marker = "/* Balances ---"
+    assert marker in css, "styles.css opens the balances block with a banner comment"
+    return css[css.index(marker) :]
+
+
+def without_comments(css: str) -> str:
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+
+def test_every_balances_selector_is_namespaced_to_this_screen() -> None:
+    # Two other branches edit styles.css at the same time, so a prefixed selector
+    # cannot collide with a name of theirs or restyle a component they share.
+    selectors = []
+    for rule in without_comments(balances_styles()).split("}"):
+        head = rule.split("{")[0].strip()
+        if head:
+            selectors.extend(part.strip() for part in head.split(","))
+    assert selectors
+    for selector in selectors:
+        assert selector.startswith(".balances-"), selector
+
+
+def test_the_balances_block_never_moves_a_row_out_of_document_order() -> None:
+    # Visual order matches DOM order in both lists, so an amount can never be read
+    # ahead of the name it belongs to.
+    block = without_comments(balances_styles())
+    for forbidden in ("row-reverse", "column-reverse", "position: absolute"):
+        assert forbidden not in block, forbidden
+    # `order`, and not the `order` inside `border`.
+    assert re.search(r"(?<![-\w])order\s*:", block) is None
+
+
+def test_the_balances_block_offers_no_affordance_that_does_nothing() -> None:
+    # No pointer cursor and no generated chevron, arrow or currency symbol: the
+    # drill-down is task 13's, and until then the rows are inert and must look it.
+    block = without_comments(balances_styles())
+    assert "cursor" not in block
+    # `content`, and not the `content` inside `justify-content`.
+    assert re.search(r"(?<![-\w])content\s*:", block) is None
+
+
+def test_every_transfer_row_clears_the_hit_area_floor() -> None:
+    # Already 44px tall, so no layout shifts when task 13 makes the row tappable.
+    heights = [
+        float(value)
+        for value in re.findall(r"min-height:\s*([0-9.]+)px", balances_styles())
+    ]
+    assert heights
+    assert min(heights) >= 44
+
+
+def test_a_long_display_name_wraps_rather_than_being_cut_off() -> None:
+    # A 40-character name at 320px must wrap onto another line, never be clipped,
+    # ellipsised or overlapped, and never push the page into a horizontal scroll.
+    block = without_comments(balances_styles())
+    assert "overflow-wrap: break-word" in block
+    for forbidden in ("text-overflow", "overflow: hidden"):
+        assert forbidden not in block, forbidden
+    # The amount is the one thing kept whole, so a figure never breaks mid-number,
+    # and its rule is the only one in the block allowed to refuse a wrap.
+    refusing = re.findall(r"([^{}]*)\{[^}]*white-space:\s*nowrap", block)
+    assert [head.strip() for head in refusing] == [".balances-figure"]
+
+
+def test_no_row_carries_its_meaning_in_colour_alone() -> None:
+    # "owes" and "is owed" are told apart by the words first, and rows are separated
+    # by a rule rather than by a tint.
+    block = without_comments(balances_styles())
+    assert "border-top" in block or "border-bottom" in block
+
+
+def test_no_shell_file_prints_a_currency_symbol() -> None:
+    # One group, one currency, named once above the net list. `format_amount`
+    # produces "12.50" without a symbol and the front end does not get to add one.
+    for name in ("index.html", "styles.css", "app.js"):
+        source = (APP / name).read_text(encoding="utf-8")
+        for symbol in ("$", "£", "€"):
+            assert symbol not in source, name
+
+
+def test_the_balances_block_adds_no_animation() -> None:
+    # Nothing on this screen moves, so there is nothing for the reduced-motion block
+    # at the end of the file to have to switch off.
+    block = without_comments(balances_styles())
+    for forbidden in ("animation", "transition", "@keyframes"):
+        assert forbidden not in block, forbidden
