@@ -14,6 +14,33 @@ Requires [uv](https://docs.astral.sh/uv/). Dependencies install into a project-l
 
     uv sync
 
+## Set up the group
+
+The roster is a file a person edits, not a screen. Copy the committed example, put your
+flat's real names in it, and apply it:
+
+    cp group.example.toml group.toml
+    uv run python scripts/setup_group.py apply --store ledger.sqlite3 --definition group.toml
+
+Re-running that command is safe: it writes nothing when nothing changed, adds a name the
+file gained, and refuses a name the file lost rather than deleting a member.
+
+`group.toml` and the ledger file are not committed. `group.example.toml` is, so the
+shape of the file cannot rot.
+
+A member exists before that person has an account, and that is the normal state of a
+fresh flat. Nothing connects the two on its own, because a signup address is unverified;
+when someone has signed up, connect them by hand:
+
+    uv run python scripts/setup_group.py link --store ledger.sqlite3 --email sam@example.com --member-name Sam
+
+`show` prints the group and its roster, with no addresses in the output:
+
+    uv run python scripts/setup_group.py show --store ledger.sqlite3
+
+Setup sends nothing. There is no invite, no email and no notification: it writes to the
+database and prints what it did.
+
 ## Run the app
 
     uv run python scripts/serve.py

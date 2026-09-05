@@ -1563,6 +1563,8 @@ WRITES = [
     "delete_session",
     "delete_sessions_for_user",
     "delete_expired_sessions",
+    # Task 9.
+    "set_member_user",
 ]
 
 READS = [
@@ -1628,6 +1630,7 @@ def test_every_public_method_refuses_a_closed_store(tmp_path: Path) -> None:
         "delete_session": (TOKEN_HASH,),
         "delete_sessions_for_user": (UserId("u1"),),
         "delete_expired_sessions": (at(),),
+        "set_member_user": ("g1m1", UserId("u1")),
         "get_user": (UserId("u1"),),
         "get_group": ("g1",),
         "list_groups": (),
@@ -2867,3 +2870,131 @@ def test_get_member_for_user_for_an_unknown_group_raises_not_found(
     with pytest.raises(RecordNotFound) as caught:
         store.get_member_for_user("ghost", UserId("u1"))
     assert "ghost" in str(caught.value)
+
+
+# --- Task 9: setting a member's user -----------------------------------------
+#
+# The one method in this module that writes to members after creation. It is an
+# UPDATE of a reference table, not of an event table: members carries no
+# append-only trigger, and nothing here upserts.
+
+
+def test_set_member_user_links_a_null_user_id(store: EventStore) -> None:
+    a_group(store)
+    a_user(store)
+    member = a_member(store, "m1", "g1", None)
+    store.set_member_user("m1", UserId("u1"))
+    linked = store.get_member("m1")
+    assert linked.user_id == "u1"
+    assert store.get_member_for_user("g1", UserId("u1")) == linked
+
+
+def test_set_member_user_changes_nothing_else_about_the_row(
+    store: EventStore,
+) -> None:
+    a_group(store)
+    a_user(store)
+    before = a_member(store, "m1", "g1", None)
+    store.set_member_user("m1", UserId("u1"))
+    after = store.get_member("m1")
+    assert after.id == before.id
+    assert after.group_id == before.group_id
+    assert after.display_name == before.display_name
+    assert after.created_at == before.created_at
+
+
+def test_set_member_user_for_an_unknown_member_names_the_id(
+    store: EventStore,
+) -> None:
+    a_group(store)
+    a_user(store)
+    with pytest.raises(RecordNotFound) as caught:
+        store.set_member_user("ghost", UserId("u1"))
+    assert "ghost" in str(caught.value)
+
+
+def test_set_member_user_for_an_unknown_user_names_the_id(store: EventStore) -> None:
+    a_group(store)
+    a_member(store, "m1", "g1", None)
+    with pytest.raises(RecordNotFound) as caught:
+        store.set_member_user("m1", UserId("ghost"))
+    assert "ghost" in str(caught.value)
+    assert store.get_member("m1").user_id is None
+
+
+def test_set_member_user_refuses_a_member_that_already_points_at_a_user(
+    store: EventStore,
+) -> None:
+    a_group(store)
+    a_user(store, "u1", "sam@example.com")
+    a_user(store, "u2", "ali@example.com")
+    a_member(store, "m1", "g1", "u1")
+    with pytest.raises(DuplicateRecord) as caught:
+        store.set_member_user("m1", UserId("u2"))
+    assert "u1" in str(caught.value)
+    assert "u2" in str(caught.value)
+    assert store.get_member("m1").user_id == "u1"
+
+
+def test_set_member_user_refuses_relinking_a_member_to_the_same_user(
+    store: EventStore,
+) -> None:
+    """Nothing upserts. Deciding a repeat link is a no-op belongs to groups.py."""
+    a_group(store)
+    a_user(store)
+    a_member(store, "m1", "g1", "u1")
+    with pytest.raises(DuplicateRecord):
+        store.set_member_user("m1", UserId("u1"))
+    assert store.get_member("m1").user_id == "u1"
+
+
+def test_set_member_user_refuses_a_second_member_for_one_user_in_a_group(
+    store: EventStore,
+) -> None:
+    a_group(store)
+    a_user(store)
+    a_member(store, "m1", "g1", "u1")
+    a_member(store, "m2", "g1", None)
+    with pytest.raises(DuplicateRecord) as caught:
+        store.set_member_user("m2", UserId("u1"))
+    assert "m1" in str(caught.value)
+    assert "m2" in str(caught.value)
+    assert store.get_member("m2").user_id is None
+    assert store.get_member("m1").user_id == "u1"
+
+
+def test_set_member_user_links_the_same_user_in_a_second_group(
+    store: EventStore,
+) -> None:
+    a_group(store, "g1")
+    a_group(store, "g2", NZD)
+    a_user(store)
+    a_member(store, "m1", "g1", None)
+    a_member(store, "m2", "g2", None)
+    store.set_member_user("m1", UserId("u1"))
+    store.set_member_user("m2", UserId("u1"))
+    assert store.get_member_for_user("g1", UserId("u1")).id == "m1"
+    assert store.get_member_for_user("g2", UserId("u1")).id == "m2"
+
+
+def test_set_member_user_takes_no_timestamp() -> None:
+    parameters = list(inspect.signature(EventStore.set_member_user).parameters)
+    assert parameters == ["self", "member_id", "user_id"]
+
+
+def test_set_member_user_is_the_only_write_to_members_after_creation() -> None:
+    """One UPDATE, naming members, from a module-level constant.
+
+    ``members`` is reference data and carries no append-only trigger, so this is
+    allowed where the same statement against an event table is not.
+    """
+    updates = [
+        match.group(1)
+        for literal in sql_literals()
+        for match in re.finditer(r"\bUPDATE\s+(\w+)\s+SET\b", literal, re.IGNORECASE)
+    ]
+    assert sorted(updates) == ["members", "user_credentials"]
+    assert (
+        "UPDATE members SET user_id = ? WHERE id = ? AND user_id IS NULL"
+        in sql_literals()
+    )

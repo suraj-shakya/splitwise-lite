@@ -360,8 +360,15 @@ def test_app_holds_exactly_the_promised_files() -> None:
     assert found == APP_FILES
 
 
-def test_scripts_holds_exactly_the_two_promised_python_files() -> None:
-    assert {path.name for path in SCRIPTS.glob("*.py")} == {"make_icons.py", "serve.py"}
+def test_scripts_holds_exactly_the_promised_python_files() -> None:
+    # Task 9 added setup_group.py, the operator command for group and member setup.
+    # Widened rather than relaxed: the set is still exhaustive, so a stray script or a
+    # scratch file left in scripts/ still fails here.
+    assert {path.name for path in SCRIPTS.glob("*.py")} == {
+        "make_icons.py",
+        "serve.py",
+        "setup_group.py",
+    }
 
 
 def test_document_opens_with_a_doctype_and_declares_its_language() -> None:

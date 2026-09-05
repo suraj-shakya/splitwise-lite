@@ -8,6 +8,8 @@ web shell in `app/` whose three screens are still placeholders.
 - Install deps: `uv sync` (project-local `.venv`, host Python stays untouched)
 - Run tests: `uv run python -m pytest`
 - Run the app: `uv run python scripts/serve.py`, then open `http://localhost:8000`
+- Set up the group: `uv run python scripts/setup_group.py apply --store PATH --definition group.toml`; safe to re-run. `link` connects a signed-up account to a
+  member row, `show` prints the roster
 
 There is no build step and no npm: the files in `app/` are what the browser runs. An
 edit to one of the eight shell files will not show on reload, though, because
@@ -40,7 +42,10 @@ out of step with the declared project. Dev-only tools go in the `dev` group.
 - `src/splitwise_lite/`: the package
 - `app/`: the static front end shell, served as plain files and never imported by
   the package
-- `scripts/`: the dev server and the icon generator, standard library only
+- `scripts/`: the dev server, the icon generator and the group setup command; no
+  dependency beyond the standard library and the package itself
+- `group.example.toml`: the shape of the roster `setup_group.py` applies. The real
+  `group.toml` and the ledger file are not committed
 - `tests/`: the pytest suite
 
 Read the spec before changing behaviour. Read the backlog before starting a task.

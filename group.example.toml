@@ -1,0 +1,25 @@
+# An example roster. Copy it to group.toml, put your flat's real names in, and run:
+#
+#   uv run python scripts/setup_group.py apply --store ledger.sqlite3 --definition group.toml
+#
+# group.toml itself is not committed: it is .gitignore'd, because a real roster is the
+# names of real people. This example is, so the documented shape cannot rot.
+#
+# Re-running apply with the same file is safe. It writes nothing when nothing changed,
+# adds a name the file gained, and refuses a name the file lost rather than deleting
+# a member. The keys are exactly these three; anything else is an error, not a default.
+
+name = "Flat 3"
+
+# Fixed at creation. Three uppercase letters, and the group never changes currency.
+currency = "AUD"
+
+# Display names only, in the order you want them to appear. No addresses, no ids.
+# Two people with the same first name need distinguishing here, for example
+# "Sam K" and "Sam T", because the name is how a re-run recognises an existing member.
+members = [
+    "Ada Example",
+    "Bo Sample",
+    "Cleo Placeholder",
+    "Dev Fictional",
+]
