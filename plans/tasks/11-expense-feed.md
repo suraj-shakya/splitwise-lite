@@ -175,7 +175,9 @@ labelled as unverified by the suite.
 - `feed-retry` is a `<button type="button">` inside `feed-error`.
 - `feed-empty` contains an `<a href="#/add">` so the first expense is one tap away. It is a
   plain anchor: routing is anchors plus `hashchange`, per task 8, and no click handler is
-  registered on it.
+  registered on it. This anchor is what forced the second line of change in
+  `tests/test_web_shell.py`; see the correction dated 2026-09-06 under "Automated tests,
+  in Python".
 - The committed feed markup contains no amount, no currency symbol, no member name, no date
   and no expense description.
   `tests/test_web_shell.py::test_no_screen_shows_invented_data` passes unchanged, which
@@ -375,14 +377,52 @@ labelled as unverified by the suite.
   longer contains the word `Placeholder`; and that the `<h1>` and the lede are unchanged.
 - It asserts the token bans over `app/app.js`: no `innerHTML`, `outerHTML`,
   `insertAdjacentHTML`, `document.write`, `eval(`, `new Function`, `sort(`, `reverse(`,
-  `Date.now(`, `new Date()`, `pushState`, `replaceState` or an assignment to
-  `location.hash`. Each of those is a ban a reader can verify against the file; none of them
-  is a claim that a feature works.
-- `tests/test_web_shell.py` changes by **exactly one line**:
+  `Date.now(`, `new Date()`, `pushState` or an assignment to `location.hash`, and
+  `replaceState` exactly once, on the router's own line. Each of those is a ban a reader
+  can verify against the file; none of them is a claim that a feature works.
+  **Corrected 2026-09-06, during implementation.** This criterion previously listed
+  `replaceState` among the tokens banned outright from the whole file. That cannot hold.
+  Task 8's router already contains one, at `app/app.js:76`,
+  `window.history.replaceState(null, '', DEFAULT_ROUTE);`, inside `route()`, which this
+  task is forbidden to touch by "Refactoring the router, the gate, the notices or anything
+  else on `master`" in Out of scope and by "`ROUTES` and `DEFAULT_ROUTE` in `app/app.js`
+  are unchanged" in Constraints. A whole-file ban on the token therefore fails against
+  `master` before this task writes a line. The other twelve tokens really are absent and
+  their bans stand exactly as written. `replaceState` becomes an exact count rather than an
+  absence, so "the feed adds no second one" stays falsifiable instead of being dropped, and
+  the one occurrence is pinned to the router's own line so a feed-local one cannot hide
+  behind the count.
+- `tests/test_web_shell.py` changes by **exactly two lines, in two different functions**.
   `test_every_screen_names_the_task_that_fills_it` drops its
   `"Placeholder. Task 11 fills this with the expense feed."` assertion. The task 10 and task
   12 assertions in that function are left alone, so a concurrent branch removing the task 12
   line touches a different line of the same function.
+  `test_the_nav_names_itself_and_lists_the_three_screens_in_order` narrows its anchor sweep
+  from every `<a href>` in the document to the tab bar's own, which is what its comment
+  about thumb reach in the nav always meant. No sibling branch touches that function.
+  **Corrected 2026-09-06, during implementation.** This criterion previously said the file
+  changes by **exactly one line**, the placeholder assertion alone, and the criterion below
+  said no other test in it changes. That cannot hold alongside "`feed-empty` contains an
+  `<a href="#/add">`" under The document region.
+  `test_the_nav_names_itself_and_lists_the_three_screens_in_order` reads every anchor in the
+  document rather than the nav's, and asserts the complete ordered list:
+  `hrefs = [attrs["href"] for attrs in doc.find("a") if attrs.get("href")]`, then
+  `assert hrefs == ["#/feed", "#/add", "#/balances"]`. `#screen-feed` sits inside `<main>`,
+  ahead of `<nav>`, so the required anchor makes that list
+  `['#/add', '#/feed', '#/add', '#/balances']` and the test fails. Verified by writing the
+  markup and running the suite, not by reading the test. There is no escape inside the
+  criteria as written: the anchor's element, its `href` and its container are each named
+  verbatim, and any `<a href>` anywhere in the document joins that list.
+  Two resolutions were possible, and narrowing the test was taken rather than dropping the
+  anchor. The test's own comment is about which tab gets the easiest thumb, so a
+  document-wide sweep was never what it meant; and an empty state that says nobody has
+  recorded an expense while offering no way to record one is a dead end on the screen a new
+  flat sees first. The balances screen hits the identical wall the moment it links
+  anywhere, so the test is fixed once rather than the feature amputated from two screens.
+  Narrowing a rule costs the incidental guard it used to give, so it gains a companion the
+  way tasks 7 and 9a gave theirs one: `tests/test_feed_screen.py` asserts that every
+  `<a href>` in the whole document still names one of the three routes and never leaves the
+  origin, which is the part of the old sweep worth keeping.
 - No other test in `tests/test_web_shell.py` changes, and none is deleted or weakened.
   `test_app_holds_exactly_the_promised_files` and `test_the_worker_precaches_exactly_the_shell`
   pass untouched, because this task adds no file under `app/`.
@@ -501,7 +541,10 @@ fixture: task 8 banned demo data and task 18 owns the end-to-end fixture.
   - `app/styles.css`: one new contiguous block, headed with a comment naming the feed,
     inserted immediately before the `/* The gate and the two notices */` header. No existing
     rule is edited and no custom property is added to `:root`.
-  - `tests/test_web_shell.py`: exactly one line, named in the criteria.
+  - `tests/test_web_shell.py`: exactly two lines, in two functions, named in the
+    criteria. **Corrected 2026-09-06**; this read "exactly one line", which could
+    not hold alongside the `<a href="#/add">` criterion. The reasoning is recorded
+    in full under Automated tests, in Python.
   - `tests/test_web_api.py`: four tests inserted after
     `test_a_feed_entry_carries_its_allocations_and_no_display_names`, and nothing else.
 - **Every new CSS class name begins with `feed-` or `expense-`**, and every new element id
@@ -515,9 +558,23 @@ fixture: task 8 banned demo data and task 18 owns the end-to-end fixture.
   change to the API, **stop and raise it loudly rather than editing `web.py`**: the endpoint
   contract is shared with tasks 10 and 12 and is not a screen task's to widen.
 - Nothing else changes either: not `scripts/`, `pyproject.toml`, `uv.lock`,
-  `plans/backlog.md`, `plans/spec.md`, this file, `CLAUDE.md`, `README.md`, `app/api.js`,
+  `plans/backlog.md`, `plans/spec.md`, `CLAUDE.md`, `README.md`, `app/api.js`,
   `app/sw.js`, `app/manifest.json`, the icons, or anything under `.claude/`. No file is
   deleted.
+- **This file must not be modified either, with one exception: a statement in it that is
+  provably wrong may be corrected.** Sharpening a criterion, re-scoping one or softening
+  one to suit an implementation is not covered and stays forbidden. The exception is only
+  for a statement that cannot be satisfied as written or that contradicts another, and the
+  correction is raised and accepted before it is made, never applied unilaterally. Every
+  such correction carries a dated marker saying what the file used to say, what it says now
+  and why, so the next reader inherits the reasoning instead of a choice between two
+  contradictory lines. Two were made on 2026-09-06 during implementation, both raised
+  before any screen code was written and both accepted before they were applied: the
+  `tests/test_web_shell.py` one-line change, which contradicted the `<a href="#/add">`
+  criterion; and the whole-file `replaceState` ban, which task 8's router already violates.
+  **Added 2026-09-06.** This bullet did not exist: the list above named "this file" among
+  the files that must not change, which forbade the two corrections this file now carries.
+  Task 5 reached the same contradiction and resolved it the same way.
 - **No new dependency of any kind, in either language.** No `package.json`, no
   `node_modules`, no bundler, no framework, no date library, no polyfill, and no addition to
   `pyproject.toml`. Per CLAUDE.md a dependency is declared then installed with `uv sync`,
