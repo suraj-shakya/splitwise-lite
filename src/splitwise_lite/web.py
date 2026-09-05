@@ -1514,7 +1514,20 @@ def _handle_error(error: Exception) -> flask.Response:
     if isinstance(http_status, int) and callable(getattr(error, "get_response", None)):
         response = error.get_response()
         code = _HTTP_ERROR_CODES.get(http_status, _HTTP_ERROR_FALLBACK_CODE)
-        response.set_data(json.dumps(_error_body(code, str(error))))
+        if http_status >= _INTERNAL_ERROR_STATUS:
+            # Nothing here raises one, but if something ever does it is a 500 like
+            # any other: generic message, real exception in the log.
+            flask.current_app.logger.exception(
+                "%s %s failed with %s",
+                flask.request.method,
+                flask.request.path,
+                type(error).__name__,
+            )
+            message = _GENERIC_500_MESSAGE
+            code = _FALLBACK_CODE
+        else:
+            message = str(error)
+        response.set_data(json.dumps(_error_body(code, message)))
         response.content_type = _JSON_MEDIA_TYPE
         return response
 

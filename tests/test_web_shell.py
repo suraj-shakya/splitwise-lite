@@ -591,6 +591,10 @@ def test_no_shell_file_reaches_outside_the_origin(name: str) -> None:
 # `XMLHttpRequest`, `EventSource` and `WebSocket` are still forbidden outright:
 # nothing here needs them.
 FETCH_ALLOWED = {"api.js"}
+# sw.js may say the word because `addEventListener('fetch', ...)` is the worker's own
+# event name. It still may not call it: the `fetch(` rule below covers every file but
+# the client.
+FETCH_WORD_ALLOWED = {"api.js", "sw.js"}
 API_PATH_ALLOWED = {"api.js", "sw.js"}
 
 
@@ -601,6 +605,10 @@ def test_only_the_api_client_calls_the_back_end(name: str) -> None:
         assert forbidden not in data, name
     if name not in FETCH_ALLOWED:
         assert b"fetch(" not in data, name
+    if name not in FETCH_WORD_ALLOWED:
+        # The bare word too, so window['fetch'] and any other indirect spelling is
+        # refused rather than slipping past a check for the call syntax.
+        assert b"fetch" not in data, name
     if name not in API_PATH_ALLOWED:
         assert b"/api" not in data, name
 
@@ -612,6 +620,7 @@ def test_the_narrowed_rule_still_bites() -> None:
     # be there to notice.
     router = (APP / "app.js").read_bytes()
     assert b"fetch(" not in router
+    assert b"fetch" not in router
     assert b"/api" not in router
 
     callers = {
@@ -627,6 +636,8 @@ def test_the_narrowed_rule_still_bites() -> None:
     # And the client really is a client: it is the file the rule was widened for.
     assert b"fetch(" in (APP / "api.js").read_bytes()
     assert b"/api" in (APP / "api.js").read_bytes()
+    # The worker says the word only as its own event name, and never calls it.
+    assert b"fetch(" not in (APP / "sw.js").read_bytes()
 
 
 def test_the_api_client_holds_no_state_of_its_own() -> None:

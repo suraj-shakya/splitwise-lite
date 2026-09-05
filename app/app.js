@@ -232,9 +232,10 @@
     refresh();
   }
 
-  /* The document loads one script, and it is this one. The client is fetched as a
-     second file rather than inlined so it stays independently readable and cacheable
-     and so the network chokepoint is one file a reviewer can open. */
+  /* The document loads one script, and it is this one. The client is a second
+     file rather than inlined text, so it stays independently readable and cacheable
+     and the network chokepoint is one file a reviewer can open. This file never
+     names the network API itself: that is api.js's whole job. */
   var client = document.createElement('script');
   client.src = 'api.js';
   client.onload = function () {
