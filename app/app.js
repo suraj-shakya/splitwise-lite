@@ -30,6 +30,55 @@
   var current = null;
   var api = null;
 
+  /* Whether the three screens below may read the ledger and move focus into it.
+     Declared here, in the preamble, because every screen block asks it and none of
+     them owns it; `showing` is the gate block's, assigned by show() and read back
+     here. Three conditions, and each covers a case no other one does:
+
+       the client is loaded. This file loads it as a second script, so a hashchange
+       can arrive before that has happened, and the client may fail to load at all.
+       Read first, so nothing below it ever reaches into a client that is not there.
+
+       the client holds a session view carrying a member. Nobody is signed in when
+       there is no view; somebody signed in with no member row is refused by every
+       endpoint these screens read, by name, on every request they make.
+
+       show() last put the app frame up. The only one of the three that catches an
+       offline or a problem curtain: api.js drops the cached view for a session the
+       server has disowned and deliberately leaves it alone for the rest, so a
+       curtain can be up over a session that is still live and still linked.
+
+     Two harms, both real, and neither cosmetic. A screen that reads while a curtain
+     is up sends a request that is certain to be refused, and the refusal raises a
+     curtain over the curtain: a person who has just been told why their sign-in
+     failed loses that sentence to a request they never asked for. And a screen that
+     moves focus while a curtain is up puts the cursor inside hidden content, which
+     for a screen reader or a keyboard user means focus leaving the password field
+     with nothing announcing why.
+
+     This asks the client what session it holds, and asks this file what it last
+     drew. Both are answers somebody has already decided; neither is an answer from
+     the server being interpreted a second time here, and api.js remains the one
+     file that decides what such an answer means.
+
+     One honest note for whoever changes this next. Dropping the member half of the
+     second condition turns no scenario red, and that is not an oversight in the
+     scenarios: show('app') has one caller, and it is reached only for a view that
+     carries a member, so the app frame over a memberless view is unreachable today.
+     It is kept because it is the condition that says what this helper means, and
+     because callers read a member off that view once this has said yes. Treat it as
+     the invariant's statement rather than as the line the tests are holding. */
+  function ledgerIsUp() {
+    if (!api) {
+      return false;
+    }
+    var view = api.cachedSession();
+    if (!view || !view.member) {
+      return false;
+    }
+    return showing === 'app';
+  }
+
   function known(hash) {
     return Object.prototype.hasOwnProperty.call(ROUTES, hash);
   }
@@ -56,9 +105,15 @@
 
     document.title = ROUTES[hash].title + ' - ' + APP_NAME;
 
-    if (changed && moveFocus) {
+    if (changed && moveFocus && ledgerIsUp()) {
       /* Focus the heading of the screen that just appeared, so a screen reader
-         announces the new view. The heading carries tabindex="-1" for this. */
+         announces the new view. The heading carries tabindex="-1" for this.
+
+         Not while a curtain is up. Every heading sits inside .content, which the
+         gate and the two notices hide, so moving focus there would take it out of
+         the password field and put it somewhere nobody can see, with nothing
+         announcing why. Everything above this line still tracks the hash, so
+         signing in reveals the screen the person was already on. */
       var shown = document.getElementById(ROUTES[hash].screen);
       var heading = shown ? shown.querySelector('h1') : null;
       if (heading) {
@@ -533,12 +588,12 @@
   }
 
   function loadFeed() {
-    /* Three guards before anything happens: the client has loaded, this screen's
-       route is the current one, and no load is already running. app.js loads api.js
-       asynchronously, so a hashchange can arrive before api is assigned. A load while
-       a load is running is skipped rather than queued, so repeated tab taps cannot
-       stack requests. */
-    if (!api || window.location.hash !== FEED_ROUTE || feedBusy) {
+    /* Three guards before anything happens: somebody is signed in and looking at the
+       ledger rather than at a curtain, this screen's route is the current one, and no
+       load is already running. The helper in the preamble carries the first one and
+       says why. A load while a load is running is skipped rather than queued, so repeated tab
+       taps cannot stack requests. */
+    if (!ledgerIsUp() || window.location.hash !== FEED_ROUTE || feedBusy) {
       return;
     }
     feedBusy = true;
@@ -1037,10 +1092,11 @@
   }
 
   function addLoadRoster() {
-    /* Three guards before anything is read: the client has loaded, this screen's
-       route is the current one, and no read is already running. app.js loads the
-       client asynchronously, so a hashchange can arrive before it is assigned. */
-    if (!api || window.location.hash !== ADD_ROUTE || addRosterInFlight) {
+    /* Three guards before anything is read: somebody is signed in and looking at the
+       ledger rather than at a curtain, this screen's route is the current one, and no
+       read is already running. The helper in the preamble carries the first one and
+       says why, and it is what makes the retry control below dead behind a curtain. */
+    if (!ledgerIsUp() || window.location.hash !== ADD_ROUTE || addRosterInFlight) {
       return;
     }
     addRosterInFlight = true;
@@ -1084,31 +1140,98 @@
     );
   }
 
-  function addEntered() {
-    /* Called on every entry to this route, and once more from showApp so that the
-       manifest's home screen shortcut straight to this screen lands on a filled form.
-       Every visit starts a fresh entry: the roster is re-read, the picker and the
-       people list are rebuilt, the mode returns to Equally and both fields are
-       cleared. Nothing is kept between visits, so a person who taps Feed halfway
-       through loses what they had typed; the alternative is a draft, which is state,
-       which this app keeps nowhere. */
-    if (!api || window.location.hash !== ADD_ROUTE) {
-      return;
-    }
+  /* The one place this screen throws away what somebody typed, and it is called from
+     exactly three: entering the route, a resume by somebody who is not the person who
+     typed it, and a sign out the server confirmed. A save the server confirmed clears
+     the form too, in addSaved(), from the response it was answered with; that is a
+     different act and stays where it is. */
+  function addCleared() {
     addAmount.value = '';
     addDescription.value = '';
     addSetMode('equal');
     addSavedPanel.hidden = true;
     addShowError('');
+  }
+
+  /* Who the amount, the description and the mode below belong to: the member who was
+     signed in when this screen was opened. addOpened() is the only writer of it and
+     addResumed() the only reader.
+
+     Written on the way in, while somebody is demonstrably signed in and looking at the
+     ledger, rather than when a curtain goes up over the draft. By then the answer can
+     already be gone: a 401 makes api.js drop its cached session view before showGate()
+     is reached, and a 401 on save is the commonest way this curtain ever comes down
+     over something typed. Null until this screen has been opened once, which no
+     member id ever equals, so a resume before that clears rather than guesses. */
+  var addDraftMember = null;
+
+  /* Everything opening this screen does that is true whether the entry is fresh or a
+     resumed one: record whose entry it is, say which currency, put the keypad up, read
+     the roster. */
+  function addOpened() {
+    addDraftMember = addActingId();
     addShowCurrency();
     /* Focus moves on to the field, deliberately overriding the heading focus render()
        just made: this is the one screen that does, because the keypad has to be up
        before the roster has even been asked for. The section keeps its
        aria-labelledby, so what is announced is the amount field inside the Add region
        rather than an orphan input. Focus is touched here and nowhere else, and never
-       while this is not the current screen. */
+       while this is not the current screen or while a curtain is over it. */
     addAmount.focus();
     addLoadRoster();
+  }
+
+  function addEntered() {
+    /* Navigating here, and the hashchange listener below is the only caller. Every
+       such visit starts a fresh entry: the roster is re-read, the picker and the
+       people list are rebuilt, the mode returns to Equally and both fields are
+       cleared. So a person who taps Feed halfway through loses what they had typed;
+       the alternative is a draft that outlives a navigation, which is state, which
+       this app keeps nowhere.
+
+       Nothing is kept between visits, and a curtain coming down is not a visit: that
+       path is addResumed() below, and what a resume keeps and what it rebuilds from a
+       fresh read is written there. */
+    if (!ledgerIsUp() || window.location.hash !== ADD_ROUTE) {
+      return;
+    }
+    addCleared();
+    addOpened();
+  }
+
+  function addResumed() {
+    /* A curtain coming down on a screen the person never left, and showApp() is the
+       only caller. The hash did not move, so this is not a visit, and for the person
+       who typed it nothing is thrown away: the amount, the description and the chosen
+       split mode are all still there. That is what makes the offline notice's standing
+       promise, "nothing you have recorded is lost", true through signing back in as
+       well as through the refusal that raised the curtain.
+
+       What a resume does not keep is what the roster read rebuilds: the ticks, the
+       typed shares and a payer picked by hand all go, because addLoadRoster() empties
+       the picker and the people rows before it sends. That is deliberate. Rebuilding
+       from a fresh read is what keeps the "(you)" marker and the default payer true
+       for whoever is signed in now, and on a shared ledger the payer field decides
+       who is owed money: a stale "(you)" is a worse failure than a re-ticking. The
+       mode is kept for the same reason turned around, since returning Exact to
+       Equally would silently turn "these three uneven shares" into "split this
+       evenly", which is a wrong ledger entry one tap away. */
+    if (!ledgerIsUp() || window.location.hash !== ADD_ROUTE) {
+      return;
+    }
+    /* Kept for the person who typed it and for nobody else. A flat shares phones, and
+       the commonest way this curtain goes up is a 401 on save, where nobody signs out:
+       Sam types an expense, takes the 401, hands the phone to Ali, and Ali signs in.
+       Without this, Sam's amount and description are still on screen, and the picker
+       the roster read rebuilds has helpfully named Ali as the payer of them, so one
+       tap on Save records Sam's expense against Ali. Asking who is coming back is the
+       direct question. "Did a sign out succeed", which the sign out handler below
+       answers, is a proxy for it that misses this path entirely, and this path is the
+       one this screen exists to survive. */
+    if (addActingId() !== addDraftMember) {
+      addCleared();
+    }
+    addOpened();
   }
 
   addForm.addEventListener('submit', addSubmitted);
@@ -1158,10 +1281,20 @@
   var noticeNotKept = document.getElementById('notice-not-kept');
   var noticeProblem = document.getElementById('notice-problem');
   var creating = false;
+  /* What show() last applied, and nothing else ever assigns it. Undefined until the
+     first call, which reads as "not the app frame" and is right: nothing has been
+     drawn yet. The preamble's helper reads it back. */
+  var showing;
 
   function show(which) {
     /* One of 'app', 'gate' or 'notice'. The hash is never touched: signing in
-       returns the user to the screen they were already on. */
+       returns the user to the screen they were already on.
+
+       Which one it applied is recorded, because whether the app frame is up is a
+       decision this file makes and the preamble's helper should read it back as a
+       decision. Deriving it from .content.hidden would work today and would be this file
+       re-reading the markup it had just written. */
+    showing = which;
     gate.hidden = which !== 'gate';
     notice.hidden = which !== 'notice';
     if (frame) {
@@ -1204,10 +1337,16 @@
 
   function showApp() {
     signOut.hidden = false;
+    /* Before the three calls, never after: each of them asks the preamble's helper,
+       which asks what this just applied. */
     show('app');
+    /* The feed and the balances screens hold nothing typed, so entry and resume are
+       the same act for them, and re-reading is right because their figures may be
+       stale after the interruption. The add screen resumes rather than being entered:
+       the hash never moved, so this is not a visit, and what was typed stays. */
     loadFeed();
     balancesEntered();
-    addEntered();
+    addResumed();
   }
 
   function setMode(toCreating) {
@@ -1324,6 +1463,14 @@
       api.signOut().then(
         function () {
           setMode(false);
+          /* A visit that really ended is the strongest signal there is that the next
+             person at this phone is not the previous one, and a flat shares phones.
+             Without this, Sam types an expense, signs out, and Ali signs in to find
+             Sam's amount and description sitting in the form with Ali named as the
+             payer. Whatever route is current: the draft belongs to the person who
+             typed it, not to the screen. A sign out the server refused clears
+             nothing, because that visit did not end. */
+          addCleared();
           showGate('');
         },
         function () {}
@@ -1603,18 +1750,19 @@
   }
 
   function balancesEntered() {
-    /* Called on every entry to the balances route, and once more from showApp so
-       that signing in while already on this screen does not leave it blank. Every
-       entry reads again: nothing is kept between visits. No other route reads the
-       figures, there is no polling and there is no automatic retry. Tapping Balances
-       while already on Balances changes no hash, so no hashchange fires and nothing
-       happens, which is task 8's no-op rule. */
-    if (window.location.hash !== BALANCES_ROUTE) {
-      return;
-    }
-    if (!api) {
-      /* The client has not loaded yet, so there is nothing to ask. Its onerror
-         already shows the offline notice. */
+    /* Called on every entry to the balances route, and once more from showApp when a
+       curtain comes down on this screen, so that signing in while already on it does
+       not leave it blank. This screen holds nothing typed, so those two are the same
+       act for it and both read again: nothing is kept between visits, and figures
+       held over an interruption would be stale. No other route reads them, there is
+       no polling and there is no automatic retry. Tapping Balances while already on
+       Balances changes no hash, so no hashchange fires and nothing happens, which is
+       task 8's no-op rule.
+
+       Two guards: somebody is signed in and looking at the ledger rather than at a
+       curtain, and this screen's route is the current one. The helper in the
+       preamble carries the first one and says why. */
+    if (!ledgerIsUp() || window.location.hash !== BALANCES_ROUTE) {
       return;
     }
     balancesLoad();
