@@ -149,6 +149,11 @@ SCENARIOS = [
     "a_401_on_a_drill_down_is_the_gate_and_not_this_screens_message",
     "opening_a_payment_changes_no_route_and_no_history",
     "leaving_the_balances_screen_and_returning_closes_every_drill_down",
+    # The four states the drill-down hint has to be gone in
+    "the_hint_goes_while_the_next_read_is_in_flight",
+    "a_failed_read_leaves_no_hint_beside_the_failure",
+    "a_group_with_no_member_rows_shows_no_hint",
+    "a_group_with_nothing_left_to_settle_shows_no_hint",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

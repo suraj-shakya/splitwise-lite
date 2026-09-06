@@ -646,7 +646,18 @@ reading a file or running the suite.
     button, and is hidden in every other state: the busy state, the failure state, the
     empty-roster state, an empty transfer list and an all-inert list included.
     (scenarios: `opening_a_suggested_payment_shows_both_ends_of_it`,
-    `a_transfer_row_without_provenance_is_not_tappable`)
+    `a_transfer_row_without_provenance_is_not_tappable`,
+    `the_hint_goes_while_the_next_read_is_in_flight`,
+    `a_failed_read_leaves_no_hint_beside_the_failure`,
+    `a_group_with_no_member_rows_shows_no_hint`,
+    `a_group_with_nothing_left_to_settle_shows_no_hint`)
+
+    > **Amended 2026-09-07, after the first review of PR #56.** This criterion named five
+    > states and two scenarios, and the two covered two of the five. The QA of that PR
+    > neutralised the one line in `balancesClear()` that hides the hint and the harness
+    > exited 0 with all 101 scenarios green, so the busy, failed, empty-roster and empty
+    > transfer list states were asserted nowhere. The wording of the criterion is unchanged;
+    > the four scenarios that were missing are added to it and to criterion 77.
 15. Two payments can be open at once, and two debts inside one payment: opening the second
     leaves the first open, with its `aria-expanded` still `"true"` and its region still
     visible.
@@ -990,6 +1001,18 @@ reading a file or running the suite.
     - `a_401_on_a_drill_down_is_the_gate_and_not_this_screens_message`
     - `opening_a_payment_changes_no_route_and_no_history`
     - `leaving_the_balances_screen_and_returning_closes_every_drill_down`
+    - `the_hint_goes_while_the_next_read_is_in_flight`
+    - `a_failed_read_leaves_no_hint_beside_the_failure`
+    - `a_group_with_no_member_rows_shows_no_hint`
+    - `a_group_with_nothing_left_to_settle_shows_no_hint`
+
+    > **Amended 2026-09-07, after the first review of PR #56.** The last four names are added.
+    > The eighteen above them, and their order, are unchanged. They are criterion 14's four
+    > unasserted states, and the marker under that criterion records why they were missing:
+    > `balancesClear()`'s one line hiding the hint could be neutralised with the whole harness
+    > still green. Neutralised again with these four present, three of them go red; the fourth,
+    > the empty transfer list, is held by the line in `balancesRender` instead and goes red
+    > when that one is neutralised.
 78. No existing scenario is weakened, renamed, deleted or turned into a source-text assertion,
     and no new scenario asserts focus movement, a cached session view, an `aria-current` value
     or the escaping of markup. Running the harness with no substitutions passes every scenario

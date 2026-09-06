@@ -4943,6 +4943,98 @@ const SCENARIOS = [
         ])
       );
     }
+  },
+
+  /* The four states criterion 14 names in which the drill-down hint has to be gone,
+     and until these existed none of them was asserted anywhere. The QA of PR #56
+     neutralised the one line in balancesClear() that hides the hint and the harness
+     exited 0 with all 101 scenarios green: the two scenarios that did assert the hint
+     both drew a list straight after, so the line that hides it was never the reason
+     it was hidden. Each of these shows the hint first and then takes it away, which
+     is the only ordering that can tell those two apart. */
+
+  {
+    /* Busy. The lists are emptied before the read goes out, so the instruction to
+       open one of them goes with them: a hint over an empty screen points at
+       nothing, and the rows it will point at when the answer lands may be inert. */
+    name: 'the_hint_goes_while_the_next_read_is_in_flight',
+    async run(page) {
+      let release = null;
+      const held = {
+        status: 200,
+        ok: true,
+        json: () =>
+          new Promise((resolve) => {
+            release = () => resolve(HINT_FIGURES);
+          })
+      };
+      await hintShownThenReadAgain(page, held);
+      page.ok(release !== null, 'the second read went out and is waiting');
+      page.is(page.el('balances-busy').hidden, false, '#balances-busy');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint while busy');
+      page.is(transferRows(page).length, 0, 'the transfer rows while busy');
+
+      release();
+      await page.settle();
+      /* And back once there is something to open again, so the assertion above is
+         about this state and not about a hint that is simply never shown twice. */
+      page.is(page.el('balances-busy').hidden, true, '#balances-busy afterwards');
+      page.is(page.el('balances-drill-hint').hidden, false, 'the hint once it landed');
+      page.expectRequests(HINT_REQUESTS);
+    }
+  },
+
+  {
+    /* Failed. A hint sitting beside "Those figures could not be loaded" invites a tap
+       on a list that is not there, and stale rows behind it would be worse. */
+    name: 'a_failed_read_leaves_no_hint_beside_the_failure',
+    async run(page) {
+      await hintShownThenReadAgain(page, missingRecord());
+      page.is(page.el('balances-error').hidden, false, '#balances-error');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint beside a failure');
+      page.is(transferRows(page).length, 0, 'the transfer rows');
+      page.is(page.el('balances-net').childNodes.length, 0, 'the net list');
+      page.is(page.el('balances-currency').hidden, true, 'the currency line');
+      page.expectRequests(HINT_REQUESTS);
+    }
+  },
+
+  {
+    /* The empty roster, which a half-finished setup_group.py run reaches. Both lists
+       are hidden behind one sentence, and an instruction to open a row is a promise
+       about a list nobody can see. */
+    name: 'a_group_with_no_member_rows_shows_no_hint',
+    async run(page) {
+      await hintShownThenReadAgain(page, ok({ currency: 'AUD', net: [], transfers: [] }));
+      page.is(page.el('balances-empty-roster').hidden, false, '#balances-empty-roster');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint over an empty roster');
+      page.is(transferRows(page).length, 0, 'the transfer rows');
+      page.is(page.el('balances-net').childNodes.length, 0, 'the net list');
+      page.expectRequests(HINT_REQUESTS);
+    }
+  },
+
+  {
+    /* Nothing left to settle. The net list is there and every member is square, so
+       there is no payment to suggest and nothing at all to open. */
+    name: 'a_group_with_nothing_left_to_settle_shows_no_hint',
+    async run(page) {
+      const settled = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: []
+      };
+      await hintShownThenReadAgain(page, ok(settled));
+      page.is(page.el('balances-none').hidden, false, '#balances-none');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint with no payments');
+      page.is(page.el('balances-net').childNodes.length, 2, 'the net list');
+      page.is(page.el('balances-transfers').hidden, true, 'the transfer list');
+      page.is(transferRows(page).length, 0, 'the transfer rows');
+      page.expectRequests(HINT_REQUESTS);
+    }
   }
 ];
 
@@ -5169,6 +5261,63 @@ async function oneOpenPayment(page, answer, options) {
   const payment = regionFor(page, transfer);
   const item = debtRowsIn(payment)[0];
   return { transfer, payment, item, button: item.childNodes[0], region: item.childNodes[1] };
+}
+
+/* One payment that really opens, so the drill-down hint is shown by the first read.
+   Deliberately not oneOpenPayment's fixture: nothing here opens a row, and a fixture
+   these four share with the drill-down scenarios would tie them to a shape they do
+   not care about. */
+const HINT_ROSTER = {
+  members: [
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-2', display_name: 'Jo' },
+    { id: 'mem-3', display_name: 'Ali' }
+  ]
+};
+
+const HINT_FIGURES = {
+  currency: 'AUD',
+  net: [{ member_id: 'mem-2', amount: '9.00', direction: 'owes' }],
+  transfers: [
+    {
+      from_member_id: 'mem-2',
+      to_member_id: 'mem-3',
+      amount: '9.00',
+      payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+      receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+    }
+  ]
+};
+
+/* Entering balances, going to the feed, coming back. The same list for all four,
+   because what changes between them is the answer to the second read and nothing
+   else. */
+const HINT_REQUESTS = BALANCES_ENTRY.concat([
+  'GET /api/expenses',
+  'GET /api/members',
+  'GET /api/members',
+  'GET /api/balances'
+]);
+
+/* Draws the hint, checks it is really there, then leaves the screen and comes back
+   for `second`. Leaving and returning is the honest way to a second read: tapping
+   Balances while on Balances changes no hash, so no hashchange fires and nothing
+   happens, which is task 8's no-op rule. */
+async function hintShownThenReadAgain(page, second) {
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(HINT_ROSTER));
+  page.respondInOrder('GET', '/balances', [ok(HINT_FIGURES), second]);
+  page.startAt('#/balances');
+  await page.boot();
+  page.is(
+    transferRows(page)[0].childNodes[0].tagName,
+    'BUTTON',
+    'a row that really opens, on the first read'
+  );
+  page.is(page.el('balances-drill-hint').hidden, false, 'the hint on the first read');
+  await page.goTo('#/feed');
+  await page.goTo('#/balances');
 }
 
 function statusIn(region) {
