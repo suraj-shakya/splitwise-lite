@@ -17,6 +17,7 @@ wearing a hat.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 HARNESS = REPO / "tests" / "shell_harness.mjs"
+APP = REPO / "app"
 
 NODE_MISSING = (
     "node is not on PATH. tests/shell_harness.mjs runs the shipped app/ files under "
@@ -391,6 +393,56 @@ def test_a_run_that_will_not_quiesce_fails_and_names_the_scenario() -> None:
     assert completed.returncode == 2, completed.stderr
     assert scenario in completed.stderr
     assert "settle" in completed.stderr
+
+
+# --- api.js is the only place a status is interpreted ----------------------
+
+# A status read in order to be compared, and a comparison against an HTTP status
+# number. `status: 503` in sw.js builds a Response and is neither of those.
+_STATUS_READ = re.compile(r"\.\s*status\s*(?:===|!==|==|!=|>=|<=|>|<)")
+_STATUS_NUMBER = re.compile(r"(?:===|!==|==|!=|>=|<=|>|<)\s*[1-5][0-9][0-9]\b")
+_JS_COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def _without_comments(source: str) -> str:
+    return _JS_COMMENTS.sub(" ", source)
+
+
+def test_only_the_api_client_interprets_a_status() -> None:
+    """The rule that keeps one error contract instead of two.
+
+    app/api.js classifies a response and puts its answer on the error as ``kind``.
+    Every other file under app/ reads that answer and never the status behind it. A
+    second file that branches on a status is a second opinion about what a 403 means,
+    and two opinions drift the moment either is edited: that is the defect task 32
+    removed, in the shape it would come back in.
+
+    A screen genuinely does need to know whether api.js has already raised a curtain
+    over it. That question is asked of ``kind``, which states it, rather than
+    reconstructed from a status, which only implies it.
+    """
+    for path in sorted(APP.glob("*.js")):
+        if path.name == "api.js":
+            continue
+        source = _without_comments(path.read_text(encoding="utf-8"))
+        assert not _STATUS_READ.search(source), path.name
+        assert not _STATUS_NUMBER.search(source), path.name
+
+
+def test_the_narrowed_status_rule_still_bites() -> None:
+    # The companion to the test above: proof that excusing one file left a rule that
+    # still refuses what it was written to refuse. Without this, api.js could stop
+    # classifying altogether and the rule above would go on passing.
+    client = _without_comments((APP / "api.js").read_text(encoding="utf-8"))
+    assert _STATUS_READ.search(client)
+    assert _STATUS_NUMBER.search(client)
+    # And the patterns match the shape they claim to, so a green run above means the
+    # search ran rather than that the regex rotted.
+    assert _STATUS_READ.search("if (error.status === 401) {")
+    assert _STATUS_NUMBER.search("return error.status === 0 || error.status >= 500;")
+    # A status being written, which is what sw.js does, is not a comparison.
+    assert not _STATUS_READ.search("new Response(body, { status: 503 })")
+    assert not _STATUS_NUMBER.search("new Response(body, { status: 503 })")
 
 
 # --- Determinism, isolation and the stub's honesty -------------------------
