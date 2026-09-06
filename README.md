@@ -23,8 +23,14 @@ linked to a member row with `setup_group.py link`. Signing up on its own shows t
   spec's three modes. The resolver also takes weights, which the API accepts and no
   screen offers.
 - **Balances**: what each member is up or down, and the shortest set of payments that
-  would clear the group. Both are worked out fresh on every read and stored nowhere,
-  and nothing on that screen is tappable.
+  would clear the group. Both are worked out fresh on every read and stored nowhere.
+  The net figures are read only; the payments open, as the next bullet says.
+- **Transfer drill-down**: tap a suggested payment and it opens on the debts that
+  payment absorbs, from both ends, and tapping one of those debts opens the expenses
+  and settlements it is made of. The debts come back with the balances themselves; the
+  entries behind a debt are fetched the first time you open that row, from
+  `GET /api/debts/{debtor}/{creditor}`. A payment the server sends without usable
+  provenance stays inert, because a control that answers nothing is worse than none.
 - **Install and open offline**: add it to the home screen and the shell opens with no
   network, on `localhost` or `127.0.0.1` only, the only two secure contexts here. The
   API is never cached, so offline you get the app and then a message that it cannot
@@ -34,9 +40,6 @@ linked to a member row with `setup_group.py link`. Signing up on its own shows t
 
 These five are in `plans/backlog.md` and not in the app.
 
-- **Transfer drill-down** (backlog task 13): a suggested payment does not open up to
-  show the debts and the expenses underneath it. The back end answers that question
-  already, over `GET /api/debts/{debtor}/{creditor}`; no screen asks it.
 - **Mark as paid** (backlog task 14): there is no way to record that you have paid
   somebody.
 - **Receiver confirmation** (backlog task 15): and nothing to confirm it with, so a debt

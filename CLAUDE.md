@@ -18,9 +18,15 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
 - **Adding an expense**: an amount, an optional description, a payer from the roster and
   one of the spec's three split modes, equally, some people or uneven amounts. The
   resolver's weight mode is reachable through the API and no screen offers it.
-- **Balances**: each member's net position and the shortest list of payments that clears
-  the group, worked out on every read and never stored. Nothing on that screen is
-  tappable.
+- **Balances**: each member's net position and the shortest list of payments that
+  clears the group, worked out on every read and never stored. The net figures are read
+  only; the payments are not, see below.
+- **Transfer drill-down**: a suggested payment opens on the debts it absorbs, from both
+  ends, and each of those debts opens in turn on the expenses and settlements behind it.
+  The debts arrive with the balances read; what sits behind a debt is fetched on that
+  row's first expansion, over `GET /api/debts/{debtor}/{creditor}`. A payment whose
+  payload carries no usable provenance is drawn inert rather than as a control that
+  answers nothing.
 - **Install and open offline**: it installs to the home screen and the shell opens
   offline, on `localhost` or `127.0.0.1` only. The API is never cached, so offline the
   app opens and then reports that it cannot reach the server, and an expense cannot be
@@ -31,9 +37,6 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
 Five capabilities from `plans/backlog.md` are planned and absent. Claiming one of them
 here, or building one without moving its bullet, turns the suite red.
 
-- **Transfer drill-down** (backlog task 13): a suggested payment cannot be opened to see
-  the debts and expenses behind it. The API can already answer what a debt is made of,
-  `GET /api/debts/{debtor}/{creditor}`, and no screen asks it.
 - **Mark as paid** (backlog task 14): nothing records that a payment happened.
 - **Receiver confirmation** (backlog task 15): and so nothing confirms one, which means
   a debt that has been settled in real life stays on the list until somebody records the

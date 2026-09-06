@@ -1170,6 +1170,15 @@ WORKS_TODAY = {
         ("index.html", 'id="balances-transfers"'),
         ("api.js", "balances:"),
     ),
+    # Backlog task 13. Until it landed this key sat in NOT_YET, with `.debt(` asserted
+    # absent from app/app.js, and that rule is what turned red when the drill-down
+    # shipped ahead of these documents. The same fact, read the other way: the screen
+    # asks the client for a debt, and index.html carries the hint that says a payment
+    # can be opened at all.
+    "Transfer drill-down": (
+        ("index.html", 'id="balances-drill-hint"'),
+        ("app.js", "api.debt("),
+    ),
     "Install and open offline": (
         ("app.js", "navigator.serviceWorker.register('sw.js')"),
         ("sw.js", "var SHELL = ["),
@@ -1181,16 +1190,6 @@ WORKS_TODAY = {
 # still carries a reason naming what covers it instead, because an empty rule with no
 # explanation is a guard nobody can audit.
 NOT_YET = {
-    "Transfer drill-down": {
-        "task": 13,
-        "absent": (("app.js", ".debt("),),
-        "reason": (
-            "The back end half shipped with task 12a: SplitwiseApi.debt and "
-            "GET /api/debts/{debtor}/{creditor} both answer today. What does not "
-            "exist is a screen that asks, so the absence of `.debt(` from app/app.js "
-            "is the whole of the claim."
-        ),
-    },
     "Mark as paid": {
         "task": 14,
         "absent": (),
