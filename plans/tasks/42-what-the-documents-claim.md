@@ -544,8 +544,8 @@ QA runs `git status` after each and records that the tree is clean.
 
 ### The suite and the diff
 
-35. `uv run python -m pytest` on a clean tree reports `2227 passed`, `0 failed`,
-    `0 skipped`, `0 xfailed`. That is master's 2223 at `70f41d3`, minus the one deleted
+35. `uv run python -m pytest` on a clean tree reports `2262 passed`, `0 failed`,
+    `0 skipped`, `0 xfailed`. That is master's 2258 at `369a02a`, minus the one deleted
     test, plus the five added. If the implementer merged or split a test and the count
     differs, the deviation and its count are recorded in this file under
     `## Deviations` and QA checks the recorded number instead.
@@ -556,6 +556,14 @@ QA runs `git status` after each and records that the tree is clean.
     > and #56, and this branch was rebased onto `70f41d3` so that #56's drill-down would
     > meet this task's guard. The arithmetic is unchanged; only the base is. No test was
     > merged or split.
+    >
+    > **Amended again 2026-09-07, after the fifth review.** `2227` and "master's 2223 at
+    > `70f41d3`" were correct against that base. #62 merged and the branch was rebased
+    > onto `369a02a`, which criterion 40 requires before merging. Both figures were
+    > measured here rather than carried over: `369a02a` in a throwaway worktree reports
+    > `2258 passed`, this branch reports `2262 passed`, and the worktree was removed.
+    > The arithmetic is unchanged for the third time; only the base is. No test was
+    > merged or split in this round either.
 36. `app/sw.js` is byte identical to `master`. `SHELL_DIGEST` does not move, because
     neither `CLAUDE.md` nor `README.md` is one of the nine precached files, and nothing
     under `app/` is changed by this task. Nobody needs to recompute anything, and
@@ -653,7 +661,7 @@ rediscovered a third time.
 2. **`plans/tasks/49-continuous-integration.md` criterion 23 pins `2061 passed`** and
    criterion 45 pins the same number, and `plans/tasks/49-continuous-integration.md:57`
    says "the suite is 2061 tests"; all three were re-checked on 2026-09-07. The suite is
-   at 2227. That file is a record and
+   far larger now, and criterion 35 is where that figure lives. That file is a record and
    should not be rewritten, but a reader running its criteria today will get a false
    negative. Worth one line in that file saying the count was correct on the day, or
    worth leaving alone deliberately. Raised, not decided.
@@ -693,10 +701,9 @@ that is believed to work, which is the same category of thing as the test it rep
 
 ## Deviations
 
-The suite count is not one of them. `uv run python -m pytest` reports `2227 passed`,
-with nothing skipped and nothing xfailed, which is what criterion 35 now predicts; the
-figure it predicted before, `2176`, was computed against a `master` that has since moved
-twice, and criterion 35 was amended to match. What follows is five places where a
+The suite count is not one of them: the observed run matches criterion 35, which is the
+one place the figure is written and which has been amended each time the base moved. What
+follows is five places where a
 criterion's wording and the observed result differ. Four of them changed no criterion and
 are the record of what running them produced. The fifth changed nine, across two rounds,
 each under an explicit instruction, and says so.
