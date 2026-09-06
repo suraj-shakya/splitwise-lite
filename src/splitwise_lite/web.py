@@ -1462,10 +1462,10 @@ def _read_balances() -> flask.Response:
     # be two different instants. ``list_events`` is ``ordering_key`` ascending, so
     # this is ascending ``(created_at, id)`` with nothing sorted here.
     pending = [
-        event
-        for event in ledger
-        if isinstance(event, events.SettlementEvent)
-        and states[event.id] is events.SettlementState.PENDING
+        recorded
+        for recorded in ledger
+        if isinstance(recorded, events.SettlementEvent)
+        and states[recorded.id] is events.SettlementState.PENDING
     ]
     awaiting = {
         (settlement.from_member_id, settlement.to_member_id)
