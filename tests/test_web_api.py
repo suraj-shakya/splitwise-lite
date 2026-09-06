@@ -2367,6 +2367,97 @@ def test_the_api_prefix_is_a_path_segment_and_not_a_string_prefix(
     assert built.test_client().get("/apiary").status_code == 200
 
 
+def test_a_route_outside_the_prefix_added_after_the_factory_is_still_ungated(
+    app,
+) -> None:
+    # The gap the spec records at "What this deliberately does not catch", pinned
+    # rather than left to be rediscovered. ``_before_request`` can only classify by
+    # the rule it matched, and this one is not under ``/api``, so it is served. The
+    # audit still refuses it at construction, so reaching this needs somebody to
+    # register a route outside the factory *and* outside the prefix. If that ever
+    # stops being true, in either direction, this test says so.
+    app.add_url_rule("/probe", "probe", probe_view, methods=["GET"])
+    response = app.test_client().get("/probe")
+    assert response.status_code == 200
+    assert response.get_json() == {"leaked": "roster"}
+
+
+def test_an_undeclared_rule_is_refused_before_the_csrf_gate_runs(app, caplog) -> None:
+    # Criterion 21's order, driven on a state-changing method: the rule with no
+    # declared policy is refused before any gate runs, so a POST carrying no CSRF
+    # header is the 500 and not a 403 ``csrf_failed``. Nothing else would notice
+    # those two branches being swapped.
+    import logging
+
+    app.add_url_rule("/api/probe", "probe", probe_view, methods=["POST"])
+    with caplog.at_level(logging.ERROR):
+        response = app.test_client().post("/api/probe")
+    assert response.status_code == 500
+    body = response.get_json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == web._GENERIC_500_MESSAGE
+    assert "leaked" not in response.get_data(as_text=True)
+    assert "Traceback" in caplog.text
+
+
+def test_nothing_in_the_module_ever_writes_to_the_access_map() -> None:
+    # Criterion 8 says nothing writes to ``_API_ACCESS`` after import, and a plain
+    # dict does not enforce that. ``MappingProxyType`` would, but it needs ``types``,
+    # and ``test_the_module_imports_flask_and_the_standard_library_only`` pins that
+    # import set exactly, so enforcement lives here instead: a rebinding, a
+    # subscripted assignment, a deletion or a mutating method call on the name is a
+    # failure, and the name is bound exactly once.
+    import ast
+
+    writes: list[str] = []
+    bindings = 0
+    for node in ast.walk(ast.parse(web_source())):
+        targets: list[ast.expr] = []
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            targets = list(node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "_API_ACCESS":
+                if isinstance(node, ast.AnnAssign):
+                    bindings += 1
+                else:
+                    writes.append(ast.dump(node))
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "_API_ACCESS"
+            ):
+                writes.append(ast.dump(node))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "_API_ACCESS"
+            and node.func.attr not in {"get", "items", "keys", "values", "copy"}
+        ):
+            writes.append(ast.dump(node))
+    assert writes == []
+    assert bindings == 1
+
+
+def test_a_declared_shell_route_the_app_does_not_serve_is_refused() -> None:
+    # Criterion 15 from the other table. A missing shell row goes down the same code
+    # path as a missing API one, and the path is only worth having if both directions
+    # are known to reach it.
+    bare = web.flask.Flask(__name__, static_folder=None)
+    for row in web._API_ROUTES:
+        bare.add_url_rule(row.rule, row.endpoint, row.view, methods=list(row.methods))
+    for rule, endpoint, view, methods in web._SHELL_ROUTES[:-1]:
+        bare.add_url_rule(rule, endpoint, view, methods=list(methods))
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web._audit_routes(bare)
+    message = str(error.value)
+    assert "/<path:filename>" in message
+    assert "static_path" in message
+    assert "does not serve" in message
+
+
 # --- Members ----------------------------------------------------------------
 
 
