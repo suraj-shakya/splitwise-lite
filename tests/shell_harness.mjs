@@ -4340,9 +4340,11 @@ const SCENARIOS = [
     /* The second read, and the whole point of it: what one pairwise debt is made of,
        in the words the entry's own kind and effect choose. Seven entries covering
        the four sentences, a settlement's fixed name, an empty description, and a
-       kind and an effect nobody expected. The feed renders the same instant on the
-       way past, so "one ledger, one date spelling" is asserted against the feed
-       itself rather than against a second copy of feedDate written here. */
+       kind and an effect nobody expected. The dates are checked against spelledDate,
+       which is a second copy of feedDate's rule and not an independent oracle: read
+       the note above spelledDate for exactly how much that is worth and why the
+       feed's own spelling of the same instant is not available to compare against.
+       This scenario never visits the feed. */
     name: 'opening_a_debt_lists_the_expenses_behind_it',
     async run(page) {
       const first = '2026-09-04T08:00:00.000000+00:00';
