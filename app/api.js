@@ -398,6 +398,23 @@
     /* Net positions for every member, plus the suggested transfers. */
     balances: function () {
       return call('GET', '/balances');
+    },
+
+    /* What one pairwise debt is made of: the expenses and confirmed settlements
+       behind what debtorId owes creditorId, each carrying a server-computed effect of
+       adds or reduces. Both ids are encoded, because a member id is whatever the
+       roster an operator wrote says it is, and one carrying a space or a percent sign
+       still has to reach the right pair. A refusal here is a refused like any other,
+       and so is the caller's own to report: it names one pair, and a curtain over the
+       whole frame would take that screen's own message away. */
+    debt: function (debtorId, creditorId) {
+      return call(
+        'GET',
+        '/debts/' +
+          encodeURIComponent(debtorId) +
+          '/' +
+          encodeURIComponent(creditorId)
+      );
     }
   };
 })();
