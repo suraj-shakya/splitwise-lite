@@ -96,6 +96,7 @@ SCENARIOS = [
     "leaving_add_and_coming_back_starts_a_fresh_entry",
     "a_roster_without_the_acting_member_defaults_to_the_first_one",
     "switching_modes_twice_still_names_every_member_once",
+    "a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives",
 ]
 
 # The two mutants the harness is measured against, as anchored substitutions applied

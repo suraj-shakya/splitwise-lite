@@ -689,6 +689,23 @@
     addErrorRegion.hidden = which === '';
   }
 
+  function addRosterArrived() {
+    /* "The people in this group have not arrived yet" stops being true the moment they
+       do, so the refusal that said so comes down with it rather than waiting for the
+       next tap to withdraw it. Typing while the roster loads is the whole point of this
+       screen, so saving during that window is a normal thing to do and a stale refusal
+       left behind it is a false sentence on the fast path.
+
+       Scoped to the one child this path owns, and deliberately not a blanket clear: a
+       message the server sent about a refused save is still true and is not this
+       screen's to take back. addShowError keeps at most one of the three visible, so
+       reading the one child answers "is this mine to clear" without guessing at the
+       others. */
+    if (!addErrorRoster.hidden) {
+      addShowError('');
+    }
+  }
+
   function addRosterState(which) {
     /* One of 'busy', 'error', 'empty' or ''. A blank area while a request is in the
        air is indistinguishable from a group that has nobody in it, and that confusion
@@ -1050,6 +1067,7 @@
           return;
         }
         addRosterState('');
+        addRosterArrived();
         addFillPayer();
         addBuildPeople();
       },

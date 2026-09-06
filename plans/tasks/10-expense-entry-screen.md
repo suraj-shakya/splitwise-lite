@@ -616,6 +616,19 @@ against a roster on which that rule answers differently from the other two.
   this file argues for at length under "After a successful save" and had no scenario for.
   Three fixtures come with them: a roster with the acting member second, a roster with no
   row for the acting member, and a second 201 body whose echo differs from the first.
+
+  **Extended 2026-09-06, after the second review of PR #40**, which found a real defect
+  rather than a coverage gap and drove it in an isolated harness copy: a save attempted
+  while the roster was still in the air showed `add-error-roster`, correctly, and that
+  refusal was still on screen after the roster arrived and the picker filled. This file
+  invites exactly that flow, under "The roster": the amount and description stay usable
+  and focused throughout, because typing while the roster loads is the point. So the fast
+  path was the one that left a false sentence up until the next tap withdrew it. A tenth
+  scenario, `a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives`, pins
+  both halves: the refusal comes down when the roster lands, and the clear is scoped to
+  that one child, because a blanket clear on the roster path would also withdraw a
+  message the server sent about a refused save, which "shown verbatim, and never replaced
+  or reworded" makes this screen's to display and not its to take back.
 - `tests/test_shell_behaviour.py::test_the_harness_reports_exactly_the_declared_scenarios`
   passes with the new names appended, and `test_the_service_worker_registration_branch_is_never_entered`
   passes unchanged: this block registers a `hashchange` listener and no `load` listener.

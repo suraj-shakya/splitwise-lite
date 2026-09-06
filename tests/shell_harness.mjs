@@ -2607,6 +2607,85 @@ const SCENARIOS = [
         { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
       ]);
     }
+  },
+
+  {
+    /* The fast path this screen is built for, and the one that produced a false
+       sentence. The amount stays typeable while the roster is in the air on purpose,
+       so saving during that window is a normal thing to do; it is refused, correctly,
+       because there is nobody to share the expense with yet. The moment the roster
+       lands that sentence stops being true and has to go.
+
+       The second half pins that the clear is scoped to the one child the roster owns.
+       A bare addShowError('') here would also withdraw a message the server sent about
+       a refused save, which is still true and is not this screen's to take back. That
+       state is not reachable by tapping today, because the retry control only appears
+       while the roster panel is up and a server refusal needs a roster in hand; the
+       retry listener is invoked directly, and this assertion exists so the scope of
+       the clear survives a later change that does make it reachable. */
+    name: 'a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives',
+    async run(page) {
+      page.startAt('#/add');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respondInOrder('GET', '/members', [ok(ADD_ROSTER), ok(ADD_ROSTER)]);
+      page.respond(
+        'POST',
+        '/expenses',
+        failure(400, CODES.invalidSplit, ADD_SUM_REFUSED)
+      );
+      let reads = 0;
+      let duringLoad = null;
+      page.onRequest('GET', '/members', () => {
+        reads += 1;
+        if (reads !== 1) {
+          return;
+        }
+        /* Typed and saved while the read is still in the air, which is exactly what
+           the screen invites by leaving the field focused and usable throughout. The
+           form's own submit listener is what a tap on Save reaches. */
+        page.el('add-amount').value = '12.50';
+        const event = {
+          type: 'submit',
+          defaultPrevented: false,
+          preventDefault() {
+            event.defaultPrevented = true;
+          }
+        };
+        (page.el('add-form').listeners.submit || []).forEach((handler) =>
+          handler(event)
+        );
+        duringLoad = addErrorsShown(page);
+      });
+      await page.boot();
+      page.same(duringLoad, [false, true, false], 'while the roster was in flight');
+      page.same(addErrorsShown(page), [false, false, false], 'once the roster arrived');
+      page.is(page.el('add-error').hidden, true, '#add-error once the roster arrived');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)', 'Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(addErrorsShown(page), [false, false, true], 'after the refused save');
+      await page.dispatch(page.el('add-roster-retry'), 'click');
+      page.same(
+        addErrorsShown(page),
+        [false, false, true],
+        'after a roster read that followed a server refusal'
+      );
+      page.is(
+        page.el('add-error-server').textContent,
+        ADD_SUM_REFUSED,
+        '#add-error-server text'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY },
+        'GET /api/members'
+      ]);
+    }
   }
 ];
 
