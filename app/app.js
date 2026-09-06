@@ -1164,7 +1164,11 @@
        people list are rebuilt, the mode returns to Equally and both fields are
        cleared. So a person who taps Feed halfway through loses what they had typed;
        the alternative is a draft that outlives a navigation, which is state, which
-       this app keeps nowhere. */
+       this app keeps nowhere.
+
+       Nothing is kept between visits, and a curtain coming down is not a visit: that
+       path is addResumed() below, and what a resume keeps and what it rebuilds from a
+       fresh read is written there. */
     if (!ledgerIsUp() || window.location.hash !== ADD_ROUTE) {
       return;
     }
