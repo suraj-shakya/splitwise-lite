@@ -138,6 +138,17 @@ SCENARIOS = [
     "a_payment_that_covers_a_whole_debt_does_not_say_of_itself",
     "a_transfer_row_without_provenance_is_not_tappable",
     "a_second_payment_opens_without_closing_the_first",
+    "opening_a_debt_lists_the_expenses_behind_it",
+    "the_waiting_line_is_on_screen_before_the_request_goes_out",
+    "the_expenses_behind_a_debt_are_asked_for_once",
+    "a_debt_whose_expenses_do_not_arrive_says_so_and_can_be_asked_again",
+    "a_debt_with_nothing_behind_it_says_so_rather_than_failing",
+    "a_debt_that_answers_with_the_wrong_shape_is_a_failure_not_an_empty_debt",
+    "a_member_missing_from_the_roster_still_shows_the_debt",
+    "a_drill_down_behind_a_curtain_asks_for_nothing",
+    "a_401_on_a_drill_down_is_the_gate_and_not_this_screens_message",
+    "opening_a_payment_changes_no_route_and_no_history",
+    "leaving_the_balances_screen_and_returning_closes_every_drill_down",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

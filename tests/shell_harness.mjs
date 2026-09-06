@@ -85,6 +85,9 @@ const CODES = {
   invalidSplit: 'invalid_split',
   emailAlreadyRegistered: 'email_already_registered',
   tooManyAttempts: 'too_many_attempts',
+  /* The refusal the debts route composes for an id that is not in the roster,
+     and for a self-pair. */
+  malformedRequest: 'malformed_request',
   internalError: 'internal_error',
   noGroupConfigured: 'no_group_configured',
   ambiguousGroup: 'ambiguous_group'
@@ -4331,6 +4334,615 @@ const SCENARIOS = [
         ])
       );
     }
+  },
+
+  {
+    /* The second read, and the whole point of it: what one pairwise debt is made of,
+       in the words the entry's own kind and effect choose. Seven entries covering
+       the four sentences, a settlement's fixed name, an empty description, and a
+       kind and an effect nobody expected. The feed renders the same instant on the
+       way past, so "one ledger, one date spelling" is asserted against the feed
+       itself rather than against a second copy of feedDate written here. */
+    name: 'opening_a_debt_lists_the_expenses_behind_it',
+    async run(page) {
+      const first = '2026-09-04T08:00:00.000000+00:00';
+      const second = '2026-09-02T23:30:00.000000+00:00';
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '9.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '9.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+          }
+        ]
+      };
+      const behind = {
+        currency: 'AUD',
+        debtor_id: 'mem-2',
+        creditor_id: 'mem-3',
+        amount: '9.00',
+        direction: 'owes',
+        entries: [
+          entry('expense', 'adds', 'exp-1', 'Milk run', first, '4.00'),
+          entry('expense', 'reduces', 'exp-2', 'Bus fare', first, '2.00'),
+          entry('settlement', 'reduces', 'set-1', '', first, '5.00'),
+          /* A description on a settlement, which the wire never sends: kind decides
+             the name before the description is looked at. */
+          entry('settlement', 'adds', 'set-2', 'ignored', second, '1.00'),
+          entry('refund', 'wobbles', 'odd-1', 'Odd one', second, '3.00'),
+          entry('expense', 'sideways', 'odd-2', 'Sideways', second, '7.00'),
+          entry('expense', 'adds', 'exp-3', '   ', second, '9.00')
+        ]
+      };
+      page.respond('GET', '/debts/mem-2/mem-3', ok(behind));
+      await onBalances(page, roster, figures);
+      const transfer = transferRows(page)[0].childNodes[0];
+      await page.dispatch(transfer, 'click');
+      const payment = regionFor(page, transfer);
+      /* Nothing was asked for on entering the route or on opening the payment. */
+      page.same(page.requests, BALANCES_ENTRY, 'requests before the debt opens');
+
+      const item = debtRowsIn(payment)[0];
+      const button = item.childNodes[0];
+      const region = item.childNodes[1];
+      page.is(button.tagName, 'BUTTON', 'the debt control');
+      page.is(button.type, 'button', 'the debt control type');
+      page.is(button.getAttribute('aria-expanded'), 'false', 'the debt closed');
+      page.is(button.getAttribute('aria-controls'), region.id, 'the debt aria-controls');
+      page.is(region.hidden, true, 'the debt region while closed');
+      page.is(regionFor(page, button), region, 'the region the debt button names');
+
+      /* A transfer region carries no live region and no aria-busy of its own: the
+         request belongs to a debt row, and so does everything said about it. */
+      page.is(payment.getAttribute('aria-busy'), null, 'aria-busy on a payment');
+      page.same(
+        payment.childNodes.map((child) => child.getAttribute('role')),
+        [null, null],
+        'roles on a payment region'
+      );
+
+      await page.dispatch(button, 'click');
+      page.is(button.getAttribute('aria-expanded'), 'true', 'the debt open');
+      page.is(region.hidden, false, 'the debt region while open');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy once it settled');
+
+      /* Exactly one live region per debt, holding one sentence and nothing else,
+         with the entry list as its sibling rather than its child. */
+      page.is(region.childNodes.length, 2, 'children of a debt region');
+      const status = statusIn(region);
+      const list = entryListIn(region);
+      page.is(status.getAttribute('role'), 'status', 'the live region');
+      page.is(status.textContent, '', 'the live region once the entries arrived');
+      page.is(list.className, 'balances-entries', 'the entry list');
+      page.is(list.hidden, false, 'the entry list once it has entries');
+
+      const parts = entriesIn(region).map(entryParts);
+      page.is(parts.length, 7, 'entries');
+      page.same(
+        parts.map((part) => part.description),
+        [
+          'Milk run',
+          'Bus fare',
+          'A settlement',
+          'A settlement',
+          'Odd one',
+          'Sideways',
+          'No description'
+        ],
+        'descriptions'
+      );
+      page.same(
+        parts.map((part) => part.amount),
+        ['4.00', '2.00', '5.00', '1.00', '3.00', '7.00', '9.00'],
+        'amounts'
+      );
+      /* The four sentences, and no sentence at all for a kind or an effect nobody
+         expected: inventing a direction for one would be worse than saying nothing. */
+      page.same(
+        parts.map((part) => part.effect),
+        [
+          'Adds to this debt: Ali paid, and Jo shared',
+          'Takes off this debt: Jo paid, and Ali shared',
+          'Takes off this debt: Jo paid Ali',
+          'Adds to this debt: Ali paid Jo',
+          null,
+          null,
+          'Adds to this debt: Ali paid, and Jo shared'
+        ],
+        'effect lines'
+      );
+      /* In the order the server sent them and in no other. */
+      page.same(
+        parts.map((part) => part.datetime),
+        [first, first, first, second, second, second, second],
+        'the instants, unchanged and in the order they arrived'
+      );
+      page.same(
+        parts.map((part) => part.dateTag),
+        ['TIME', 'TIME', 'TIME', 'TIME', 'TIME', 'TIME', 'TIME'],
+        'the date elements'
+      );
+      page.same(
+        parts.map((part) => part.dateText),
+        [first, first, first, second, second, second, second].map(spelledDate),
+        'the dates, absolute and local'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* A live region whose text changed while it was hidden announces nothing in
+       several screen readers, so the reveal comes first, then aria-busy, then the
+       sentence, and only then the request. onRequest sees the page at the one moment
+       that ordering is observable. */
+    name: 'the_waiting_line_is_on_screen_before_the_request_goes_out',
+    async run(page) {
+      const { region, button, transfer } = await oneOpenPayment(page, ok(oneEntryDebt('mem-2', 'mem-3')));
+      let seen = null;
+      page.onRequest('GET', '/debts/mem-2/mem-3', () => {
+        seen = {
+          hidden: region.hidden,
+          busy: region.getAttribute('aria-busy'),
+          expanded: button.getAttribute('aria-expanded'),
+          disabled: button.disabled,
+          status: statusIn(region).textContent
+        };
+      });
+      await page.dispatch(button, 'click');
+      page.ok(seen !== null, 'the request went out');
+      page.same(
+        seen,
+        {
+          hidden: false,
+          busy: 'true',
+          expanded: 'true',
+          disabled: false,
+          status: 'Looking up the expenses behind this.'
+        },
+        'the page at the moment the request went out'
+      );
+      /* Settled, so the busy flag is gone and the sentence has been replaced by the
+         entries it was waiting for. */
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy after it settled');
+      page.is(statusIn(region).textContent, '', 'the waiting line afterwards');
+      page.is(entriesIn(region).length, 1, 'the entries');
+      page.is(transfer.getAttribute('aria-expanded'), 'true', 'the payment above');
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* The answer is in that row's own DOM, so closing and opening it again asks
+       nothing further. Not a cache: it lives in the row and dies with it. */
+    name: 'the_expenses_behind_a_debt_are_asked_for_once',
+    async run(page) {
+      const { region, button } = await oneOpenPayment(page, ok(oneEntryDebt('mem-2', 'mem-3')));
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      page.is(button.getAttribute('aria-expanded'), 'true', 'open again');
+      page.is(region.hidden, false, 'the region, open again');
+      page.is(entriesIn(region).length, 1, 'the entries, still there');
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* A failure keeps nothing, so asking again is asking afresh. The sentence is
+       this screen's own for every kind: the one this route composes for its own 400
+       names a member id, and no member id is ever shown here. */
+    name: 'a_debt_whose_expenses_do_not_arrive_says_so_and_can_be_asked_again',
+    async run(page) {
+      const refusal = failure(400, CODES.malformedRequest, MALFORMED_DEBT);
+      const { region, button, transfer, payment } = await oneOpenPayment(page, [
+        refusal,
+        ok(oneEntryDebt('mem-2', 'mem-3'))
+      ]);
+      await page.dispatch(button, 'click');
+      page.is(
+        statusIn(region).textContent,
+        'Those expenses could not be listed just now.',
+        'the failure sentence'
+      );
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy after a failure');
+      page.is(entryListIn(region).hidden, true, 'the entry list after a failure');
+      page.is(entriesIn(region).length, 0, 'entries after a failure');
+      /* One row's failure, not the screen's: the payment above stays open with its
+         debt rows listed, the net list is untouched and the screen's own message
+         stays hidden. Nothing the server said is on screen. */
+      page.is(transfer.getAttribute('aria-expanded'), 'true', 'the payment above');
+      page.is(payment.hidden, false, 'the payment region');
+      page.is(debtRowsIn(payment).length, 1, 'the debt rows');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.is(page.el('balances-net').childNodes.length, 1, 'the net list');
+      const shown = page.el('screen-balances').textContent;
+      page.is(shown.indexOf(MALFORMED_DEBT), -1, "the server's own sentence");
+      page.is(shown.indexOf('mem-'), -1, 'a member id as visible text');
+
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      page.is(entriesIn(region).length, 1, 'the entries, asked for again');
+      page.is(statusIn(region).textContent, '', 'the failure sentence afterwards');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/debts/mem-2/mem-3'
+        ])
+      );
+    }
+  },
+
+  {
+    /* An empty list is a valid answer and not a failure: the ledger can move between
+       the balances read and this request. It is an answer, so the row keeps it and
+       asks nothing further. */
+    name: 'a_debt_with_nothing_behind_it_says_so_rather_than_failing',
+    async run(page) {
+      const empty = {
+        currency: 'AUD',
+        debtor_id: 'mem-2',
+        creditor_id: 'mem-3',
+        amount: '0.00',
+        direction: 'settled',
+        entries: []
+      };
+      const { region, button } = await oneOpenPayment(page, ok(empty));
+      await page.dispatch(button, 'click');
+      page.is(
+        statusIn(region).textContent,
+        'Nothing is recorded behind this debt.',
+        'the nothing-recorded sentence'
+      );
+      /* No list at all, rather than an empty one. */
+      page.is(entryListIn(region).hidden, true, 'the entry list');
+      page.is(entriesIn(region).length, 0, 'entries');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      page.is(
+        statusIn(region).textContent,
+        'Nothing is recorded behind this debt.',
+        'the sentence on a second look'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* "Nothing is recorded behind this debt" is a claim about the ledger, and a
+       payload this screen could not read is no evidence for it. Five ways of being
+       unreadable, one per debt row, all of them 200s. */
+    name: 'a_debt_that_answers_with_the_wrong_shape_is_a_failure_not_an_empty_debt',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' },
+          { id: 'mem-6', display_name: 'Ray' },
+          { id: 'mem-7', display_name: 'Wu' }
+        ]
+      };
+      const head = {
+        currency: 'AUD',
+        debtor_id: 'mem-2',
+        creditor_id: 'mem-3',
+        amount: '1.00',
+        direction: 'owes'
+      };
+      const good = entry('expense', 'adds', 'exp-1', 'Milk run', WHEN, '1.00');
+      const missing = { kind: 'expense', effect: 'adds', id: 'exp-1',
+        description: 'Milk run', created_at: WHEN };
+      const numbered = { kind: 'expense', effect: 'adds', id: 'exp-1',
+        description: 'Milk run', created_at: 4, amount: '1.00' };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok({
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '5.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '5.00',
+            payer_debts: [
+              absorbed('mem-2', 'mem-3', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-4', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-5', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-6', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-7', '1.00', '1.00', true)
+            ],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '5.00', '5.00', true)]
+          }
+        ]
+      }));
+      /* No entries key at all; entries that are not an array; an element that is not
+         an object; an element with no amount; an element whose created_at is a
+         number rather than the string the wire sends. */
+      page.respond('GET', '/debts/mem-2/mem-3', ok(head));
+      page.respond('GET', '/debts/mem-2/mem-4', ok({ ...head, entries: {} }));
+      page.respond('GET', '/debts/mem-2/mem-5', ok({ ...head, entries: ['nope'] }));
+      page.respond('GET', '/debts/mem-2/mem-6', ok({ ...head, entries: [good, missing] }));
+      page.respond('GET', '/debts/mem-2/mem-7', ok({ ...head, entries: [numbered] }));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const transfer = transferRows(page)[0].childNodes[0];
+      await page.dispatch(transfer, 'click');
+      const rows = debtRowsIn(regionFor(page, transfer)).slice(0, 5);
+      for (const item of rows) {
+        await page.dispatch(item.childNodes[0], 'click');
+      }
+      page.same(
+        rows.map((item) => statusIn(item.childNodes[1]).textContent),
+        [
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.'
+        ],
+        'every unreadable answer is a failure'
+      );
+      page.same(
+        rows.map((item) => entriesIn(item.childNodes[1]).length),
+        [0, 0, 0, 0, 0],
+        'nothing was rendered from an unreadable answer'
+      );
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/debts/mem-2/mem-4',
+          'GET /api/debts/mem-2/mem-5',
+          'GET /api/debts/mem-2/mem-6',
+          'GET /api/debts/mem-2/mem-7'
+        ])
+      );
+    }
+  },
+
+  {
+    /* A member id means nothing to a flatmate and is never shown, so a row whose
+       member the roster does not know still shows the money under one fixed name.
+       Hiding a debt because a name is missing is the worse failure, and the refusal
+       this route composes for that id names it, which is why the row prints its own
+       sentence and never the server's. */
+    name: 'a_member_missing_from_the_roster_still_shows_the_debt',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' }
+        ]
+      };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok({
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '5.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-9',
+            amount: '5.00',
+            payer_debts: [absorbed('mem-2', 'mem-9', '5.00', '8.00', false)],
+            receiver_credits: [absorbed('mem-2', 'mem-9', '5.00', '8.00', false)]
+          }
+        ]
+      }));
+      page.respond(
+        'GET',
+        '/debts/mem-2/mem-9',
+        failure(400, CODES.malformedRequest, MALFORMED_DEBT)
+      );
+      page.startAt('#/balances');
+      await page.boot();
+
+      const transfer = transferRows(page)[0].childNodes[0];
+      page.is(lineOf(transfer).textContent, 'Jo pays Unknown member 5.00', 'the row');
+      await page.dispatch(transfer, 'click');
+      const payment = regionFor(page, transfer);
+      page.same(
+        detailLines(payment),
+        [
+          'This payment settles what Jo owes Unknown member directly.',
+          'Jo owes Unknown member 5.00 of 8.00'
+        ],
+        'the open payment'
+      );
+      const item = debtRowsIn(payment)[0];
+      await page.dispatch(item.childNodes[0], 'click');
+      page.is(
+        statusIn(item.childNodes[1]).textContent,
+        'Those expenses could not be listed just now.',
+        'the failure sentence'
+      );
+      /* At every level, in every state, the failure state included. */
+      const shown = page.el('screen-balances').textContent;
+      page.is(shown.indexOf('mem-'), -1, 'a member id as visible text');
+      page.is(shown.indexOf(MALFORMED_DEBT), -1, "the server's own sentence");
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-9']));
+    }
+  },
+
+  {
+    /* The same answer the feed and the add retries give behind a curtain, through
+       the same shared helper. Signing out leaves the rows in the document, so both
+       controls are still there to be pressed and both do nothing at all. */
+    name: 'a_drill_down_behind_a_curtain_asks_for_nothing',
+    async run(page) {
+      const { region, button, transfer, payment } = await oneOpenPayment(page, ok(oneEntryDebt('mem-2', 'mem-3')), { keepClosed: true });
+      page.respond('DELETE', '/session', noContent());
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+
+      await page.dispatch(transfer, 'click');
+      await page.dispatch(button, 'click');
+      page.is(transfer.getAttribute('aria-expanded'), 'false', 'the payment');
+      page.is(payment.hidden, true, 'the payment region');
+      page.is(button.getAttribute('aria-expanded'), 'false', 'the debt');
+      page.is(region.hidden, true, 'the debt region');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy');
+      page.is(statusIn(region).textContent, '', 'the live region');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([{ method: 'DELETE', path: '/session', body: NO_BODY }])
+      );
+    }
+  },
+
+  {
+    /* A 401 is task 9a's gate, reached through announce() exactly as every other 401
+       is, and this screen adds nothing to it: no second sentence anywhere outside
+       the row that asked. */
+    name: 'a_401_on_a_drill_down_is_the_gate_and_not_this_screens_message',
+    async run(page) {
+      const { region, button } = await oneOpenPayment(page, sessionDied(EXPIRED));
+      await page.dispatch(button, 'click');
+      gateIsUp(page, 'after a 401 on a drill-down');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      /* Written into a row nobody can see, which is harmless and keeps one path. */
+      page.is(
+        statusIn(region).textContent,
+        'Those expenses could not be listed just now.',
+        'the row that asked'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* Entering the route costs the same two reads however large the plan is, and
+       opening a payment costs nothing at all: no hash, no history entry, no fourth
+       route, and no other row touched. */
+    name: 'opening_a_payment_changes_no_route_and_no_history',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '3.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '2.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '2.00', '2.00', true)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '2.00', '2.00', true)]
+          },
+          {
+            from_member_id: 'mem-4',
+            to_member_id: 'mem-5',
+            amount: '1.00',
+            payer_debts: [absorbed('mem-4', 'mem-5', '1.00', '1.00', true)],
+            receiver_credits: [absorbed('mem-4', 'mem-5', '1.00', '1.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+      /* Two reads on entry and no drill-down request, whatever the plan holds. */
+      page.same(page.requests, BALANCES_ENTRY, 'requests on entering the route');
+
+      const rows = transferRows(page);
+      const other = rows[1].childNodes[0];
+      const otherRegion = regionFor(page, other);
+      const otherLine = lineOf(other).textContent;
+      await page.dispatch(rows[0].childNodes[0], 'click');
+
+      page.is(page.hash, '#/balances', 'the hash');
+      page.same(page.pushStates, [], 'history entries pushed');
+      page.same(page.replaceStates, [], 'history entries replaced');
+      page.is(page.focused, null, 'focus');
+      /* The other row is neither re-rendered nor closed. */
+      page.is(other.getAttribute('aria-expanded'), 'false', 'the other payment');
+      page.is(otherRegion.hidden, true, 'the other region');
+      page.is(lineOf(other).textContent, otherLine, 'the other row');
+      page.is(regionFor(page, other), otherRegion, 'the other region, same node');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* Nothing survives a navigation. The whole list is rebuilt closed, and an answer
+       that arrives after the rebuild is written into the row that asked for it,
+       which is no longer in the document, and never into the new list. The answer is
+       held open here until the navigation has happened, which is the only way that
+       ordering is observable. */
+    name: 'leaving_the_balances_screen_and_returning_closes_every_drill_down',
+    async run(page) {
+      let release = null;
+      const held = {
+        status: 200,
+        ok: true,
+        json: () =>
+          new Promise((resolve) => {
+            release = () => resolve(oneEntryDebt('mem-2', 'mem-3'));
+          })
+      };
+      const { region, button, transfer } = await oneOpenPayment(page, held);
+      await page.dispatch(button, 'click');
+      page.ok(release !== null, 'the request went out and is waiting');
+      page.is(
+        statusIn(region).textContent,
+        'Looking up the expenses behind this.',
+        'the waiting line'
+      );
+
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      const rebuilt = transferRows(page);
+      page.is(rebuilt.length, 1, 'transfer rows after returning');
+      page.ok(rebuilt[0] !== transfer, 'the row was rebuilt rather than reused');
+      const freshTransfer = rebuilt[0].childNodes[0];
+      page.is(freshTransfer.getAttribute('aria-expanded'), 'false', 'the payment');
+      page.is(regionFor(page, freshTransfer).hidden, true, 'the payment region');
+
+      release();
+      await page.settle();
+      /* The late answer went to the row that asked, which is detached, and nowhere
+         near the list that replaced it. */
+      page.is(entriesIn(region).length, 1, 'the detached row that asked');
+      await page.dispatch(freshTransfer, 'click');
+      const fresh = debtRowsIn(regionFor(page, freshTransfer))[0];
+      page.is(fresh.childNodes[0].getAttribute('aria-expanded'), 'false', 'the debt');
+      page.is(fresh.childNodes[1].hidden, true, 'the debt region');
+      page.is(entriesIn(fresh.childNodes[1]).length, 0, 'entries in the new list');
+      page.is(statusIn(fresh.childNodes[1]).textContent, '', 'the new live region');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
   }
 ];
 
@@ -4459,6 +5071,132 @@ function regionIds(page) {
     .query('.balances-transfer-detail')
     .concat(page.query('.balances-debt-detail'))
     .map((region) => region.id);
+}
+
+/* One entry behind a pairwise debt, in the six keys _debt_entry_view sends. */
+function entry(kind, effect, id, description, when, amount) {
+  return {
+    kind: kind,
+    effect: effect,
+    id: id,
+    description: description,
+    created_at: when,
+    amount: amount
+  };
+}
+
+const WHEN = '2026-09-04T08:00:00.000000+00:00';
+
+/* feedDate's spelling of one instant, recomputed here. Be clear about how much that
+   is worth: this is a second copy of the rule feedDate applies, not an independent
+   oracle, so a mutation both copies would make in step is not caught by it. What it
+   does catch is the whole of what a date can get wrong on this screen: the wrong
+   field read, an instant printed in UTC rather than in the reader's own timezone, a
+   relative label, or a second format. A hard-coded string could not, because the
+   day a given instant falls on depends on the machine running the suite.
+
+   Reading the feed's own spelling of the same instant would be the independent
+   check, and it is not available: feedRender calls document.createDocumentFragment,
+   which this stub does not fake, so no scenario in this repo has ever rendered a
+   feed row. Issue #14's task file forbids widening the stub for anything but the two
+   properties it names, so that stays for whoever covers the feed. */
+const SPELLED_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+];
+
+function spelledDate(when) {
+  const at = new Date(when);
+  return at.getDate() + ' ' + SPELLED_MONTHS[at.getMonth()] + ' ' + at.getFullYear();
+}
+
+/* The sentence _read_debt composes for its own 400, which names a member id and is
+   therefore the one this screen may never render. Spelled out here rather than
+   imported, and asserted absent from the screen character for character. */
+const MALFORMED_DEBT =
+  "a debt path names a member id that is not a member of this group: 'mem-9'";
+
+/* The commonest fixture: one payment settling one debt directly, opened, with the
+   one debt row inside it left closed for the scenario to open. `answer` is the
+   response the drill-down request gets, or a list consumed in order. */
+async function oneOpenPayment(page, answer, options) {
+  const roster = {
+    members: [
+      { id: 'mem-1', display_name: 'Sam' },
+      { id: 'mem-2', display_name: 'Jo' },
+      { id: 'mem-3', display_name: 'Ali' }
+    ]
+  };
+  const figures = {
+    currency: 'AUD',
+    net: [{ member_id: 'mem-2', amount: '9.00', direction: 'owes' }],
+    transfers: [
+      {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '9.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+        receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+      }
+    ]
+  };
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(roster));
+  page.respond('GET', '/balances', ok(figures));
+  if (Array.isArray(answer)) {
+    page.respondInOrder('GET', '/debts/mem-2/mem-3', answer);
+  } else {
+    page.respond('GET', '/debts/mem-2/mem-3', answer);
+  }
+  page.startAt('#/balances');
+  await page.boot();
+
+  const transfer = transferRows(page)[0].childNodes[0];
+  if (!(options && options.keepClosed)) {
+    await page.dispatch(transfer, 'click');
+  }
+  const payment = regionFor(page, transfer);
+  const item = debtRowsIn(payment)[0];
+  return { transfer, payment, item, button: item.childNodes[0], region: item.childNodes[1] };
+}
+
+function statusIn(region) {
+  return region.childNodes[0];
+}
+
+function entryListIn(region) {
+  return region.childNodes[1];
+}
+
+function entriesIn(region) {
+  return region.querySelectorAll('.balances-entry');
+}
+
+/* One entry, split into the three parts criterion 36 names: a first line holding
+   the description and the amount, an effect sentence that is absent when neither
+   the kind nor the effect was recognised, and the date. */
+function entryParts(item) {
+  const first = item.childNodes[0];
+  const last = item.childNodes[item.childNodes.length - 1];
+  return {
+    description: first.childNodes[0].textContent,
+    amount: first.childNodes[1].textContent,
+    effect: item.childNodes.length === 3 ? item.childNodes[1].textContent : null,
+    dateTag: last.tagName,
+    dateText: last.textContent,
+    datetime: last.getAttribute('datetime')
+  };
 }
 
 function unique(values) {
