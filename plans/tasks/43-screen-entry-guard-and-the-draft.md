@@ -413,3 +413,93 @@ scenario that expresses them; the scenarios themselves are specified in criteria
   `uv run pytest` fails on this machine with an access-denied spawn error.
 * **`node` 20 or later must be on `PATH`**, as CLAUDE.md says. A missing `node` fails the
   suite loudly and is never skipped.
+
+## Amendment after review, PR #48
+
+Everything above is the task as written and as built. This section is what changed after
+review, and nothing above it was edited: the acceptance criteria are left exactly as they
+were checked, including the one relaxed below, so a later reader can see what was asked
+for and what was then found to be missing from it.
+
+### Decision 6: a resume is keyed on identity, not on a sign out
+
+Review found a defect the forty criteria do not cover, and it is a money bug.
+
+Decision 4 above names the harm exactly: "Sam types an expense, signs out, and Ali signs
+in to find Sam's amount and description sitting in the form with Ali named as the payer."
+Its mitigation is a clear on a confirmed `DELETE /api/session`, and that guards the wrong
+door. The dominant path into "gate up, draft alive" is not a sign out, it is a **401 on
+save**, which is the path this whole change exists to serve. Nobody signs out there, so
+`addCleared()` never runs, `addResumed()` keeps Sam's draft, `addLoadRoster()` rebuilds
+the picker and names Ali as the payer of it, and one tap on Save records Sam's expense
+against Ali.
+
+"Did a sign out succeed" is a proxy for "is this the same person", and it misses the
+common case. The direct question is available and costs nothing:
+
+* `addOpened()` records the acting member id in `addDraftMember`, taken from the existing
+  `addActingId()` helper. It is written **on the way in**, while somebody is demonstrably
+  signed in and looking at the ledger, and never when the draft is restored. By the time
+  a curtain is up the answer can be gone: `announce()` in `api.js` drops the cached view
+  for `signed-out` and `sign-in-not-kept`, which is exactly the 401 path.
+* `addResumed()` calls `addCleared()` unless `addActingId()` matches `addDraftMember`,
+  then opens as before. So the same person coming back keeps everything decision 5
+  promises, and anybody else gets a fresh entry.
+
+This reads no status, no code and no kind, needs no change to `app/api.js`, and stays in
+the files the task already opens. The sign out clear stays: an explicit sign out is a real
+end of visit and should not depend on who signs in next.
+
+`addCleared()` therefore has three callers, not two, and its comment says so.
+
+### Criterion 28 is relaxed, deliberately
+
+Criterion 28 forbade the nine scenarios any new module-level constant or fixture. That is
+what kept the diff clean, and it is also what made this defect unassertable: every session
+fixture in the harness is `acc-1`/`mem-1`, or that same account with `member: null`, so
+there was no way to put two people at one phone.
+`signing_out_clears_the_draft_before_the_next_person_signs_in` is named for the next
+person and then signs the **same** person back in, because the fixture for a different one
+did not exist.
+
+**The relaxation:** the harness gains `A_SECOND_MEMBER` and `SECOND_SIGN_IN_BODY`. Two
+constants, one purpose, and they unlock the whole shared-phone class of scenario.
+
+Everything else in criteria 28 and 29 still holds and was held to. The addition is append
+only, nothing in the first 1400 lines is edited, and no existing scenario is edited,
+renamed, reordered or deleted, because #38 is appending to the same file. The two
+constants sit **below** `SCENARIOS` rather than beside `A_MEMBER` for that reason alone;
+module evaluation reaches them long before `main()` runs.
+
+### Two more scenarios and a sixth mutant
+
+Appended after the nine, in this order:
+
+10. `a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry`, the reviewer's
+    scenario: the 401, the draft held at the mid-point so "empty afterwards" is a change,
+    then Ali signs in and gets empty fields, `Ali (you)` in the picker and `mem-2` as the
+    payer.
+11. `a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally`: the
+    mode exception decision 5 makes is an exception for the person who chose it, not for
+    the phone, so Sam's Exact and the rows under it go too.
+
+`an_interrupted_save_keeps_what_was_typed_through_signing_back_in` is the mirror and is
+untouched: the same person signing back in still keeps their draft, which is the whole
+point of the feature.
+
+`MUTANT_F` switches the identity check off, which is the shape this branch first shipped.
+It kills both new scenarios and leaves the same-person resume, the navigation clear and
+the unrelated control green, so the two new scenarios are evidence rather than decoration.
+`MUTANT_E`'s anchor, `addResumed();`, is untouched by this fix and still matches once.
+
+### One thing that is not load bearing, said plainly
+
+The second condition of `ledgerIsUp()`, the `!view.member` half, still has no behavioural
+user after this fix: weakening it to `if (!view)` leaves all 82 scenarios green, while
+conditions 1 and 3 each kill one. That is not a gap in the scenarios. `show('app')` has
+one caller and is reached only for a view that carries a member, so the app frame over a
+memberless view is unreachable, and the fix above reads the member through
+`addActingId()`, which is null safe in its own right. The condition stays, because it is
+what says what the helper means and callers read a member off that view once it says yes,
+and the helper's comment now says it is the invariant's statement rather than the line the
+tests are holding.

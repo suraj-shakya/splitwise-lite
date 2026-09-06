@@ -126,9 +126,11 @@ SCENARIOS = [
     "an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows",
     "signing_out_clears_the_draft_before_the_next_person_signs_in",
     "a_sign_out_the_server_refuses_leaves_the_draft_alone",
+    "a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry",
+    "a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally",
 ]
 
-# The three mutants the harness is measured against, as anchored substitutions applied
+# The six mutants the harness is measured against, as anchored substitutions applied
 # to the real source at run time. None is a committed copy of a shipped file, so none
 # can rot into a false pass or be served to a browser by accident, and the text lives
 # here where a reviewer reads it rather than buried in the harness.
@@ -194,6 +196,20 @@ MUTANT_E = {
     "file": "app/app.js",
     "find": "addResumed();",
     "replace": "addEntered();",
+}
+# Mutant F: the resume keeps the draft for whoever signs in next, which is the shape
+# this branch itself first shipped and the defect review found in it. The identity
+# check is switched off rather than the lines deleted, so the anchor stays on one line
+# and cannot rot on a checkout whose line endings differ; the effect is the same, which
+# is a draft cleared on a confirmed sign out and nowhere else, on a path where nobody
+# signs out. Sam types an expense, takes a 401 on save, hands the phone to Ali, Ali
+# signs in, and Sam's amount and description are on screen with Ali named as the payer
+# of them. The screen still works for one person, which is what makes this a
+# shared-phone defect rather than a resume that stopped resuming.
+MUTANT_F = {
+    "file": "app/app.js",
+    "find": "if (addActingId() !== addDraftMember) {",
+    "replace": "if (false) {",
 }
 
 REFUSED = "a_refused_sign_in_tells_the_person_why"
@@ -324,7 +340,7 @@ def test_the_harness_reports_exactly_the_declared_scenarios(
     assert [entry["name"] for entry in report["scenarios"]] == SCENARIOS
 
 
-# --- The three mutants -----------------------------------------------------
+# --- The six mutants -------------------------------------------------------
 
 
 def mutated(mutant: dict[str, str]) -> str:
@@ -414,11 +430,12 @@ def test_mutant_c_a_classifier_that_drops_what_it_does_not_recognise_is_killed()
     assert loaded["app/app.js"] == (REPO / "app" / "app.js").read_text(encoding="utf-8")
 
 
-# The two scenarios that stand or fall with the mutants below. Neither turns red on
-# master, because neither defect was pinned by anything before them: a new scenario
-# that passes proves nothing on its own, and these two mutants are what prove it bites.
+# The three scenarios that stand or fall with the mutants below. None turns red on
+# master, because no defect here was pinned by anything before them: a new scenario
+# that passes proves nothing on its own, and these mutants are what prove it bites.
 BEHIND_THE_GATE = "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone"
 THE_DRAFT = "an_interrupted_save_keeps_what_was_typed_through_signing_back_in"
+SHARED_PHONE = "a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry"
 
 
 def test_mutant_d_a_screen_that_only_checks_the_client_loaded_is_killed() -> None:
@@ -444,6 +461,21 @@ def test_mutant_e_clearing_the_draft_when_the_curtain_lifts_is_killed() -> None:
     # A navigation still clears, which is what makes this a resume defect rather than
     # a clearing that stopped happening altogether.
     assert found["leaving_add_and_coming_back_starts_a_fresh_entry"]["passed"]
+
+
+def test_mutant_f_a_resume_that_hands_one_persons_draft_to_another_is_killed() -> None:
+    found = killed(MUTANT_F)
+    assert not found[SHARED_PHONE]["passed"]
+    messages = " ".join(found[SHARED_PHONE]["failures"])
+    # The right failure, and it is the money one: the amount Sam typed is on screen in
+    # front of Ali, whom the rebuilt picker has already named as its payer.
+    assert "12.50" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # The same person coming back still keeps their draft. That is what makes this an
+    # identity defect rather than a resume that stopped keeping anything, and it is
+    # why a scenario in which the same person signs back in cannot see it. Every
+    # scenario written before this one had one person in it.
+    assert found[THE_DRAFT]["passed"], found[THE_DRAFT]["failures"]
 
 
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------

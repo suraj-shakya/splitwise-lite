@@ -59,7 +59,15 @@
      This asks the client what session it holds, and asks this file what it last
      drew. Both are answers somebody has already decided; neither is an answer from
      the server being interpreted a second time here, and api.js remains the one
-     file that decides what such an answer means. */
+     file that decides what such an answer means.
+
+     One honest note for whoever changes this next. Dropping the member half of the
+     second condition turns no scenario red, and that is not an oversight in the
+     scenarios: show('app') has one caller, and it is reached only for a view that
+     carries a member, so the app frame over a memberless view is unreachable today.
+     It is kept because it is the condition that says what this helper means, and
+     because callers read a member off that view once this has said yes. Treat it as
+     the invariant's statement rather than as the line the tests are holding. */
   function ledgerIsUp() {
     if (!api) {
       return false;
@@ -1133,9 +1141,10 @@
   }
 
   /* The one place this screen throws away what somebody typed, and it is called from
-     exactly two: entering the route, and a sign out the server confirmed. A save the
-     server confirmed clears the form too, in addSaved(), from the response it was
-     answered with; that is a different act and stays where it is. */
+     exactly three: entering the route, a resume by somebody who is not the person who
+     typed it, and a sign out the server confirmed. A save the server confirmed clears
+     the form too, in addSaved(), from the response it was answered with; that is a
+     different act and stays where it is. */
   function addCleared() {
     addAmount.value = '';
     addDescription.value = '';
@@ -1144,9 +1153,23 @@
     addShowError('');
   }
 
+  /* Who the amount, the description and the mode below belong to: the member who was
+     signed in when this screen was opened. addOpened() is the only writer of it and
+     addResumed() the only reader.
+
+     Written on the way in, while somebody is demonstrably signed in and looking at the
+     ledger, rather than when a curtain goes up over the draft. By then the answer can
+     already be gone: a 401 makes api.js drop its cached session view before showGate()
+     is reached, and a 401 on save is the commonest way this curtain ever comes down
+     over something typed. Null until this screen has been opened once, which no
+     member id ever equals, so a resume before that clears rather than guesses. */
+  var addDraftMember = null;
+
   /* Everything opening this screen does that is true whether the entry is fresh or a
-     resumed one: say which currency, put the keypad up, read the roster. */
+     resumed one: record whose entry it is, say which currency, put the keypad up, read
+     the roster. */
   function addOpened() {
+    addDraftMember = addActingId();
     addShowCurrency();
     /* Focus moves on to the field, deliberately overriding the heading focus render()
        just made: this is the one screen that does, because the keypad has to be up
@@ -1178,11 +1201,11 @@
 
   function addResumed() {
     /* A curtain coming down on a screen the person never left, and showApp() is the
-       only caller. The hash did not move, so this is not a visit and nothing typed is
-       thrown away: the amount, the description and the chosen split mode are all
-       still there. That is what makes the offline notice's standing promise, "nothing
-       you have recorded is lost", true through signing back in as well as through the
-       refusal that raised the curtain.
+       only caller. The hash did not move, so this is not a visit, and for the person
+       who typed it nothing is thrown away: the amount, the description and the chosen
+       split mode are all still there. That is what makes the offline notice's standing
+       promise, "nothing you have recorded is lost", true through signing back in as
+       well as through the refusal that raised the curtain.
 
        What a resume does not keep is what the roster read rebuilds: the ticks, the
        typed shares and a payer picked by hand all go, because addLoadRoster() empties
@@ -1195,6 +1218,18 @@
        evenly", which is a wrong ledger entry one tap away. */
     if (!ledgerIsUp() || window.location.hash !== ADD_ROUTE) {
       return;
+    }
+    /* Kept for the person who typed it and for nobody else. A flat shares phones, and
+       the commonest way this curtain goes up is a 401 on save, where nobody signs out:
+       Sam types an expense, takes the 401, hands the phone to Ali, and Ali signs in.
+       Without this, Sam's amount and description are still on screen, and the picker
+       the roster read rebuilds has helpfully named Ali as the payer of them, so one
+       tap on Save records Sam's expense against Ali. Asking who is coming back is the
+       direct question. "Did a sign out succeed", which the sign out handler below
+       answers, is a proxy for it that misses this path entirely, and this path is the
+       one this screen exists to survive. */
+    if (addActingId() !== addDraftMember) {
+      addCleared();
     }
     addOpened();
   }

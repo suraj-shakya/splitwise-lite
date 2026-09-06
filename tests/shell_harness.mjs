@@ -3545,8 +3545,141 @@ const SCENARIOS = [
         { method: 'DELETE', path: '/session', body: NO_BODY }
       ]);
     }
+  },
+
+  {
+    /* The phone changes hands, and nobody signs out anywhere in this. A 401 on save
+       is the dominant way a curtain comes down over a live draft, and it is the path
+       this whole guard exists to serve: Sam types, saves, takes the 401, and hands
+       the phone to Ali, who signs in. What Sam typed is not Ali's to save, and the
+       picker rebuilt for Ali names Ali as the payer of it, which is a wrong ledger
+       entry one tap away. So the resume asks who is coming back rather than assuming
+       it is the person who left, and starts a fresh entry for anybody else.
+
+       Held at the mid-point, so "empty afterwards" is a change and not a field that
+       was empty all along. */
+    name: 'a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      page.is(
+        page.el('add-amount').value,
+        '12.50',
+        "Sam's #add-amount while the gate is up"
+      );
+      page.is(
+        page.el('add-description').value,
+        'Milk',
+        "Sam's #add-description while the gate is up"
+      );
+      /* Somebody else entirely: another account, another member row. */
+      page.respond('POST', '/session', ok(A_SECOND_MEMBER));
+      page.respond('GET', '/session', ok(A_SECOND_MEMBER));
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'after a different person signs in');
+      page.is(page.el('add-amount').value, '', "Sam's draft amount shown to Ali");
+      page.is(
+        page.el('add-description').value,
+        '',
+        "Sam's draft description shown to Ali"
+      );
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-error').hidden, true, '#add-error');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam', 'Ali (you)', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.el('add-payer').value, 'mem-2', '#add-payer value');
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_MILK },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The exception a resume makes for the split mode is an exception for the person
+       who chose it, not for the phone. Sam's Exact and the shares under it go with
+       the amount and the description when somebody else signs in, so Ali's fresh
+       entry cannot open on three uneven shares nobody sitting at it typed. The mirror
+       of an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows, which
+       pins the same act for the same person coming back. */
+    name: 'a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.el('add-amount').value = '10.00';
+      await addChooseMode(page, 'add-mode-exact');
+      const shares = addPersonFields(page);
+      shares[0].value = '8.00';
+      shares[2].value = '1.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      page.same(
+        addModeChecks(page),
+        [false, false, true],
+        'the mode while the gate is up'
+      );
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['8.00', '', '1.50'],
+        "Sam's typed shares while the gate is up"
+      );
+      page.respond('POST', '/session', ok(A_SECOND_MEMBER));
+      page.respond('GET', '/session', ok(A_SECOND_MEMBER));
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'after a different person signs in');
+      page.is(page.el('add-amount').value, '', '#add-amount');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      /* Gone rather than rebuilt empty: Equally shows no per-person row at all, so
+         the rows Sam's Exact put up are not there for Ali to inherit either. */
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        [],
+        "the person rows Sam's Exact put up"
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_UNEVEN_SHORT },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
   }
 ];
+
+/* --- Task 43: a second person at the same phone ---------------------------------
+
+   A session view for somebody who is not Sam, so a scenario can put two people at one
+   phone and assert what each of them sees. Every other session fixture in this file
+   is acc-1/mem-1, or that same account with member: null, which is why the shared
+   phone case was unassertable and the defect hiding in it went unseen.
+
+   These sit below SCENARIOS rather than beside A_MEMBER because this task appends to
+   this file and edits none of it, while task 38 appends to the same array. Module
+   evaluation reaches them long before main() runs, which is all a scenario body
+   needs. */
+const A_SECOND_MEMBER = {
+  account: { id: 'acc-2', email: 'ali@example.com', display_name: 'Ali' },
+  group: { id: 'grp-1', name: 'Flat', currency: 'AUD' },
+  member: { id: 'mem-2', display_name: 'Ali' }
+};
+/* Spelled out rather than rebuilt from what the scenario typed, for the reason
+   SIGN_IN_BODY is: a body asserted against a copy of the code that built it asserts
+   nothing. */
+const SECOND_SIGN_IN_BODY = '{"email":"ali@example.com","password":"opensesame"}';
 
 /* --- Running ---------------------------------------------------------------- */
 
