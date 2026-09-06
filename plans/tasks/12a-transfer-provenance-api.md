@@ -387,17 +387,34 @@ and no second network call in `app/app.js`.
   the three "pure function" headings, including each contribution rule and each refusal by
   name, plus the property and exhaustive tests.
 - `tests/test_balances.py`'s existing tests all pass untouched, and
-  `test_the_fold_is_re_exported_from_the_package_root` gains the four new names alongside
+  `test_the_fold_is_re_exported_from_the_package_root` gains the five new names alongside
   the four it already lists.
+
+  > **Corrected 2026-09-06.** This line used to say "the four new names". It says five,
+  > because the criteria under "The pure function: shape and contract" add five public
+  > names to `balances.py`, not four: `debt_sources` plus the four types. Nothing else
+  > about the criterion changes.
 - `src/splitwise_lite/__init__.py` re-exports `debt_sources`, `DebtSources`, `DebtEntry`,
   `DebtEntryKind` and `DebtEffect`, and `__version__` keeps its current value.
-- `tests/test_web_api.py` gains a row for `("GET", "/api/debts/<id>/<id>", None, 401, 401)`
+- `tests/test_web_api.py` gains a row for
+  `("GET", "/api/debts/<debtor_id>/<creditor_id>", None, 401, 401)`
   in `ENDPOINT_ROWS` and a `403` row in `UNLINKED_ROWS`, so
   `test_the_endpoint_table_names_every_route_the_app_serves`,
   `test_every_endpoint_refuses_an_unauthenticated_caller` and
   `test_a_signed_in_user_with_no_member_row_may_not_read_the_ledger` cover the new
   endpoint. The table test compares against `app.url_map`, so a route added without a row
   fails.
+
+  > **Corrected 2026-09-06.** This line used to spell the row's path
+  > `"/api/debts/<id>/<id>"`. It now spells it
+  > `"/api/debts/<debtor_id>/<creditor_id>"`, which is the rule string this branch
+  > registers. The old spelling was provably wrong on its own terms: the same sentence
+  > requires `test_the_endpoint_table_names_every_route_the_app_serves` to pass, and that
+  > test compares the row against `app.url_map`'s own rule string, so a row whose path is
+  > not the rule fails it. A rule literally spelled `/api/debts/<id>/<id>` is not
+  > available either, because Werkzeug refuses a rule whose two converters share one
+  > name. Nothing else about the criterion changes, and the row is still one row for the
+  > one new route.
 - `test_a_transfer_carries_no_provenance` is **deleted**. It asserts the opposite of this
   task. It is not renamed, not kept alongside and not xfailed. A test asserting the exact
   provenance payload for the same fixture replaces it, named for what is now true.
