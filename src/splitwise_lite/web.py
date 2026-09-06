@@ -1852,22 +1852,21 @@ _API_ROUTES: Final[tuple[_ApiRoute, ...]] = (
     _ApiRoute(
         "/api/balances", "read_balances", _read_balances, ("GET",), _Access.MEMBER
     ),
-    # Task 14. Sitting above the debts row rather than at the end of the table so
-    # that the audit test which drops ``_API_ROUTES[-1]`` and names the route it
-    # dropped keeps testing the route it was written about. Nothing reads this order:
-    # the policy map is keyed by endpoint and Flask routes by rule.
-    _ApiRoute(
-        "/api/settlements",
-        "create_settlement",
-        _create_settlement,
-        ("POST",),
-        _Access.MEMBER,
-    ),
     _ApiRoute(
         "/api/debts/<debtor_id>/<creditor_id>",
         "read_debt",
         _read_debt,
         ("GET",),
+        _Access.MEMBER,
+    ),
+    # Task 14, appended. Nothing reads this order, and now nothing does in the suite
+    # either: the audit test that withholds one row picks it by endpoint, so a route
+    # added after this one inherits no obligation about where it sits.
+    _ApiRoute(
+        "/api/settlements",
+        "create_settlement",
+        _create_settlement,
+        ("POST",),
         _Access.MEMBER,
     ),
 )

@@ -2186,13 +2186,13 @@ def test_the_route_tables_hold_exactly_the_routes_the_app_serves(app) -> None:
         ("/api/expenses", "list_expenses", ("GET",), web._Access.MEMBER),
         ("/api/expenses", "create_expense", ("POST",), web._Access.MEMBER),
         ("/api/balances", "read_balances", ("GET",), web._Access.MEMBER),
-        ("/api/settlements", "create_settlement", ("POST",), web._Access.MEMBER),
         (
             "/api/debts/<debtor_id>/<creditor_id>",
             "read_debt",
             ("GET",),
             web._Access.MEMBER,
         ),
+        ("/api/settlements", "create_settlement", ("POST",), web._Access.MEMBER),
     ]
     assert [
         (rule, endpoint, methods)
