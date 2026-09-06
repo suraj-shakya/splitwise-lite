@@ -38,7 +38,10 @@ linked to a member row with `setup_group.py link`. Signing up on its own shows t
 
 ## What does not exist yet
 
-These five are in `plans/backlog.md` and not in the app.
+These are in `plans/backlog.md` and not in the app. `CLAUDE.md` carries the same list
+and a test holds the two together, so the pair cannot drift apart. That is a narrower
+guarantee than it looks: `CLAUDE.md` says what the suite does and does not notice when
+one of these is actually built.
 
 - **Mark as paid** (backlog task 14): there is no way to record that you have paid
   somebody.

@@ -34,8 +34,14 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
 
 ## What does not exist yet
 
-Five capabilities from `plans/backlog.md` are planned and absent. Claiming one of them
-here, or building one without moving its bullet, turns the suite red.
+These are planned in `plans/backlog.md` and absent from the app. Both lists here are
+pinned to a literal in `tests/test_web_shell.py`, so a capability claimed in one of them
+and not recorded there turns the suite red, and so does editing this file and leaving
+`README.md` alone. What happens when you *build* one is weaker, and it differs per
+capability, so the literal records it entry by entry: some land on a test that goes red
+and names both lists, and some land with nothing in the suite noticing at all. Neither
+kind moves the bullet for you. Read an entry's reason there before trusting the suite to
+catch you.
 
 - **Mark as paid** (backlog task 14): nothing records that a payment happened.
 - **Receiver confirmation** (backlog task 15): and so nothing confirms one, which means
