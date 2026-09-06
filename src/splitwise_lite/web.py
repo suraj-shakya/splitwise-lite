@@ -89,6 +89,11 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+# ``Callable`` from ``typing``, not from ``collections.abc`` where balances.py,
+# simplify.py, split.py and store.py take their ABCs: task 51 adds exactly one module
+# name to this file's imports, ``enum``, and
+# ``test_the_module_imports_flask_and_the_standard_library_only`` asserts that set
+# exactly. Tidying this to ``collections.abc`` is a second name, and a red test.
 from typing import Any, Callable, Final
 
 import flask
@@ -294,6 +299,7 @@ class _Access(enum.Enum):
     ANONYMOUS = "ANONYMOUS"
     SESSION = "SESSION"
     MEMBER = "MEMBER"
+
 
 _SECURITY_HEADERS: Final[dict[str, str]] = {
     "Cache-Control": "no-store",
@@ -1855,11 +1861,7 @@ def create_app(
     app.after_request(_after_request)
     app.teardown_appcontext(_close_store)
     app.register_error_handler(Exception, _handle_error)
-    # Last, after every hook and handler, and before the app escapes this function.
-    # The audit is the part that binds: a registration helper is a convention with a
-    # signature, and Flask's own registration is always one line away, but an
-    # application that will not build is not a convention. Here rather than only in a
-    # test, so the guard runs whenever the app runs, not whenever the suite does.
+    # Last, before the app escapes. _audit_routes says why it is here, not in a test.
     _audit_routes(app)
     return app
 
