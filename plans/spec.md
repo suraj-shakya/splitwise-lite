@@ -1,6 +1,6 @@
 # Splitwise Lite: Product Spec
 
-**Status:** Draft, pre-build
+**Status:** Decisions locked, build under way. `README.md` says what is built today; `plans/backlog.md` is the plan.
 **Date:** 2026-09-03
 
 ## What it is

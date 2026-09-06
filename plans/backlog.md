@@ -3,6 +3,8 @@
 Derived from `plans/spec.md`. Stack-neutral: task 1 picks the technology, everything
 after that describes capability.
 
+This file is the plan and not a status report: `README.md` says what is built today.
+
 Dependencies are listed only where a task genuinely cannot be built or tested without
 another. Tasks that merely read better in sequence are left independent.
 
