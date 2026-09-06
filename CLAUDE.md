@@ -13,12 +13,15 @@ web shell in `app/` whose three screens are still placeholders.
 
 There is no build step and no npm: the files in `app/` are what the browser runs. An
 edit to one of the nine shell files will not show on reload, though, because
-`app/sw.js` precaches them and serves them from its cache: bump `VERSION` in
-`app/sw.js` and reload, or unregister the worker (DevTools, Application, Service
-Workers, Unregister). `app/sw.js` also records `SHELL_DIGEST`, a digest of those nine
-files, and names its cache after `VERSION` and that digest together, so a shipped
-edit that would have sat behind a cache nobody retired is a failing test rather than
-a silent regression, and the test prints the one line to paste back into `app/sw.js`.
+`app/sw.js` precaches them and serves them from its cache: to see your edit locally,
+bump `VERSION` in `app/sw.js` and reload, or unregister the worker (DevTools,
+Application, Service Workers, Unregister). Committing is a different matter, and
+`VERSION` is not what you bump. `app/sw.js` also records `SHELL_DIGEST`, a digest of
+those nine files, and names its cache after `VERSION` and that digest together, so a
+shipped edit that would have sat behind a cache nobody retired is a failing test
+rather than a silent regression, and the test prints the one line to paste back into
+`app/sw.js`. That pasted line is the whole fix; `VERSION` is left for a change to how
+the worker itself behaves.
 The worker never caches `/api`, so data is never stale behind it.
 
 Reach the app on `localhost` or `127.0.0.1` only. A LAN address is not a secure context,
