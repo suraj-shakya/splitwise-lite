@@ -5830,12 +5830,26 @@ const SCENARIOS = [
           alsoGood
         ]
       };
-      /* An older server is a screen without the block, not a broken one. */
+      /* An older server is a screen without the block, not a broken one, and neither
+         is one whose list is not a list at all or holds nothing this screen can
+         read: the block is shown only when at least one row was rendered. */
       const older = { currency: 'AUD', net: net, transfers: [] };
+      const notAList = { currency: 'AUD', net: net, transfers: [], pending: 'nope' };
+      const noneReadable = {
+        currency: 'AUD',
+        net: net,
+        transfers: [],
+        pending: [null, Object.assign({}, alsoGood, { state: 'rejected' })]
+      };
       page.respond('GET', '/session', ok(A_MEMBER));
       page.respond('GET', '/expenses', ok(EMPTY_FEED));
       page.respond('GET', '/members', ok(roster));
-      page.respondInOrder('GET', '/balances', [ok(mixed), ok(older)]);
+      page.respondInOrder('GET', '/balances', [
+        ok(mixed),
+        ok(older),
+        ok(notAList),
+        ok(noneReadable)
+      ]);
       page.startAt('#/balances');
       await page.boot();
 
@@ -5849,12 +5863,25 @@ const SCENARIOS = [
         'the rows this screen could read'
       );
 
-      await page.goTo('#/feed');
-      await page.goTo('#/balances');
-      page.is(page.el('balances-pending-block').hidden, true, 'an older server');
-      page.is(pendingRows(page).length, 0, 'rows from an absent pending list');
+      const revisit = async (what) => {
+        await page.goTo('#/feed');
+        await page.goTo('#/balances');
+        page.is(page.el('balances-pending-block').hidden, true, what);
+        page.is(pendingRows(page).length, 0, 'rows for ' + what);
+      };
+      await revisit('an absent pending list');
+      await revisit('a pending list that is not a list');
+      await revisit('a pending list nothing in which could be read');
       page.expectRequests(
         BALANCES_ENTRY.concat([
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances',
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances',
           'GET /api/expenses',
           'GET /api/members',
           'GET /api/members',
