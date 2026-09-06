@@ -61,7 +61,11 @@ shows no ledger: signing up on its own grants nothing.
 There is no build step and no npm: `scripts/serve.py` serves the plain files in
 `app/`. An edit to one of the nine shell files will not show on reload, though,
 because `app/sw.js` precaches them and serves them from its cache: bump `VERSION` in
-`app/sw.js` and reload to pick the change up. The worker never caches `/api`.
+`app/sw.js` and reload to pick the change up. `app/sw.js` also records
+`SHELL_DIGEST`, a digest of those nine files, and its cache is named after `VERSION`
+and that digest together, so a change that would have shipped behind a stale cache
+fails a test instead, and the test prints the one line to paste back into
+`app/sw.js`. The worker never caches `/api`.
 
 To clear a worker that is stuck entirely, open DevTools, Application, Service Workers,
 and press Unregister, then reload.

@@ -15,8 +15,11 @@ There is no build step and no npm: the files in `app/` are what the browser runs
 edit to one of the nine shell files will not show on reload, though, because
 `app/sw.js` precaches them and serves them from its cache: bump `VERSION` in
 `app/sw.js` and reload, or unregister the worker (DevTools, Application, Service
-Workers, Unregister). The worker never caches `/api`, so data is never stale behind
-it.
+Workers, Unregister). `app/sw.js` also records `SHELL_DIGEST`, a digest of those nine
+files, and names its cache after `VERSION` and that digest together, so a shipped
+edit that would have sat behind a cache nobody retired is a failing test rather than
+a silent regression, and the test prints the one line to paste back into `app/sw.js`.
+The worker never caches `/api`, so data is never stale behind it.
 
 Reach the app on `localhost` or `127.0.0.1` only. A LAN address is not a secure context,
 so the service worker will not register there and the app will not offer to install.
