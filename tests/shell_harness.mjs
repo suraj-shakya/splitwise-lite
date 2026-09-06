@@ -3839,11 +3839,35 @@ const SCENARIOS = [
          is ever rendered as text. */
       page.is(row.getAttribute('data-from'), 'mem-1', 'data-from');
       page.is(row.getAttribute('data-to'), 'mem-2', 'data-to');
-      /* Exactly two, so task 14 can append a third without unpicking either. */
-      page.is(row.childNodes.length, 2, 'children of the transfer row');
+      /* Three since task 14, and only here among task 13's scenarios: this is the one
+         fixture whose acting member is the payer of its transfer, so this is the one
+         row that carries the Mark as paid control. childNodes[0] and childNodes[1]
+         keep exactly the meanings task 13 gave them, because the action was appended
+         rather than inserted. Every other balances scenario still reads 2. */
+      page.is(row.childNodes.length, 3, 'children of the transfer row');
 
       const button = row.childNodes[0];
       const detail = row.childNodes[1];
+      const action = row.childNodes[2];
+      page.is(action.tagName, 'DIV', 'the action region');
+      page.is(action.className, 'balances-action', 'the action class');
+      page.is(action.childNodes.length, 2, 'children of the action region');
+      const mark = action.childNodes[0];
+      const markStatus = action.childNodes[1];
+      page.is(mark.tagName, 'BUTTON', 'the mark control');
+      page.is(mark.type, 'button', 'the mark control type');
+      page.is(mark.className, 'balances-mark-button', 'the mark control class');
+      page.is(mark.textContent, 'Mark as paid', 'the visible label');
+      /* The visible label first and then the payment, so the accessible name contains
+         the visible one and three payments read as three different buttons. */
+      page.is(
+        mark.getAttribute('aria-label'),
+        'Mark as paid: Sam (you) pays Ali 600.00',
+        'the accessible name'
+      );
+      page.is(markStatus.getAttribute('role'), 'status', 'the status line');
+      page.is(markStatus.textContent, '', 'the status line before anything happens');
+      page.is(markStatus.hidden, false, 'the status line is never hidden');
       page.is(button.tagName, 'BUTTON', 'the control');
       page.is(button.type, 'button', 'the control type');
       page.is(button.getAttribute('aria-expanded'), 'false', 'aria-expanded closed');
