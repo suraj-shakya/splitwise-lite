@@ -1141,11 +1141,15 @@ function appIsUp(page, what) {
 /* --- Task 10: the add screen -------------------------------------------- */
 
 /* Three members, in the order the roster endpoint returned them, so a screen that
-   sorted, reversed or deduplicated the list fails on the option order alone. The
-   acting member of A_MEMBER is mem-1, which is also the first member: the payer
-   default is asserted through the body the screen sends, never through the session
-   cache, because issue #37 records that the cache is otherwise only ever asserted
-   null. */
+   sorted, reversed or deduplicated the list fails on the option order alone.
+
+   The acting member of A_MEMBER is mem-1, which is also the first member here, so
+   against this fixture alone "the payer defaults to the acting member" and "the payer
+   defaults to the top of the list" produce a byte-identical request body and neither
+   can be told from the other. ADD_ACTING_SECOND is what separates them, and
+   `choosing_a_different_payer_sends_that_member_as_the_payer` is what pins that the
+   picker's own value is what goes out. On a shared ledger that field decides who is
+   owed money, so it gets both. */
 const ADD_ROSTER = {
   members: [
     { id: 'mem-1', display_name: 'Sam' },
@@ -1153,7 +1157,35 @@ const ADD_ROSTER = {
     { id: 'mem-3', display_name: 'Jo' }
   ]
 };
+
+/* The same three people with the acting member second. Roster order is preserved in
+   the split either way, so this fixture asserts two different things at once: the
+   default lands on whoever is entering rather than on whoever the roster happens to
+   list first, and the member list still goes out in the order it arrived. */
+const ADD_ACTING_SECOND = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-3', display_name: 'Jo' }
+  ]
+};
+
 const ADD_ONE_MEMBER = { members: [{ id: 'mem-1', display_name: 'Sam' }] };
+
+/* A roster that does not carry the acting member at all, which is what an operator
+   who linked an account and then reshaped the group leaves behind. The default falls
+   back to the first member in roster order, and nobody is marked as you. */
+const ADD_WITHOUT_ACTING = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-3', display_name: 'Jo' }
+  ]
+};
+
+/* A 200 carrying the documented shape after it drifted: a member with no display
+   name. That is a failure and never an empty group, and never a picker holding the
+   word undefined. */
+const ADD_BROKEN_ROSTER = { members: [{ id: 'mem-1' }] };
 
 /* One 201 body in _expense_view shape, and deliberately not what any scenario types:
    the confirmation echoes the server or it says nothing, so a screen that rendered
@@ -1202,6 +1234,39 @@ const ADD_ALONE = '{"description":"","amount":"12.50","payer_id":"mem-1",' +
   '"split":{"mode":"equal","member_ids":["mem-1"]}}';
 const ADD_MILK = '{"description":"Milk","amount":"12.50","payer_id":"mem-1",' +
   '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
+/* The acting member is second in the roster this one goes with, so the payer and the
+   head of the member list are different ids and the body says which one the screen
+   chose. */
+const ADD_ACTING_PAYER = '{"description":"","amount":"12.50","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-2","mem-1","mem-3"]}}';
+/* A payer the person picked by hand, and neither the acting member nor the first. */
+const ADD_CHOSEN_PAYER = '{"description":"","amount":"12.50","payer_id":"mem-3",' +
+  '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
+const ADD_SECOND_SAVE = '{"description":"","amount":"3.00","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
+/* The fallback payer: the first member, and not the last one and not the acting
+   member the roster has no row for. */
+const ADD_FALLBACK_PAYER = '{"description":"","amount":"12.50","payer_id":"mem-2",' +
+  '"split":{"mode":"equal","member_ids":["mem-2","mem-3"]}}';
+
+/* A second 201, so a save that follows a save is answered with a different echo and
+   the confirmation cannot be a leftover of the first. Its description is empty, which
+   is also what pins that no description is invented for an expense that has none. */
+const ADD_CREATED_AGAIN = {
+  expense: {
+    id: 'exp-2',
+    description: '',
+    amount: '3.00',
+    payer_id: 'mem-1',
+    created_by: 'mem-1',
+    created_at: '2026-09-03T09:00:00.000000',
+    allocations: [
+      { member_id: 'mem-1', amount: '1.00' },
+      { member_id: 'mem-2', amount: '1.00' },
+      { member_id: 'mem-3', amount: '1.00' }
+    ]
+  }
+};
 
 const ADD_MODES = ['add-mode-equal', 'add-mode-some', 'add-mode-exact'];
 
@@ -1986,8 +2051,11 @@ const SCENARIOS = [
       page.same(rows.map((row) => row.value), ['', '', ''], 'every row empty');
       page.is(page.el('add-hint-exact').hidden, false, '#add-hint-exact');
       page.is(page.el('add-hint-some').hidden, true, '#add-hint-some');
-      rows[0].value = '8.00';
-      rows[2].value = '2.00';
+      /* Typed with surrounding whitespace, and the pinned body below is unchanged by
+         it: what goes out is the characters that were typed with that whitespace
+         removed and nothing else touched. No comma stripped, no digit padded. */
+      rows[0].value = '  8.00 ';
+      rows[2].value = '2.00 ';
       await page.dispatch(page.el('add-form'), 'submit');
       page.expectRequests([
         'GET /api/session',
@@ -2063,8 +2131,9 @@ const SCENARIOS = [
     async run(page) {
       await addBoot(page, ADD_ROSTER);
       page.respond('POST', '/expenses', created(ADD_CREATED));
-      page.el('add-amount').value = '9.99';
-      page.el('add-description').value = 'what was typed';
+      /* Both typed with surrounding whitespace, and both pinned below without it. */
+      page.el('add-amount').value = ' 9.99';
+      page.el('add-description').value = '  what was typed  ';
       await addChooseMode(page, 'add-mode-some');
       await page.dispatch(page.el('add-form'), 'submit');
       page.is(page.el('add-saved').hidden, false, '#add-saved');
@@ -2288,6 +2357,254 @@ const SCENARIOS = [
         'GET /api/session',
         'GET /api/members',
         { method: 'POST', path: '/expenses', body: ADD_MILK }
+      ]);
+    }
+  },
+
+  {
+    /* The payer decides who is owed money on a shared ledger, so the default gets a
+       roster whose first member is not the acting one. Against a roster headed by the
+       acting member the two rules answer the same id and neither is falsifiable. */
+    name: 'the_payer_defaults_to_whoever_is_entering_not_to_the_top_of_the_roster',
+    async run(page) {
+      await addBoot(page, ADD_ACTING_SECOND);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Ali', 'Sam (you)', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.el('add-payer').value, 'mem-1', '#add-payer value');
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_ACTING_PAYER }
+      ]);
+    }
+  },
+
+  {
+    /* Recording that a flatmate paid is a normal entry, not an impersonation, and the
+       picker's own value is what goes out: neither the default nor the head of the
+       roster can stand in for it. */
+    name: 'choosing_a_different_payer_sends_that_member_as_the_payer',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '12.50';
+      page.el('add-payer').value = 'mem-3';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_CHOSEN_PAYER }
+      ]);
+    }
+  },
+
+  {
+    /* Without preventDefault the browser submits the form itself, which is a full page
+       navigation on Save. The worker answers a navigation from the cache, so the shell
+       comes straight back and it looks like it worked while nothing was recorded. The
+       gate has this same assertion for the same reason. */
+    name: 'the_add_form_never_lets_the_browser_navigate',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '12.50';
+      const event = await page.dispatch(page.el('add-form'), 'submit');
+      page.is(event.defaultPrevented, true, 'preventDefault on the submit event');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
+      ]);
+    }
+  },
+
+  {
+    /* A 200 whose body is not the documented shape is a failure, not an empty group
+       and not a picker full of blanks. */
+    name: 'a_roster_that_arrives_in_the_wrong_shape_is_a_failure_not_an_empty_group',
+    async run(page) {
+      await addBoot(page, ADD_BROKEN_ROSTER);
+      page.same(addRosterStates(page), [false, true, false], 'the roster states');
+      page.is(page.el('add-payer').childNodes.length, 0, '#add-payer options');
+      page.is(page.el('add-people').childNodes.length, 0, '#add-people rows');
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(addErrorsShown(page), [false, true, false], 'the three error children');
+      page.expectRequests(['GET /api/session', 'GET /api/members']);
+    }
+  },
+
+  {
+    /* Entering three receipts in a row is the flow this screen stays on #/add for, so
+       it is the flow that gets a scenario. The confirmation belongs to the save that
+       produced it and is cleared at the start of the next one, observed at the only
+       moment that fact exists. */
+    name: 'a_second_save_clears_the_first_confirmation_before_it_goes_out',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respondInOrder('POST', '/expenses', [
+        created(ADD_CREATED),
+        created(ADD_CREATED_AGAIN)
+      ]);
+      let posts = 0;
+      let atSecond = null;
+      page.onRequest('POST', '/expenses', () => {
+        posts += 1;
+        if (posts === 2) {
+          atSecond = {
+            saved: !page.el('add-saved').hidden,
+            anyError: !page.el('add-error').hidden
+          };
+        }
+      });
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.is(page.el('add-saved').hidden, false, '#add-saved after the first save');
+      page.is(page.el('add-saved-amount').textContent, '12.50', 'the first figure');
+      page.el('add-amount').value = '3.00';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(
+        atSecond,
+        { saved: false, anyError: false },
+        'when the second save went out'
+      );
+      page.is(page.el('add-saved').hidden, false, '#add-saved after the second save');
+      page.is(page.el('add-saved-amount').textContent, '3.00', 'the second figure');
+      /* The second expense came back with no description, and none is invented. */
+      page.is(page.el('add-saved-description').textContent, '', 'the second description');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY },
+        { method: 'POST', path: '/expenses', body: ADD_SECOND_SAVE }
+      ]);
+    }
+  },
+
+  {
+    /* Correcting a refused entry and saving it is the other half of that flow. A
+       message about the attempt that failed must not still be on screen beside a
+       confirmation for the one that worked. */
+    name: 'a_refused_save_followed_by_a_good_one_leaves_no_stale_message',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respondInOrder('POST', '/expenses', [
+        failure(400, CODES.invalidSplit, ADD_SUM_REFUSED),
+        created(ADD_CREATED)
+      ]);
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(addErrorsShown(page), [false, false, true], 'after the refusal');
+      page.is(page.el('add-saved').hidden, true, '#add-saved after the refusal');
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.is(page.el('add-saved').hidden, false, '#add-saved after the good save');
+      page.is(page.el('add-error').hidden, true, '#add-error after the good save');
+      page.same(addErrorsShown(page), [false, false, false], 'after the good save');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY },
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
+      ]);
+    }
+  },
+
+  {
+    /* Every visit starts a fresh entry, and this is the only add scenario that returns
+       to the route, which is what makes the block's own hashchange listener visible at
+       all: the fields are cleared, the confirmation is gone, the mode is back to
+       Equally, and the picker holds three options rather than six. */
+    name: 'leaving_add_and_coming_back_starts_a_fresh_entry',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await addChooseMode(page, 'add-mode-some');
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.is(page.el('add-saved').hidden, false, '#add-saved before leaving');
+      /* Typed again after the save, so the fields hold something at the moment the
+         route is left: asserting they are empty afterwards says nothing if the save
+         had already emptied them. */
+      page.el('add-amount').value = '7.00';
+      page.el('add-description').value = 'half typed';
+      await page.goTo('#/feed');
+      await page.goTo('#/add');
+      page.is(page.el('add-amount').value, '', '#add-amount');
+      page.is(page.el('add-description').value, '', '#add-description');
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-error').hidden, true, '#add-error');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      page.is(page.el('add-people').childNodes.length, 0, '#add-people rows');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)', 'Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_MILK },
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The other half of the payer default. An account linked to a member the group no
+       longer carries still gets a working picker: the first member in roster order,
+       never the last, and no name is marked as the person holding the phone. */
+    name: 'a_roster_without_the_acting_member_defaults_to_the_first_one',
+    async run(page) {
+      await addBoot(page, ADD_WITHOUT_ACTING);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.el('add-payer').value, 'mem-2', '#add-payer value');
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_FALLBACK_PAYER }
+      ]);
+    }
+  },
+
+  {
+    /* Switching modes rebuilds the people list from the held roster, and rebuilding
+       means replacing rather than adding to it: a member named twice in a split is a
+       400 at best and a wrong share at worst. */
+    name: 'switching_modes_twice_still_names_every_member_once',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '12.50';
+      await addChooseMode(page, 'add-mode-some');
+      await addChooseMode(page, 'add-mode-exact');
+      await addChooseMode(page, 'add-mode-some');
+      const rows = addPersonFields(page);
+      page.is(rows.length, 3, 'the people rows');
+      page.same(rows.map((row) => row.type), ['checkbox', 'checkbox', 'checkbox'], 'the row controls');
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
       ]);
     }
   }

@@ -243,6 +243,24 @@ otherwise only ever asserted null, so the acting-member default is asserted thro
 request body the screen sends rather than through the cache; and `aria-current` is checked
 for presence rather than value, which this screen never touches.
 
+**Corrected 2026-09-06, after the first review of PR #40.** The middle clause above was
+provably wrong as written, and it was worse than a gap because it told the next reader not
+to look. It said the acting-member default "is asserted through the request body the screen
+sends". Against the fixtures this file names it is not, and cannot be: `A_MEMBER`'s acting
+member is `mem-1` and `mem-1` is also the first member of the three member roster, so
+"default to the acting member" and "default to the top of the roster" produce a
+byte-identical body. The reviewer demonstrated it by rewriting `payer_id: addPayer.value`
+as `payer_id: addRoster[0].id` and watching every scenario stay green. On a shared ledger
+that field decides who is owed money.
+
+The correction is to the claim, not to the fixtures the criteria pin bodies against: the
+three member roster stays `mem-1` Sam, `mem-2` Ali, `mem-3` Jo, in that order, so every
+request body written out below stays byte-identical. Two further roster fixtures are added
+beside it, one with the acting member second and one carrying no row for the acting member
+at all, and the scenario list gains the entries recorded under "Added 2026-09-06" below.
+The honest statement is: the payer is asserted through three scenarios, one per rule, each
+against a roster on which that rule answers differently from the other two.
+
 ## Acceptance criteria
 
 **The document region**
@@ -578,6 +596,26 @@ for presence rather than value, which this screen never touches.
       up, `add-saved` is hidden, `add-error-server` is hidden, and the amount and description
       still hold what was typed behind the curtain.
 
+  **Added 2026-09-06, after the first review of PR #40.** The fifteen above are a floor
+  and not a ceiling, and the review measured them: 28 mutations of `app/app.js` applied
+  through the harness's own `substitutions` channel, 22 of which survived. Nine more
+  scenarios are appended after the fifteen, in the same block, and no scenario above is
+  edited or reordered. They are:
+  `the_payer_defaults_to_whoever_is_entering_not_to_the_top_of_the_roster`,
+  `choosing_a_different_payer_sends_that_member_as_the_payer`,
+  `a_roster_without_the_acting_member_defaults_to_the_first_one`, which are the three
+  payer rules told apart; `the_add_form_never_lets_the_browser_navigate`, mirroring the
+  gate's own assertion, because without `preventDefault` Save is a full page navigation
+  that the worker answers from the cache, so it looks like it worked while nothing was
+  recorded; `a_roster_that_arrives_in_the_wrong_shape_is_a_failure_not_an_empty_group`,
+  without which `addValidRoster` can `return true` unconditionally;
+  `a_second_save_clears_the_first_confirmation_before_it_goes_out`,
+  `a_refused_save_followed_by_a_good_one_leaves_no_stale_message`,
+  `leaving_add_and_coming_back_starts_a_fresh_entry` and
+  `switching_modes_twice_still_names_every_member_once`, which are the second interaction
+  this file argues for at length under "After a successful save" and had no scenario for.
+  Three fixtures come with them: a roster with the acting member second, a roster with no
+  row for the acting member, and a second 201 body whose echo differs from the first.
 - `tests/test_shell_behaviour.py::test_the_harness_reports_exactly_the_declared_scenarios`
   passes with the new names appended, and `test_the_service_worker_registration_branch_is_never_entered`
   passes unchanged: this block registers a `hashchange` listener and no `load` listener.

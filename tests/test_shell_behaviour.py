@@ -87,6 +87,15 @@ SCENARIOS = [
     "a_group_with_one_member_still_records_an_expense",
     "a_group_with_no_members_says_so_and_saves_nothing",
     "a_save_that_gets_no_answer_never_says_it_saved",
+    "the_payer_defaults_to_whoever_is_entering_not_to_the_top_of_the_roster",
+    "choosing_a_different_payer_sends_that_member_as_the_payer",
+    "the_add_form_never_lets_the_browser_navigate",
+    "a_roster_that_arrives_in_the_wrong_shape_is_a_failure_not_an_empty_group",
+    "a_second_save_clears_the_first_confirmation_before_it_goes_out",
+    "a_refused_save_followed_by_a_good_one_leaves_no_stale_message",
+    "leaving_add_and_coming_back_starts_a_fresh_entry",
+    "a_roster_without_the_acting_member_defaults_to_the_first_one",
+    "switching_modes_twice_still_names_every_member_once",
 ]
 
 # The two mutants the harness is measured against, as anchored substitutions applied

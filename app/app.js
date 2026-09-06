@@ -928,7 +928,9 @@
 
   function addSaved(payload) {
     addConfirm(payload);
-    addShowError('');
+    /* Nothing re-hides the errors here: every submit hides all three before it sends,
+       and the in-flight flag means nothing can show one while this save is in the air.
+       A second clear here would be a line no test could ever falsify. */
     /* Cleared back to its defaults, and the screen deliberately stays on this route.
        Entering three receipts in a row is a real flow, and bouncing to the feed after
        each one costs a tab tap and a re-request every time; this app also navigates
