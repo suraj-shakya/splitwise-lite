@@ -3232,6 +3232,67 @@ const SCENARIOS = [
         'GET /api/members'
       ]);
     }
+  },
+
+  {
+    /* Task 12a. api.debt is the whole of what that task adds to app/, and no screen
+       calls it yet: issue #14 owns the drill-down. So this boots to the app, starts the
+       request through the shipped client itself, and reads the payload back off the
+       promise rather than off the page. Nothing is rendered, so no DOM stub widening is
+       needed here and document.createTextNode and an element type property stay absent
+       and stay issue #14's to add.
+
+       The fixture is a local rather than a module constant on purpose: this file is
+       being edited on another branch at the same time, and one appended block conflicts
+       with less than a constant threaded into the fixtures above.
+
+       Real member ids come from new_id() and are plain UUIDs, but the roster an
+       operator writes is not bound to that, so both ids here carry a space, a percent
+       sign and a hash, and the declared request list holds the exact encoded path. */
+    name: 'the_api_client_builds_a_debt_path_from_two_ids',
+    async run(page) {
+      const debtView = {
+        currency: 'AUD',
+        debtor_id: 'a b',
+        creditor_id: 'c%d#e',
+        amount: '5.50',
+        direction: 'owes',
+        entries: [
+          {
+            kind: 'expense',
+            effect: 'adds',
+            id: 'exp-1',
+            description: 'Milk',
+            created_at: '2026-09-05T09:00:00.000000+00:00',
+            amount: '5.50'
+          }
+        ]
+      };
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/debts/a%20b/c%25d%23e', ok(debtView));
+      await page.boot();
+      page.global(
+        'window.debt = null;' +
+          "window.SplitwiseApi.debt('a b', 'c%d#e').then(function (view) {" +
+          '  window.debt = view;' +
+          '});'
+      );
+      /* settle() drives nothing and drains what is already in flight, which is what it
+         exists for: this scenario starts a request through the client rather than
+         through an affordance on the page. */
+      await page.settle();
+      page.is(page.global('window.debt.amount'), '5.50', 'amount');
+      page.is(page.global('window.debt.direction'), 'owes', 'direction');
+      page.is(page.global('window.debt.entries.length'), 1, 'entries');
+      page.is(page.global('window.debt.entries[0].effect'), 'adds', 'effect');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/debts/a%20b/c%25d%23e'
+      ]);
+    }
   }
 ];
 
