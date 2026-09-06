@@ -1,7 +1,49 @@
 # Splitwise Lite
 
 Shared expense ledger for small groups. A Python back end, plus an installable mobile
-web shell in `app/` whose three screens are still placeholders.
+web shell in `app/` whose three screens read the ledger from the JSON API, behind a
+sign-in gate.
+
+## What works today
+
+All of it needs a group applied with `scripts/setup_group.py apply` and an account
+linked to a member row with `setup_group.py link`. Signing up on its own grants
+nothing: the app shows the "nobody has linked you" notice and no ledger.
+
+- **Sign in**: create an account, sign in, sign out. An account that no member row is
+  linked to is told so and shown no ledger.
+- **The expense feed**: every expense the group has recorded, newest first, with payer,
+  amount, description and who shared it. A row expands in place to each person's share,
+  the total, who recorded it and when. Read only.
+- **Adding an expense**: an amount, an optional description, a payer from the roster and
+  one of the spec's three split modes, equally, some people or uneven amounts. The
+  resolver's weight mode is reachable through the API and no screen offers it.
+- **Balances**: each member's net position and the shortest list of payments that clears
+  the group, worked out on every read and never stored. Nothing on that screen is
+  tappable.
+- **Install and open offline**: it installs to the home screen and the shell opens
+  offline, on `localhost` or `127.0.0.1` only. The API is never cached, so offline the
+  app opens and then reports that it cannot reach the server, and an expense cannot be
+  recorded until it can.
+
+## What does not exist yet
+
+Five capabilities from `plans/backlog.md` are planned and absent. Claiming one of them
+here, or building one without moving its bullet, turns the suite red.
+
+- **Transfer drill-down** (backlog task 13): a suggested payment cannot be opened to see
+  the debts and expenses behind it. The API can already answer what a debt is made of,
+  `GET /api/debts/{debtor}/{creditor}`, and no screen asks it.
+- **Mark as paid** (backlog task 14): nothing records that a payment happened.
+- **Receiver confirmation** (backlog task 15): and so nothing confirms one, which means
+  a debt that has been settled in real life stays on the list until somebody records the
+  expense side of it. The two go together, because a balance moves only when the
+  receiver confirms.
+- **The incompleteness signal** (backlog task 16): nothing says how stale the ledger is
+  or who has logged nothing. The balances screen's standing note, that the figures come
+  only from what was recorded, is the whole of what the app says about it.
+- **Expense correction** (backlog task 17): an expense cannot be edited or voided from
+  any screen.
 
 ## Commands
 
@@ -77,8 +119,9 @@ it.
   not declare fails to build
 - `app/`: the front end shell, served as plain files and never imported by the
   package. `app/api.js` is the only file in it that calls the back end
-- `scripts/`: the dev server, the icon generator and the group setup command; no
-  dependency beyond the standard library and the package itself
+- `scripts/`: the dev server, the icon generator and the group setup command, none of
+  them needing more than the standard library and the package itself, plus
+  `watch-issues.sh`, a bash loop that hands new bug issues to `claude` and wants `gh`
 - `group.example.toml`: the shape of the roster `setup_group.py` applies. The real
   `group.toml` and the ledger file are not committed
 - `tests/`: the pytest suite

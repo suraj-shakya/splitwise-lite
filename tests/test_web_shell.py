@@ -1061,6 +1061,13 @@ def test_an_omission_with_no_reason_is_refused() -> None:
 
 # --- Docs ------------------------------------------------------------------
 
+# The two documents a person or an agent reads before touching this repo, and the
+# capability claims they make. This section used to assert that the word
+# `placeholder` appeared somewhere across the two files: true while the three
+# screens were empty, and a lie held in place by a test the moment they were
+# filled. What replaces it reads the two lists each document declares and checks
+# every claim in them against the shipped files in `app/`.
+
 RUN_COMMAND = "uv run python scripts/serve.py --store ledger.sqlite3"
 
 
@@ -1128,9 +1135,298 @@ def test_one_document_says_how_to_clear_a_stuck_service_worker() -> None:
     assert "Unregister" in combined
 
 
-def test_no_document_claims_the_shell_shows_real_data() -> None:
-    combined = claude_md() + readme()
-    assert "placeholder" in combined.lower()
+# The capability claims. Both documents carry two delimited lists, `What works today`
+# and `What does not exist yet`, and every bullet in them is checked against the files
+# in `app/` rather than against a phrase. It fails in both directions: a claim with no
+# machinery behind it, and machinery with no claim in front of it.
+
+# The keys of `window.SplitwiseApi`. `app/api.js` is the only file under `app/` allowed
+# to call the back end, which `test_only_the_api_client_calls_the_back_end` enforces, so
+# this set is the whole server-backed surface of the app: no capability reaches the
+# server without a name in here.
+API_SURFACE = {
+    "ApiError",
+    "onUnauthenticated",
+    "onNotLinked",
+    "onOffline",
+    "session",
+    "cachedSession",
+    "signUp",
+    "signIn",
+    "signOut",
+    "members",
+    "expenses",
+    "addExpense",
+    "balances",
+    "debt",
+}
+
+# Capability key -> the (file under `app/`, substring) pairs that must all be PRESENT.
+WORKS_TODAY = {
+    "Sign in": (("index.html", 'id="gate-form"'), ("api.js", "signIn:")),
+    "The expense feed": (("index.html", 'id="feed-list"'), ("api.js", "expenses:")),
+    "Adding an expense": (("index.html", 'id="add-form"'), ("api.js", "addExpense:")),
+    "Balances": (
+        ("index.html", 'id="balances-transfers"'),
+        ("api.js", "balances:"),
+    ),
+    "Install and open offline": (
+        ("app.js", "navigator.serviceWorker.register('sw.js')"),
+        ("sw.js", "var SHELL = ["),
+    ),
+}
+
+# Capability key -> the `plans/backlog.md` task both documents cite, the (file,
+# substring) pairs that must be ABSENT, and a reason. An entry with no substring rule
+# still carries a reason naming what covers it instead, because an empty rule with no
+# explanation is a guard nobody can audit.
+NOT_YET = {
+    "Transfer drill-down": {
+        "task": 13,
+        "absent": (("app.js", ".debt("),),
+        "reason": (
+            "The back end half shipped with task 12a: SplitwiseApi.debt and "
+            "GET /api/debts/{debtor}/{creditor} both answer today. What does not "
+            "exist is a screen that asks, so the absence of `.debt(` from app/app.js "
+            "is the whole of the claim."
+        ),
+    },
+    "Mark as paid": {
+        "task": 14,
+        "absent": (),
+        "reason": (
+            "Recording a payment is a round trip, and app/api.js is the only file "
+            "allowed to make one, so "
+            "test_the_api_client_offers_exactly_the_named_calls goes red the moment "
+            "the method appears."
+        ),
+    },
+    "Receiver confirmation": {
+        "task": 15,
+        "absent": (),
+        "reason": (
+            "Confirming a settlement is a round trip too, so it cannot arrive without "
+            "a new name in API_SURFACE, which "
+            "test_the_api_client_offers_exactly_the_named_calls catches."
+        ),
+    },
+    "The incompleteness signal": {
+        "task": 16,
+        "absent": (),
+        "reason": (
+            "Nothing in this suite would catch this one, and pretending otherwise "
+            "would be worse than saying so. Staleness can be computed on the client "
+            "from the feed payload the app already fetches, adding no API method and "
+            "no new call, so neither API_SURFACE nor an absent-substring rule would "
+            "notice it land. Whoever builds backlog task 16 moves this entry by hand."
+        ),
+    },
+    "Expense correction": {
+        "task": 17,
+        "absent": (),
+        "reason": (
+            "Editing or voiding an expense appends an event through the server, so it "
+            "too has to add a name to API_SURFACE first, and "
+            "test_the_api_client_offers_exactly_the_named_calls fails when it does."
+        ),
+    },
+}
+
+
+def backlog_md() -> str:
+    return (REPO / "plans" / "backlog.md").read_text(encoding="utf-8")
+
+
+def capability_bullets(text: str, heading: str, where: str) -> list[str]:
+    """The bullets under `heading`, one flattened string each.
+
+    No Markdown parser: the section runs from its heading to the next heading, and
+    inside it a bullet starts at column zero with `- ` and carries on over any indented
+    line. Prose before the first bullet is the lead-in and is ignored, so the wording of
+    these documents stays free; the keys are the only thing pinned.
+    """
+    lines = text.split("\n")
+    starts = [
+        index + 1
+        for index, line in enumerate(lines)
+        if re.fullmatch(r"#{2,4} " + re.escape(heading), line.rstrip())
+    ]
+    assert len(starts) == 1, (
+        f"{where} should carry exactly one `{heading}` heading, at level 2, 3 or 4, and "
+        f"it carries {len(starts)}. Both CLAUDE.md and README.md declare what the app "
+        "can and cannot do under that heading, and this suite reads the claims from "
+        "there."
+    )
+    bullets: list[str] = []
+    for line in lines[starts[0] :]:
+        if re.match(r"#{1,6} ", line):
+            break
+        if not line.strip():
+            continue
+        if line.startswith("- "):
+            bullets.append(line[2:].strip())
+        elif bullets and line.startswith("  "):
+            bullets[-1] += " " + line.strip()
+        elif bullets:
+            raise AssertionError(
+                f"The `{heading}` list in {where} is interrupted by a line that is "
+                f"neither a bullet nor a continuation of one: {line.strip()[:60]!r}. "
+                "Between the first bullet and the next heading that list holds bullets, "
+                "their indented continuation lines and blank lines only, so a claim "
+                "cannot be smuggled in as prose this guard does not read."
+            )
+    assert bullets, (
+        f"The `{heading}` list in {where} has no bullets. That list is where this "
+        "document states what the app can do, and an empty one claims nothing at all."
+    )
+    return bullets
+
+
+def bold_keys(bullets: list[str], heading: str, where: str) -> list[str]:
+    """The bold key that opens each bullet, in order."""
+    keys: list[str] = []
+    for bullet in bullets:
+        match = re.match(r"\*\*(.+?)\*\*", bullet)
+        assert match is not None, (
+            f"A bullet under `{heading}` in {where} does not open with a bold key: "
+            f"{bullet[:60]!r}. Every bullet there names one capability in bold, because "
+            "the keys are what this suite compares between the two documents and "
+            "against the files in app/. An unkeyed bullet is a claim nothing checks."
+        )
+        keys.append(match.group(1))
+    assert len(set(keys)) == len(keys), (
+        f"{where} names a capability twice under `{heading}`: {sorted(keys)}. Each "
+        "capability is claimed once per list."
+    )
+    return keys
+
+
+def test_the_api_client_offers_exactly_the_named_calls() -> None:
+    # Keys are matched by their indentation rather than by brace matching, because the
+    # values are functions and following braces would need a JavaScript parser, which is
+    # a dependency. API_SURFACE is not empty, so a regex that matched nothing would fail
+    # this test rather than quietly pass it.
+    source = (APP / "api.js").read_text(encoding="utf-8")
+    marker = "window.SplitwiseApi = {"
+    start = source.find(marker)
+    assert start != -1, (
+        f"app/api.js no longer assigns {marker!r}. That object is the whole "
+        "server-backed surface of the app and this test reads its keys from there, so "
+        "if the client was restructured this parse moves with it."
+    )
+    body = source[start + len(marker) :]
+    keys = set(re.findall(r"^    ([A-Za-z][A-Za-z0-9]*):", body, re.MULTILINE))
+    assert keys == API_SURFACE, (
+        "app/api.js does not offer the calls this suite records.\n"
+        f"  added:   {sorted(keys - API_SURFACE) or 'none'}\n"
+        f"  removed: {sorted(API_SURFACE - keys) or 'none'}\n"
+        "app/api.js is the only file under app/ allowed to reach the back end, so a "
+        "method arriving or leaving here is a capability arriving or leaving the app. "
+        "Before editing API_SURFACE, read the `What works today` and `What does not "
+        "exist yet` lists in CLAUDE.md and README.md: a new call almost always means a "
+        "bullet moves between those two lists in both documents, and its entry moves "
+        "between WORKS_TODAY and NOT_YET here."
+    )
+
+
+def test_both_documents_agree_on_what_works_today() -> None:
+    # Each file is compared with the same literal, which is what makes the two files
+    # agree with each other: editing one and not the other turns this red.
+    heading = "What works today"
+    for where, text in (("CLAUDE.md", claude_md()), ("README.md", readme())):
+        keys = set(bold_keys(capability_bullets(text, heading, where), heading, where))
+        assert keys == set(WORKS_TODAY), (
+            f"The `{heading}` list in {where} and the WORKS_TODAY literal in "
+            "tests/test_web_shell.py disagree.\n"
+            f"  claimed in {where} but not recorded here: "
+            f"{sorted(keys - set(WORKS_TODAY)) or 'none'}\n"
+            f"  recorded here but not claimed in {where}: "
+            f"{sorted(set(WORKS_TODAY) - keys) or 'none'}\n"
+            "Both documents carry the same five keys. If the capability has landed, "
+            "move its bullet from `What does not exist yet` to `What works today` in "
+            "BOTH CLAUDE.md and README.md and move its entry from NOT_YET to "
+            "WORKS_TODAY here, with evidence in app/ that must now be present. If it "
+            "has not landed, the document is claiming something that does not exist: "
+            "take the bullet out."
+        )
+
+
+def test_both_documents_agree_on_what_does_not_exist_yet() -> None:
+    heading = "What does not exist yet"
+    backlog = backlog_md()
+    for where, text in (("CLAUDE.md", claude_md()), ("README.md", readme())):
+        bullets = capability_bullets(text, heading, where)
+        keys = bold_keys(bullets, heading, where)
+        assert set(keys) == set(NOT_YET), (
+            f"The `{heading}` list in {where} and the NOT_YET literal in "
+            "tests/test_web_shell.py disagree.\n"
+            f"  called missing in {where} but not recorded here: "
+            f"{sorted(set(keys) - set(NOT_YET)) or 'none'}\n"
+            f"  recorded here but not called missing in {where}: "
+            f"{sorted(set(NOT_YET) - set(keys)) or 'none'}\n"
+            "Both documents carry the same five keys. If the capability has landed, "
+            "move its bullet to `What works today` in BOTH CLAUDE.md and README.md and "
+            "move its entry to WORKS_TODAY here. If it has not, the list it was taken "
+            "out of is the honest place for it."
+        )
+        for key, bullet in zip(keys, bullets):
+            cited = re.findall(r"\(backlog task (\d+)\)", bullet)
+            assert len(cited) == 1, (
+                f"The `{key}` bullet in {where} should cite its backlog task exactly "
+                f"once, as `(backlog task N)`, and it cites it {len(cited)} times. The "
+                "citation is how a reader gets from the missing capability to the plan "
+                "for it."
+            )
+            expected = NOT_YET[key]["task"]
+            assert int(cited[0]) == expected, (
+                f"The `{key}` bullet in {where} cites backlog task {cited[0]}, and this "
+                f"suite records task {expected}. GitHub issue numbers and "
+                "plans/backlog.md task numbers are not the same in this range, so check "
+                "the `## N.` heading in plans/backlog.md before changing either. If the "
+                "number here is the wrong one, it is wrong in the other document too."
+            )
+            assert re.search(rf"^## {expected}\. ", backlog, re.MULTILINE), (
+                f"plans/backlog.md has no `## {expected}.` heading, and the `{key}` "
+                f"bullet in {where} cites backlog task {expected}. Either the backlog "
+                "was renumbered, in which case both documents and NOT_YET move with it, "
+                "or the citation points at nothing."
+            )
+
+
+def test_every_capability_the_documents_claim_is_in_the_shell() -> None:
+    for key, evidence in WORKS_TODAY.items():
+        for filename, needle in evidence:
+            text = (APP / filename).read_text(encoding="utf-8")
+            assert needle in text, (
+                f"CLAUDE.md and README.md both claim `{key}` works today, and "
+                f"app/{filename} no longer contains {needle!r}, which is the machinery "
+                "that claim stands on.\n"
+                "If the shell lost a capability the documents still promise, move its "
+                "bullet to `What does not exist yet` in BOTH documents and move its "
+                "entry from WORKS_TODAY to NOT_YET here. If the capability is still "
+                "there and only the machinery moved, point this pair at whatever proves "
+                "it now."
+            )
+
+
+def test_nothing_the_documents_call_missing_is_in_the_shell() -> None:
+    for key, entry in NOT_YET.items():
+        assert str(entry["reason"]).strip(), (
+            f"The NOT_YET entry for `{key}` carries no reason. An entry with no "
+            "absent-substring rule needs one in prose, naming what covers it instead, "
+            "or nobody can tell a deliberate gap from an oversight."
+        )
+        for filename, needle in entry["absent"]:
+            text = (APP / filename).read_text(encoding="utf-8")
+            assert needle not in text, (
+                f"CLAUDE.md and README.md both say `{key}` does not exist yet (backlog "
+                f"task {entry['task']}), and app/{filename} now contains {needle!r}.\n"
+                "If the capability landed, move its bullet from `What does not exist "
+                "yet` to `What works today` in BOTH documents and move its entry from "
+                "NOT_YET to WORKS_TODAY here, with evidence that must now be present. "
+                "If it did not land, the documents are right and this line in app/ is "
+                "reaching for something that is not finished."
+            )
 
 
 # --- Task 12: the balances screen, the markup ------------------------------
