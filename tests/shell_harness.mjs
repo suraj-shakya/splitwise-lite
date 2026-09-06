@@ -9,16 +9,22 @@
    it: both reintroduce the defect and leave the sliced function byte-identical, and
    the structural test passed both.
 
-   The two mutants this harness is measured against, applied to the real source at run
-   time as anchored substitutions and never committed as copies:
+   The three mutants this harness is measured against, applied to the real source at
+   run time as anchored substitutions and never committed as copies:
 
      A. app/app.js, inside show():  gate.hidden = which !== 'gate';
         gains                       gateError.hidden = true;
      B. app/api.js, inside announce(): handlers.unauthenticated(error);
-        becomes  setTimeout(function () { handlers.unauthenticated(error); }, 0);
+        becomes  setTimeout(function () { error.say = '';
+                 handlers.unauthenticated(error); }, 0);
+     C. app/api.js, the default arm of classify(): return 'refused';
+        becomes  return '';
 
    Mutant B is only visible once the timer queue has drained, not just the microtask
-   queue, which is why settle() drains both.
+   queue, which is why settle() drains both. Mutant C puts back the fall through task
+   32 removed: a kind no handler speaks for, so an answer the server gave reaches
+   nobody and the screen does not change. The text of all three lives in
+   tests/test_shell_behaviour.py, where a reviewer reads it.
 
    What stays browser-only. The harness must not pretend to cover any of this, and no
    scenario is named as if it did. These stay on the hand checklist in
@@ -69,11 +75,17 @@ const APP = join(REPO, 'app');
    tests/test_shell_behaviour.py asserts each appears in src/splitwise_lite/web.py, so
    a fixture cannot drift away from the contract it is imitating. */
 const CODES = {
+  notAuthenticated: 'not_authenticated',
+  sessionInvalid: 'session_invalid',
   authenticationFailed: 'authentication_failed',
   memberNotLinked: 'member_not_linked',
   csrfFailed: 'csrf_failed',
+  recordNotFound: 'record_not_found',
   emailAlreadyRegistered: 'email_already_registered',
-  internalError: 'internal_error'
+  tooManyAttempts: 'too_many_attempts',
+  internalError: 'internal_error',
+  noGroupConfigured: 'no_group_configured',
+  ambiguousGroup: 'ambiguous_group'
 };
 
 /* The wire contract every request is held to, spelled out here rather than read back
@@ -780,6 +792,13 @@ function page(scripts, name, provokeRunawayTimer) {
       sandbox.location.hash = String(hash);
       await api.dispatchWindow('hashchange');
     },
+    async settle() {
+      /* Drives nothing. It lets work that is already in flight finish, for the two
+         scenarios that start a request through the shipped client itself rather than
+         through the page, and it drains the same queues every other driver call
+         does. */
+      await settle();
+    },
 
     /* --- looking --- */
     el: byId,
@@ -962,6 +981,22 @@ const NO_BODY = '{}';
 
 const REFUSED = 'Those details did not match an account.';
 const SIGN_IN_FIRST = 'Sign in to continue.';
+const EXPIRED = 'That session is no longer valid; sign in again.';
+const STALE_FORM = 'That form went stale.';
+const NO_SUCH_RECORD = 'no expense with that id';
+const TOO_MANY_ATTEMPTS = 'too many failed attempts; wait a few minutes and try again';
+const GENERIC_500 =
+  'the server could not complete that request; the failure has been logged';
+/* The two sentences web.py keeps its own words for, in the shape groups.py composes
+   them: one names the command that fixes it, the other names every group id. Spelled
+   out here rather than imported, and asserted character for character on screen, so a
+   client that summarises either of them fails. */
+const NO_GROUP =
+  'this store holds no group yet; create one with: uv run python ' +
+  'scripts/setup_group.py apply --store PATH --definition group.toml';
+const AMBIGUOUS_GROUP =
+  "this store holds 2 groups, so which one is meant is ambiguous: 'grp-1', 'grp-2'; " +
+  'pass the group id explicitly';
 
 /* Tasks 11 and 12 landed after this harness was written, and both read as soon as the
    app frame appears: the feed loads the expenses and the roster, the balances screen
@@ -980,15 +1015,28 @@ function screensLoad(page) {
   page.respond('GET', '/balances', ok(EMPTY_BALANCES));
 }
 
+/* The three 401s web.py can send, kept apart because announce() treats them apart.
+   not_authenticated is every first visit, so its sentence is written for a client and
+   is suppressed; session_invalid is a session that died; authentication_failed only
+   ever answers POST /api/session. */
+const noSession = () => failure(401, CODES.notAuthenticated, SIGN_IN_FIRST);
+const sessionDied = (message) => failure(401, CODES.sessionInvalid, message);
 const refusal = (message) => failure(401, CODES.authenticationFailed, message);
 const notLinked = () =>
   failure(403, CODES.memberNotLinked, 'Nobody has linked you to a member yet.');
 /* A 403 that is not member_not_linked, and a 4xx that is neither a sign-in problem nor
    a server one. Both exist to pin which branch of announce() they land in. */
-const csrfRefused = () => failure(403, CODES.csrfFailed, 'That form went stale.');
+const csrfRefused = () => failure(403, CODES.csrfFailed, STALE_FORM);
+const missingRecord = () => failure(404, CODES.recordNotFound, NO_SUCH_RECORD);
 const alreadyRegistered = () =>
   failure(409, CODES.emailAlreadyRegistered, 'That address already has an account.');
-const serverError = () => failure(500, CODES.internalError, 'Something went wrong.');
+const rateLimited = () => failure(429, CODES.tooManyAttempts, TOO_MANY_ATTEMPTS);
+const serverError = () => failure(500, CODES.internalError, GENERIC_500);
+/* The two 503s web.py composes on purpose. Both were thrown away by the old
+   status >= 500 arm, which is what told an operator who has not run setup_group.py
+   that their network was broken. */
+const noGroupConfigured = () => failure(503, CODES.noGroupConfigured, NO_GROUP);
+const ambiguousGroup = () => failure(503, CODES.ambiguousGroup, AMBIGUOUS_GROUP);
 
 /* The name the document title carries, spelled out here rather than read back from
    app.js: an assertion that borrows the subject's own constant asserts nothing. */
@@ -1116,7 +1164,7 @@ const SCENARIOS = [
   {
     name: 'boot_with_no_session_shows_the_gate',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       await page.boot();
       gateIsUp(page, 'no session');
       gateReads(page, 'signing in', 'no session');
@@ -1189,18 +1237,17 @@ const SCENARIOS = [
 
   {
     /* announce() reads the code as well as the status, and only member_not_linked is
-       the not-linked screen. Any other 403 lands in none of its three branches, so
-       nothing on screen changes: the app frame stays as the document loaded it, with
-       no data in it. Pinned as what ships, not as what is ideal. */
-    name: 'a_403_that_is_not_member_not_linked_is_not_the_not_linked_screen',
+       the not-linked screen. Any other 403 is a refusal, and this one answered the
+       session read, whose rejection refresh() discards on the grounds that a handler
+       has already spoken: without the escalation nobody speaks at all and the person
+       is left looking at an empty app frame. The server's own sentence goes up
+       instead. */
+    name: 'a_403_that_is_not_member_not_linked_prints_what_the_server_said',
     async run(page) {
       page.respond('GET', '/session', csrfRefused());
       await page.boot();
-      page.is(page.el('notice').hidden, true, '#notice hidden');
-      page.is(page.el('notice-unlinked').hidden, true, '#notice-unlinked hidden');
-      page.is(page.el('notice-offline').hidden, true, '#notice-offline hidden');
-      page.is(page.el('gate').hidden, true, '#gate hidden');
-      page.is(page.el('sign-out').hidden, true, '#sign-out hidden');
+      noticeIsUp(page, 'problem', 'a 403 that is not member_not_linked', false);
+      page.is(page.el('notice-problem').textContent, STALE_FORM, '#notice-problem text');
       page.expectRequests(['GET /api/session']);
     }
   },
@@ -1220,12 +1267,90 @@ const SCENARIOS = [
   },
 
   {
-    name: 'a_server_error_is_the_same_screen_as_being_offline',
+    /* A 500 and a request that got no answer are two different things: one is an
+       answer this app produced and logged, and it has a sentence, the other is no
+       answer at all. So a 500 stops claiming the network is down and prints what the
+       server said. Never the gate either way. */
+    name: 'a_server_error_prints_what_the_server_said_and_never_the_gate',
     async run(page) {
       page.respond('GET', '/session', serverError());
       await page.boot();
-      noticeIsUp(page, 'offline', 'a 500', false);
-      page.is(page.el('gate').hidden, true, '#gate hidden');
+      noticeIsUp(page, 'problem', 'a 500', false);
+      page.is(page.el('notice-problem').textContent, GENERIC_500, '#notice-problem text');
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* Defect 1, closed. web.py composes this sentence on purpose and it names the
+       command that fixes it; the old status >= 500 arm threw it away and told an
+       operator who had not run setup_group.py that their network was broken. */
+    name: 'a_503_naming_the_setup_command_prints_that_sentence',
+    async run(page) {
+      page.respond('GET', '/session', noGroupConfigured());
+      await page.boot();
+      noticeIsUp(page, 'problem', 'a 503 with no group configured', false);
+      /* Character for character what the fixture sent: not summarised, not prefixed
+         and not replaced by a sentence this client wrote. */
+      page.is(page.el('notice-problem').textContent, NO_GROUP, '#notice-problem text');
+      page.ok(
+        page.el('notice-problem').textContent.indexOf('setup_group.py') !== -1,
+        'the printed sentence names the setup command'
+      );
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* The other 503, whose sentence names every group id rather than picking one.
+       Both ids have to survive the trip to the screen. */
+    name: 'a_503_naming_both_group_ids_prints_both_of_them',
+    async run(page) {
+      page.respond('GET', '/session', ambiguousGroup());
+      await page.boot();
+      noticeIsUp(page, 'problem', 'a 503 with an ambiguous group', false);
+      page.is(
+        page.el('notice-problem').textContent,
+        AMBIGUOUS_GROUP,
+        '#notice-problem text'
+      );
+      ['grp-1', 'grp-2'].forEach((id) => {
+        page.ok(
+          page.el('notice-problem').textContent.indexOf(id) !== -1,
+          'the printed sentence names ' + id
+        );
+      });
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* A gateway nobody in this repo writes, answering with its own HTML error page.
+       There is no sentence to print, so the standing offline paragraph stands in
+       rather than a blank curtain. What this pins is that it is classified at all:
+       treated as a refusal it would raise nothing and leave an empty app frame. */
+    name: 'a_status_above_five_hundred_nobody_anticipated_is_still_classified',
+    async run(page) {
+      page.respond('GET', '/session', unreadable(502));
+      await page.boot();
+      noticeIsUp(page, 'offline', 'a 502 from somewhere in the middle', false);
+      page.is(page.el('notice-problem').textContent, '', '#notice-problem text');
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* And below 500, where the old code did nothing at all. This one answered the
+       session read, so it is escalated; with no sentence in the body the standing
+       offline paragraph stands in. The gate is never offered: if the client cannot
+       read what was refused, a password box is how the password-into-nothing loop
+       starts. */
+    name: 'a_status_below_five_hundred_nobody_anticipated_is_not_silently_dropped',
+    async run(page) {
+      page.respond('GET', '/session', unreadable(418));
+      await page.boot();
+      noticeIsUp(page, 'offline', 'a 418 nobody anticipated', false);
+      page.is(page.el('notice-problem').textContent, '', '#notice-problem text');
       page.expectRequests(['GET /api/session']);
     }
   },
@@ -1247,7 +1372,7 @@ const SCENARIOS = [
        are measured against. */
     name: 'a_refused_sign_in_tells_the_person_why',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
@@ -1266,7 +1391,7 @@ const SCENARIOS = [
   {
     name: 'a_refused_sign_in_with_an_unreadable_body_still_says_something',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', unreadable(401));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
@@ -1290,7 +1415,7 @@ const SCENARIOS = [
        already up and the gate deliberately is not. */
     name: 'a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', networkFailure());
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
@@ -1311,7 +1436,7 @@ const SCENARIOS = [
     async run(page) {
       screensLoad(page);
       page.startAt('#/balances');
-      page.respondInOrder('GET', '/session', [refusal(SIGN_IN_FIRST), ok(A_MEMBER)]);
+      page.respondInOrder('GET', '/session', [noSession(), ok(A_MEMBER)]);
       page.respond('POST', '/session', ok(A_MEMBER));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
@@ -1331,26 +1456,25 @@ const SCENARIOS = [
   },
 
   {
-    /* KNOWN DEFECT, PINNED ON PURPOSE. The sign-in succeeds, the session read behind
-       it 401s, and the person is dropped back on a gate with no message at all: the
-       401 handler calls showGate(''), and submitted()'s success path never writes
-       anything. This scenario asserts that blankness so the behaviour cannot change
-       unnoticed, not because it is right. If it starts failing because someone fixed
-       the screen, update this scenario to the new behaviour: do not revert the fix.
-       Reported for its own task rather than fixed here, because changing app/ is out
-       of scope for a test harness. */
-    name: 'a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate',
+    /* What ships, after task 32. The server accepted the sign-in and then answered the
+       very next request with a 401, so it believes the sign-in succeeded and its own
+       sentence describes a different situation. Signing in again cannot fix that, and
+       the gate this scenario used to assert was an invitation to type the same
+       password again, and again: the loop was the harm. The check armed by the 200 on
+       POST /api/session is what tells this apart from an ordinary expiry.
+       plans/tasks/32-client-error-classification.md carries the reasoning. */
+    name: 'a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', ok(A_MEMBER));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
-      gateIsUp(page, 'a session that died');
-      gateReads(page, 'signing in', 'a session that died');
-      /* The defect, written down: no message, on a gate the person just signed in at
-         successfully. */
+      noticeIsUp(page, 'not-kept', 'a session that did not survive the sign-in', false);
+      /* No gate, and nothing written on the one behind the curtain either: a message
+         left there would be read the moment anything raised it again. */
       page.is(page.el('gate-error').hidden, true, '#gate-error hidden');
       page.is(page.el('gate-error').textContent, '', '#gate-error text');
+      /* Enabled again anyway, as on every other path out of submitted(). */
       page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
       /* The sign-in cached a session view; the 401 behind it has to drop that copy.
          A copy of server state left in the browser is how a signed-out page keeps
@@ -1365,11 +1489,37 @@ const SCENARIOS = [
   },
 
   {
+    /* The other half of the same rule. By the time a session expires mid session the
+       check has been disarmed by a successful read, so this is an ordinary 401: the
+       gate comes back, carrying the sentence the server sent rather than blank. */
+    name: 'a_session_that_expires_mid_session_puts_the_server_sentence_on_the_gate',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respondInOrder('GET', '/members', [ok(EMPTY_ROSTER), sessionDied(EXPIRED)]);
+      await page.boot();
+      appIsUp(page, 'before the session expired');
+      await page.goTo('#/balances');
+      gateIsUp(page, 'a session that expired');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
     /* Signup issues no session, so the client signs in straight after it. */
     name: 'creating_an_account_signs_in_straight_after',
     async run(page) {
       screensLoad(page);
-      page.respondInOrder('GET', '/session', [refusal(SIGN_IN_FIRST), ok(A_MEMBER)]);
+      page.respondInOrder('GET', '/session', [noSession(), ok(A_MEMBER)]);
       page.respond('POST', '/signup', ok({ account: A_MEMBER.account }));
       page.respond('POST', '/session', ok(A_MEMBER));
       await page.boot();
@@ -1396,7 +1546,7 @@ const SCENARIOS = [
        server answered, and it answered clearly. */
     name: 'creating_an_account_that_already_exists_says_so_on_the_gate',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/signup', alreadyRegistered());
       await page.boot();
       await page.dispatch(page.el('gate-mode'), 'click');
@@ -1419,12 +1569,34 @@ const SCENARIOS = [
   },
 
   {
+    /* A refusal the gate itself asked for, so the gate reports it and no curtain comes
+       down over it. A full frame curtain here would take the gate's own message away,
+       which is this task causing the defect it exists to remove. */
+    name: 'a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it',
+    async run(page) {
+      page.respond('GET', '/session', noSession());
+      page.respond('POST', '/session', rateLimited());
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      gateIsUp(page, 'a rate limited sign-in');
+      gateReads(page, 'signing in', 'a rate limited sign-in');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, TOO_MANY_ATTEMPTS, '#gate-error text');
+      page.is(page.el('gate-submit').disabled, false, '#gate-submit disabled');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
+    }
+  },
+
+  {
     /* The control is disabled for exactly as long as the request is in flight, which
        is the only thing stopping a second submit. It is observed when the request goes
        out, because that is the only moment it exists, and asserted after settle. */
     name: 'the_submit_control_is_disabled_while_the_sign_in_is_in_flight',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
       let inFlight = null;
@@ -1445,7 +1617,7 @@ const SCENARIOS = [
   {
     name: 'the_gate_says_whether_it_is_signing_in_or_creating_an_account',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       await page.boot();
       gateReads(page, 'signing in', 'at first');
       await page.dispatch(page.el('gate-mode'), 'click');
@@ -1460,7 +1632,7 @@ const SCENARIOS = [
     /* So a password manager offers to save a new secret rather than fill an old one. */
     name: 'the_gate_switches_the_password_autocomplete_with_the_mode',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       await page.boot();
       const password = page.el('gate-password');
       page.is(password.getAttribute('autocomplete'), 'current-password', 'signing in');
@@ -1476,7 +1648,7 @@ const SCENARIOS = [
     /* Without preventDefault the browser navigates and the whole app blanks. */
     name: 'the_form_never_lets_the_browser_navigate',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
       const event = await signIn(page, 'sam@example.com', 'hunter2');
@@ -1491,7 +1663,7 @@ const SCENARIOS = [
   {
     name: 'the_email_is_trimmed_and_the_password_is_not',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
       await signIn(page, '  sam@example.com  ', ' hunter2');
@@ -1524,6 +1696,28 @@ const SCENARIOS = [
       await page.dispatch(page.el('sign-out'), 'click');
       gateIsUp(page, 'after signing out');
       gateReads(page, 'signing in', 'after signing out');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        { method: 'DELETE', path: '/session', body: NO_BODY }
+      ]);
+    }
+  },
+
+  {
+    /* signOut()'s rejection is discarded by the sign out button, so a refusal here
+       reaches nobody and the button is simply dead. It is one of the two requests
+       whose refusals are escalated for exactly that reason. */
+    name: 'a_sign_out_the_server_refuses_says_why_rather_than_doing_nothing',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('DELETE', '/session', csrfRefused());
+      await page.boot();
+      await page.dispatch(page.el('sign-out'), 'click');
+      noticeIsUp(page, 'problem', 'a refused sign out', true);
+      page.is(page.el('notice-problem').textContent, STALE_FORM, '#notice-problem text');
       page.expectRequests([
         'GET /api/session',
         'GET /api/expenses',
@@ -1655,7 +1849,7 @@ const SCENARIOS = [
     name: 'the_csrf_token_is_read_at_request_time_not_cached',
     async run(page) {
       page.setCookie('sl_session=opaque; sl_csrf=first%20token');
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       page.respond('POST', '/session', refusal(REFUSED));
       await page.boot();
       await signIn(page, 'sam@example.com', 'hunter2');
@@ -1693,12 +1887,108 @@ const SCENARIOS = [
   },
 
   {
+    /* A refusal a screen asked for names something about that one request, so the
+       screen that asked reports it in its own failure state and no curtain comes down
+       over the whole frame. */
+    name: 'a_refusal_a_screen_asked_for_leaves_the_app_frame_up',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', missingRecord());
+      await page.boot();
+      appIsUp(page, 'a refusal the feed asked for');
+      page.is(page.el('feed-error').hidden, false, '#feed-error hidden');
+      /* Nothing was written on a paragraph nobody is looking at, either. */
+      page.is(page.el('notice-problem').hidden, true, '#notice-problem hidden');
+      page.is(page.el('notice-problem').textContent, '', '#notice-problem text');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The handoff itself. This registers its own handler through the shipped
+       window.SplitwiseApi after boot, which replaces app/app.js's onOffline for the
+       rest of this scenario, so no screen state is asserted here: what it pins is
+       that the whole error reaches whoever registered for it, unchanged, and that the
+       caller is rejected with that same object. */
+    name: 'the_whole_error_reaches_the_handler_that_registered_for_it',
+    async run(page) {
+      page.respondInOrder('GET', '/session', [noSession(), noGroupConfigured()]);
+      await page.boot();
+      page.global(
+        'window.seen = null;' +
+          'window.SplitwiseApi.onOffline(function (error) { window.seen = error; });' +
+          'window.rejected = null;' +
+          'window.SplitwiseApi.session().then(null, function (error) {' +
+          '  window.rejected = error;' +
+          '});'
+      );
+      await page.settle();
+      page.is(page.global('window.seen.status'), 503, 'status');
+      page.is(page.global('window.seen.code'), 'no_group_configured', 'code');
+      page.is(page.global('window.seen.message'), NO_GROUP, 'message');
+      page.is(page.global('window.seen.kind'), 'unavailable', 'kind');
+      page.is(page.global('window.seen.say'), NO_GROUP, 'say');
+      /* say is the message itself, not a copy of it that could drift. */
+      page.is(page.global('window.seen.say === window.seen.message'), true, 'say');
+      page.is(
+        page.global('window.rejected === window.seen'),
+        true,
+        'the caller is rejected with the same object the handler saw'
+      );
+      page.is(
+        page.global('window.rejected instanceof window.SplitwiseApi.ApiError'),
+        true,
+        'the rejection is an ApiError'
+      );
+      page.expectRequests(['GET /api/session', 'GET /api/session']);
+    }
+  },
+
+  {
+    /* A handler is a screen's code and a screen can have a bug in it. That must not
+       change what the caller is rejected with, and must not swallow the rejection: a
+       caller left waiting forever on a promise nobody settles is worse than the
+       screen glitch that caused it. Registers its own handler, so no screen state is
+       asserted here either. */
+    name: 'a_handler_that_throws_does_not_stop_the_rejection_reaching_the_caller',
+    async run(page) {
+      page.respondInOrder('GET', '/session', [noSession(), serverError()]);
+      await page.boot();
+      page.global(
+        'window.SplitwiseApi.onOffline(function () {' +
+          '  throw new Error("this screen has a bug in it");' +
+          '});' +
+          'window.settled = "never";' +
+          'window.SplitwiseApi.session().then(function () {' +
+          '  window.settled = "resolved";' +
+          '}, function (error) { window.settled = error; });'
+      );
+      await page.settle();
+      page.is(page.global('typeof window.settled'), 'object', 'the promise rejected');
+      page.is(page.global('window.settled.status'), 500, 'status');
+      page.is(page.global('window.settled.kind'), 'unavailable', 'kind');
+      page.is(page.global('window.settled.message'), GENERIC_500, 'message');
+      page.is(
+        page.global('window.settled instanceof window.SplitwiseApi.ApiError'),
+        true,
+        'the rejection is still the ApiError, not what the handler threw'
+      );
+      page.expectRequests(['GET /api/session', 'GET /api/session']);
+    }
+  },
+
+  {
     /* The stub's own honesty check: a selector shape it does not support has to be a
        loud failure, so a screen task that introduces one widens the stub deliberately
        instead of quietly getting null back. */
     name: 'an_unsupported_selector_is_a_loud_failure_not_a_null',
     async run(page) {
-      page.respond('GET', '/session', refusal(SIGN_IN_FIRST));
+      page.respond('GET', '/session', noSession());
       await page.boot();
       let message = null;
       try {

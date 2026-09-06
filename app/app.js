@@ -711,9 +711,11 @@
         return refresh();
       })
       .catch(function (error) {
-        if (!error || error.status === 0 || error.status >= 500) {
-          /* No answer came back at all. The offline notice is already up and the
-             gate deliberately is not, so there is nothing to say here. */
+        if (!error || (error.kind !== 'signed-out' && error.kind !== 'refused')) {
+          /* Every other kind has already pulled a curtain over the whole frame, and
+             the gate deliberately is not up, so writing on it here would drag it back
+             over that notice. Which kind it is, is api.js's decision: this screen
+             reads the answer and never a status code. */
           return;
         }
         /* Everything else is something the person can act on, a wrong password most
@@ -729,17 +731,32 @@
   }
 
   function wire() {
-    api.onUnauthenticated(function () {
-      showGate('');
+    api.onUnauthenticated(function (error) {
+      /* Whatever api.js decided is worth reading, which is the server's own sentence
+         for a session that died and nothing at all for a first visit. This screen
+         prints what it is handed and writes no sentence of its own. */
+      showGate(error.say);
     });
     api.onNotLinked(function () {
       signOut.hidden = false;
       showNotice('unlinked');
     });
-    api.onOffline(function () {
+    api.onOffline(function (error) {
       /* Never the sign-in gate: prompting for a password on a page that cannot
-         send it is how a person types their password into nothing, repeatedly. */
-      showNotice('offline');
+         send it is how a person types their password into nothing, repeatedly.
+
+         Which of the three paragraphs goes up is read from kind, in this one place.
+         No status code is read here, and none may be: api.js is the only file that
+         classifies a response. */
+      if (error.kind === 'sign-in-not-kept') {
+        showNotice('not-kept');
+      } else if (error.kind !== 'offline' && error.say) {
+        showNotice('problem', error.say);
+      } else {
+        /* Nothing came back, or what came back carried nothing to read. The standing
+           sentence says more than a blank curtain would. */
+        showNotice('offline');
+      }
     });
     gateForm.addEventListener('submit', submitted);
     gateMode.addEventListener('click', function () {

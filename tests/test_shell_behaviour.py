@@ -38,30 +38,37 @@ NODE_MISSING = (
 # exactly this list back, so a scenario deleted from the harness fails pytest and one
 # added to the harness without being declared here fails pytest too.
 SCENARIOS = [
-    # Boot
+    # Boot, and what announce() makes of every answer the server can give
     "boot_with_no_session_shows_the_gate",
     "boot_with_a_linked_session_shows_the_app",
     "nothing_from_the_previous_scenario_survives_into_this_one",
     "boot_with_an_unlinked_session_shows_the_not_linked_message",
     "a_403_member_not_linked_shows_the_not_linked_message",
-    "a_403_that_is_not_member_not_linked_is_not_the_not_linked_screen",
+    "a_403_that_is_not_member_not_linked_prints_what_the_server_said",
     "a_network_failure_shows_the_offline_message_and_never_the_gate",
-    "a_server_error_is_the_same_screen_as_being_offline",
+    "a_server_error_prints_what_the_server_said_and_never_the_gate",
+    "a_503_naming_the_setup_command_prints_that_sentence",
+    "a_503_naming_both_group_ids_prints_both_of_them",
+    "a_status_above_five_hundred_nobody_anticipated_is_still_classified",
+    "a_status_below_five_hundred_nobody_anticipated_is_not_silently_dropped",
     "the_api_client_failing_to_load_shows_the_offline_message",
     # Signing in
     "a_refused_sign_in_tells_the_person_why",
     "a_refused_sign_in_with_an_unreadable_body_still_says_something",
     "a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone",
     "a_successful_sign_in_keeps_the_screen_the_person_was_on",
-    "a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate",
+    "a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate",
+    "a_session_that_expires_mid_session_puts_the_server_sentence_on_the_gate",
     "creating_an_account_signs_in_straight_after",
     "creating_an_account_that_already_exists_says_so_on_the_gate",
+    "a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it",
     "the_submit_control_is_disabled_while_the_sign_in_is_in_flight",
     "the_gate_says_whether_it_is_signing_in_or_creating_an_account",
     "the_gate_switches_the_password_autocomplete_with_the_mode",
     "the_form_never_lets_the_browser_navigate",
     "the_email_is_trimmed_and_the_password_is_not",
     "signing_out_returns_to_the_gate",
+    "a_sign_out_the_server_refuses_says_why_rather_than_doing_nothing",
     # Routing
     "routing_shows_one_screen_and_moves_focus",
     "going_back_to_a_screen_reads_it_again",
@@ -70,13 +77,16 @@ SCENARIOS = [
     "every_request_goes_to_the_api_with_credentials",
     "the_csrf_token_is_read_at_request_time_not_cached",
     "a_204_is_not_parsed_as_json",
+    "a_refusal_a_screen_asked_for_leaves_the_app_frame_up",
+    "the_whole_error_reaches_the_handler_that_registered_for_it",
+    "a_handler_that_throws_does_not_stop_the_rejection_reaching_the_caller",
     "an_unsupported_selector_is_a_loud_failure_not_a_null",
 ]
 
-# The two mutants the harness is measured against, as anchored substitutions applied
-# to the real source at run time. Neither is a committed copy of a shipped file, so
-# neither can rot into a false pass or be served to a browser by accident, and the
-# text lives here where a reviewer reads it rather than buried in the harness.
+# The three mutants the harness is measured against, as anchored substitutions applied
+# to the real source at run time. None is a committed copy of a shipped file, so none
+# can rot into a false pass or be served to a browser by accident, and the text lives
+# here where a reviewer reads it rather than buried in the harness.
 #
 # Mutant A: show() also hides the gate error. A one-line tidy of the kind a later
 # screen task makes, and it looks like an improvement, because every other
@@ -87,13 +97,38 @@ MUTANT_A = {
     "find": "gate.hidden = which !== 'gate';",
     "replace": "gate.hidden = which !== 'gate';\n    gateError.hidden = true;",
 }
-# Mutant B: the 401 handler is deferred to a macrotask, so submitted()'s catch writes
-# the message first and the deferred showGate('') blanks it afterwards. app/app.js is
-# untouched entirely, and this is only visible once the timer queue has drained.
+# Mutant B: the 401 handler is deferred to a macrotask and blanks the gate when it
+# finally runs, so submitted()'s catch writes the message first and the deferred
+# showGate() wipes it afterwards. app/app.js is untouched entirely, and this is only
+# visible once the timer queue has drained.
+#
+# Re-expressed by task 32, which changed what the handler is handed. Before it,
+# onUnauthenticated always called showGate('') and the bare deferral was enough to
+# blank a message the caller had just written. Now the handler is handed error.say and
+# prints the server's own sentence, which for a refused sign-in is the same sentence
+# submitted() writes, so the two agree and a bare deferral leaves the gate reading
+# correctly. Blanking say inside the deferred call restores the pre-task behaviour
+# exactly, and the defect it reintroduces is the same one: a message written by the
+# caller and wiped by a handler that ran late. The bare deferral is still caught, by
+# a_refused_sign_in_with_an_unreadable_body_still_says_something, where there is no
+# server sentence for the two writers to agree on.
 MUTANT_B = {
     "file": "app/api.js",
     "find": "handlers.unauthenticated(error);",
-    "replace": "setTimeout(function () { handlers.unauthenticated(error); }, 0);",
+    "replace": (
+        "setTimeout(function () { error.say = ''; "
+        "handlers.unauthenticated(error); }, 0);"
+    ),
+}
+# Mutant C: the default arm of the classifier stops classifying. Every status the
+# ladder above it did not name comes back as a kind that no handler speaks for, which
+# is the fall through task 32 removed: announce() was three ifs and no else, so a 429
+# on sign-in and a 409 on signup reached nobody and the screen did not change. This
+# mutant is why the default arm has to be a classification and not a shrug.
+MUTANT_C = {
+    "file": "app/api.js",
+    "find": "return 'refused';",
+    "replace": "return '';",
 }
 
 REFUSED = "a_refused_sign_in_tells_the_person_why"
@@ -224,7 +259,7 @@ def test_the_harness_reports_exactly_the_declared_scenarios(
     assert [entry["name"] for entry in report["scenarios"]] == SCENARIOS
 
 
-# --- The two mutants -------------------------------------------------------
+# --- The three mutants -----------------------------------------------------
 
 
 def mutated(mutant: dict[str, str]) -> str:
@@ -293,6 +328,25 @@ def test_mutant_b_deferring_the_401_handler_is_killed() -> None:
     assert loaded["app/api.js"] != (REPO / "app" / "api.js").read_text(encoding="utf-8")
     assert loaded["app/app.js"] == shipped
     assert submitted_body(loaded["app/app.js"]) == submitted_body(shipped)
+
+
+def test_mutant_c_a_classifier_that_drops_what_it_does_not_recognise_is_killed() -> None:
+    found = killed(MUTANT_C)
+    # The gate is where the fall through was doing its damage: a 429 the server
+    # explained reaches nobody, so the person is told nothing and can only try again.
+    dropped = "a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it"
+    assert not found[dropped]["passed"]
+    messages = " ".join(found[dropped]["failures"])
+    assert "gate-error" in messages, messages
+    # A working app with one behaviour broken, not a smoking crater: a 401 is claimed
+    # by a row above the default, so signing in still works and still says why when it
+    # is refused.
+    assert found[REFUSED]["passed"], found[REFUSED]["failures"]
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # One file, one line, and app/app.js untouched: the classification lives in the
+    # client and nowhere else, so that is the only place a mutation of it can land.
+    loaded = loaded_under(MUTANT_C)
+    assert loaded["app/app.js"] == (REPO / "app" / "app.js").read_text(encoding="utf-8")
 
 
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------
