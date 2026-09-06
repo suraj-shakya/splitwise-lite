@@ -452,6 +452,13 @@ function unreadable(status) {
   };
 }
 
+function noStatus() {
+  /* A response this client cannot get a status out of. web.py never sends one, but a
+     service worker or a polyfill standing between the two can hand one back, and the
+     classifier has a row for it: never a refusal, and never the gate. */
+  return { status: undefined, ok: false, json: () => Promise.resolve(null) };
+}
+
 function noContent() {
   /* A 204 has no body, so api.js must return null without ever calling json(). The
      count is on the response itself, so the scenario that registers it can assert it
@@ -1356,6 +1363,75 @@ const SCENARIOS = [
   },
 
   {
+    /* The other way a request comes back with a status of 0: not fetch rejecting, but
+       the browser handing back a response this client may not read. Both mean no
+       answer came back, so both are the same kind and the same paragraph.
+
+       Asked for by a screen rather than by the session read, because that is where
+       the classification shows: a refusal would be left to the feed to report and the
+       app frame would stay up. A curtain is right here, because nothing came back. */
+    name: 'a_response_the_client_may_not_read_is_the_same_as_no_answer',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', unreadable(0));
+      await page.boot();
+      noticeIsUp(page, 'offline', 'a response that could not be read', true);
+      page.is(page.el('gate').hidden, true, '#gate hidden');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* A status that is not a readable number. It must never be a refusal, which would
+       leave the app frame up and the feed reporting something the client never
+       established, and it must never raise the gate: if the client cannot tell that
+       the request was refused, offering a password box is exactly how the
+       password-into-nothing loop starts. */
+    name: 'a_status_that_is_not_a_number_is_never_taken_for_a_refusal',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', noStatus());
+      await page.boot();
+      noticeIsUp(page, 'offline', 'a status that could not be read', true);
+      page.is(page.el('gate').hidden, true, '#gate hidden');
+      page.is(page.el('notice-problem').textContent, '', '#notice-problem text');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* #notice-problem is the one paragraph a screen writes, so it is the one that can
+       be left behind. A second failure that shows a different paragraph has to clear
+       it: a sentence about a group that was not configured, sitting under a heading
+       about being offline, would be read as if it were still true. */
+    name: 'a_later_failure_does_not_leave_the_earlier_sentence_behind',
+    async run(page) {
+      page.respondInOrder('GET', '/session', [noGroupConfigured(), networkFailure()]);
+      await page.boot();
+      noticeIsUp(page, 'problem', 'the first failure', false);
+      page.is(page.el('notice-problem').textContent, NO_GROUP, '#notice-problem text');
+      /* One more read, driven through the shipped client because nothing on a curtain
+         asks for one. app/app.js's own handlers are left in place, so this asserts
+         what a person would see. */
+      page.global('window.SplitwiseApi.session().then(null, function () {});');
+      await page.settle();
+      noticeIsUp(page, 'offline', 'the second failure', false);
+      page.is(page.el('notice-problem').textContent, '', '#notice-problem text');
+      page.expectRequests(['GET /api/session', 'GET /api/session']);
+    }
+  },
+
+  {
     name: 'the_api_client_failing_to_load_shows_the_offline_message',
     async run(page) {
       page.absent('api.js');
@@ -1510,6 +1586,43 @@ const SCENARIOS = [
         'GET /api/members',
         'GET /api/members',
         'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* A 401 answering POST /api/session is always the gate, even with the check armed
+       by a sign-in that worked: a wrong password is a wrong password, and the person
+       can fix it by typing the right one. The shipped app reads the session straight
+       after signing in, which disarms the check, so the only way to reach a second
+       sign-in while it is still armed is to drive the client directly. */
+    name: 'a_401_answering_the_sign_in_itself_is_always_the_gate',
+    async run(page) {
+      page.respond('GET', '/session', noSession());
+      page.respondInOrder('POST', '/session', [ok(A_MEMBER), refusal(REFUSED)]);
+      await page.boot();
+      page.global(
+        'window.SplitwiseApi.signIn("sam@example.com", "hunter2").then(function () {});'
+      );
+      await page.settle();
+      page.global(
+        'window.refused = null;' +
+          'window.SplitwiseApi.signIn("sam@example.com", "hunter2").then(null,' +
+          '  function (error) { window.refused = error; });'
+      );
+      await page.settle();
+      page.is(page.global('window.refused.kind'), 'signed-out', 'kind');
+      page.is(page.global('window.refused.say'), REFUSED, 'say');
+      /* And on screen: the gate, carrying the server's sentence. Not the notice that
+         a sign-in did not stick, which would tell the person their browser was at
+         fault when they simply mistyped. */
+      gateIsUp(page, 'a refused second sign-in');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, REFUSED, '#gate-error text');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
       ]);
     }
   },

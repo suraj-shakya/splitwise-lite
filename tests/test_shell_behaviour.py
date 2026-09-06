@@ -51,6 +51,9 @@ SCENARIOS = [
     "a_503_naming_both_group_ids_prints_both_of_them",
     "a_status_above_five_hundred_nobody_anticipated_is_still_classified",
     "a_status_below_five_hundred_nobody_anticipated_is_not_silently_dropped",
+    "a_response_the_client_may_not_read_is_the_same_as_no_answer",
+    "a_status_that_is_not_a_number_is_never_taken_for_a_refusal",
+    "a_later_failure_does_not_leave_the_earlier_sentence_behind",
     "the_api_client_failing_to_load_shows_the_offline_message",
     # Signing in
     "a_refused_sign_in_tells_the_person_why",
@@ -59,6 +62,7 @@ SCENARIOS = [
     "a_successful_sign_in_keeps_the_screen_the_person_was_on",
     "a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate",
     "a_session_that_expires_mid_session_puts_the_server_sentence_on_the_gate",
+    "a_401_answering_the_sign_in_itself_is_always_the_gate",
     "creating_an_account_signs_in_straight_after",
     "creating_an_account_that_already_exists_says_so_on_the_gate",
     "a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it",
