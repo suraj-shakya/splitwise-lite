@@ -1078,27 +1078,33 @@ function curtains(page, which, what, signOutVisible) {
   page.is(page.el('sign-out').hidden, !signOutVisible, what + ': #sign-out hidden');
 }
 
+/* The four paragraphs #notice holds, of which exactly one is ever visible. All four
+   are asserted together and never one at a time: a screen assertion that names only
+   the paragraph it expects leaves the other three free to be wrong, which is how a
+   sentence from an earlier failure ends up sitting behind a later one. */
+const NOTICES = ['unlinked', 'offline', 'not-kept', 'problem'];
+
+function everyNoticeHidden(page, which, what) {
+  NOTICES.forEach((name) => {
+    page.is(
+      page.el('notice-' + name).hidden,
+      which !== name,
+      what + ': #notice-' + name + ' hidden'
+    );
+  });
+}
+
 function gateIsUp(page, what) {
   /* showGate() hides the sign out control, and every route to the gate goes through
      it, so it is hidden whenever the gate is up. */
   curtains(page, 'gate', what, false);
-  page.is(page.el('notice-unlinked').hidden, true, what + ': #notice-unlinked hidden');
-  page.is(page.el('notice-offline').hidden, true, what + ': #notice-offline hidden');
+  everyNoticeHidden(page, null, what);
   page.is(flatText(page.el('gate-lede')), GATE_LEDE, what + ': #gate-lede text');
 }
 
 function noticeIsUp(page, which, what, signOutVisible) {
   curtains(page, 'notice', what, signOutVisible);
-  page.is(
-    page.el('notice-unlinked').hidden,
-    which !== 'unlinked',
-    what + ': #notice-unlinked hidden'
-  );
-  page.is(
-    page.el('notice-offline').hidden,
-    which !== 'offline',
-    what + ': #notice-offline hidden'
-  );
+  everyNoticeHidden(page, which, what);
   page.is(page.focused, page.el('notice-title'), what + ': focus');
 }
 

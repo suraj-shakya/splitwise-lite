@@ -612,6 +612,8 @@
   var gateMode = document.getElementById('gate-mode');
   var noticeUnlinked = document.getElementById('notice-unlinked');
   var noticeOffline = document.getElementById('notice-offline');
+  var noticeNotKept = document.getElementById('notice-not-kept');
+  var noticeProblem = document.getElementById('notice-problem');
   var creating = false;
 
   function show(which) {
@@ -635,9 +637,18 @@
     gateTitle.focus();
   }
 
-  function showNotice(which) {
+  function showNotice(which, message) {
+    /* The one function that hides all four paragraphs and shows one, so exactly one
+       of them is ever visible. #notice-problem is the only one whose text is written
+       here, and it is cleared whenever it is not the paragraph being shown, so a
+       sentence from an earlier failure is never left sitting behind a later one.
+       The sentence goes in as text and no markup is ever parsed, so a message
+       holding < renders as that character rather than as the start of a tag. */
     noticeUnlinked.hidden = which !== 'unlinked';
     noticeOffline.hidden = which !== 'offline';
+    noticeNotKept.hidden = which !== 'not-kept';
+    noticeProblem.hidden = which !== 'problem';
+    noticeProblem.textContent = which === 'problem' ? message : '';
     show('notice');
     document.getElementById('notice-title').focus();
   }
