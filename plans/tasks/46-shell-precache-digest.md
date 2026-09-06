@@ -258,10 +258,29 @@ the worktree root.
     mode `none`, so it reaches no worker's `fetch` handler and the trap does not spring
     today. The secondary reason must not stand alone. It is disprovable against a current
     browser, and a reader who disproves it will conclude `sw.js` belongs in `SHELL`; the
-    self-reference holds whatever browsers do.
-23. A test asserts `set(precache_entries()) == APP_FILES - set(NOT_PRECACHED)` and that every
-    key of that mapping is in `APP_FILES`. A file present in `app/` and absent from both
-    `SHELL` and the mapping fails it.
+    self-reference holds whatever browsers do. A blank or whitespace-only reason is not
+    prose and is refused, with a message saying a reason is the price of the omission:
+    checking only the keys would let a future entry buy its way out of criterion 23 for
+    nothing, and the written reason in the diff is the whole of what the mapping is for.
+23. A test reads `app/` and asserts, **first**, that `set(precache_entries())` equals the
+    files actually on disk minus `set(NOT_PRECACHED)`. It then asserts the literal relation
+    `set(precache_entries()) == APP_FILES - set(NOT_PRECACHED)`, and that every key of that
+    mapping is in `APP_FILES`. A file present in `app/` and absent from both `SHELL` and the
+    mapping fails the first assertion on its own, without waiting for anybody to add it
+    anywhere.
+
+    The order is the criterion, not a detail of how it was written. `APP_FILES` is a literal
+    in `tests/test_web_shell.py` and cannot see a new file, so the literal relation on its own
+    cannot catch what this exists for: a file dropped into `app/` is in neither `APP_FILES`
+    nor `SHELL`, both sides of the equation lose it together, and the relation stays true. It
+    would fail `test_app_holds_exactly_the_promised_files` instead, which says nothing about
+    precaching, and the moment somebody adds the path to `APP_FILES` to clear that failure the
+    relation goes red pointing at the wrong list. This was not reasoned out, it was measured:
+    the criterion-25 probe was run against the literal-only version and did not fail, and the
+    directory read was added in `f4bf768`. Reading the directory first is what produces the
+    offending path and the prose criterion 24 asks for; the literal relation second is what
+    stops `APP_FILES` drifting out of the relation and leaving the first check comparing the
+    directory only with itself.
 24. That test's failure message names the offending path and says the two ways to fix it: add
     it to `SHELL` in `app/sw.js`, or add it to the mapping with a reason.
 25. QA proves criterion 23 bites: create `app/probe.txt`, run the suite, confirm it goes red
@@ -346,7 +365,7 @@ the worktree root.
 
 This is small on purpose. One constant and one changed line in `app/sw.js`, roughly eighty
 lines in `tests/test_web_shell.py` counting the failure messages and the comments that
-explain the trade, one sentence each in two documents. Eight new tests:
+explain the trade, one sentence each in two documents. Nine new tests:
 
 1. the cache name is built from `VERSION` and `SHELL_DIGEST` (criterion 2);
 2. the recorded digest matches the files on disk (criterion 12);
@@ -355,7 +374,10 @@ explain the trade, one sentence each in two documents. Eight new tests:
 5. one changed byte in an icon moves the digest (criterion 17);
 6. line endings do not move the digest (criterion 18);
 7. reordering the entries does not move the digest (criterion 19);
-8. `SHELL` covers `app/` minus the named omissions (criterion 23).
+8. `SHELL` covers `app/` minus the named omissions (criterion 23);
+9. an omission whose reason is blank or whitespace is refused (criterion 22, added after
+   review: the mapping checked only its keys, so an empty reason silenced the check above
+   for free, which is exactly the cost the mapping exists to impose).
 
 If it grows a helper module, a script, a fixture directory or a second file under `app/`,
 it has gone wrong.
