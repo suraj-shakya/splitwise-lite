@@ -2293,6 +2293,48 @@ def test_an_undeclared_rule_is_classified_by_the_matched_rule_not_the_path(
         assert web.flask.request.url_rule.rule == "/<path:filename>"
 
 
+def test_a_shell_row_under_the_api_prefix_is_refused_at_build_time(
+    seeded: Path, monkeypatch
+) -> None:
+    # The two tables have to be disjoint for the audit to mean what it says.
+    # ``_ApiRoute`` refuses a rule outside the prefix; without the converse check a
+    # row appended to the ungated table under ``/api`` audits clean, ``create_app``
+    # returns an app that serves it, and the failure moves to the one request in the
+    # one process that happens to reach ``_before_request``.
+    monkeypatch.setattr(
+        web,
+        "_SHELL_ROUTES",
+        web._SHELL_ROUTES + (("/api/dump", "dump", probe_view, ("GET",)),),
+    )
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web.create_app(store_path=seeded, secure_cookies=False, scrypt_params=CHEAP)
+    message = str(error.value)
+    assert "/api/dump" in message
+    assert "_SHELL_ROUTES" in message
+    assert "_API_ROUTES" in message
+    assert "src/splitwise_lite/web.py" in message
+    assert "no session check, no CSRF check and no member check" in message
+
+
+def test_the_request_time_refusal_claims_no_provenance_it_cannot_see(app) -> None:
+    # ``_before_request`` sees a rule carrying no policy and nothing whatever about
+    # how it got there. Naming one cause as a fact sends the reader to the wrong
+    # file, so the message states what the audit guarantees and leaves open the two
+    # possibilities that guarantee allows.
+    app.add_url_rule("/api/probe", "probe", probe_view, methods=["GET"])
+    with pytest.raises(web._RouteNotDeclared) as error:
+        with app.test_request_context("/api/probe"):
+            web._before_request()
+    message = str(error.value)
+    assert "/api/probe" in message
+    assert "probe" in message
+    assert "_API_ROUTES" in message
+    assert "src/splitwise_lite/web.py" in message
+    assert "registered after create_app audited this app's route map" not in message
+    assert "was not built by create_app" in message
+    assert "after that audit ran" in message
+
+
 # --- Members ----------------------------------------------------------------
 
 

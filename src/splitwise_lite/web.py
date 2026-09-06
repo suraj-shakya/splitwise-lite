@@ -1684,11 +1684,12 @@ class _RouteNotDeclared(RuntimeError):
     # Not a ``WebError`` and not a ``DomainError``: this is a programming error in
     # this repo, not a refusal of a request, and giving it a code would put it in a
     # contract clients branch on.
-    """The route map and the tables disagree, in either direction.
+    """The route map and the tables disagree, or the tables disagree with themselves.
 
     Raised by :func:`_audit_routes` for a route the app serves that no row declares,
-    or for a row no registered rule matches, and by ``_before_request`` for a ``/api``
-    rule that reaches it with no declared policy. It reaches a client as the ordinary
+    for a row no registered rule matches, and for a ``_SHELL_ROUTES`` row claiming a
+    rule under :data:`_API_PREFIX`; and by ``_before_request`` for a ``/api`` rule
+    that reaches it with no declared policy. It reaches a client as the ordinary
     unmapped 500, generic message and logged traceback, because it is unmapped in
     :data:`ERROR_STATUS` and :data:`ERROR_CODE` like any other bug.
     """
@@ -1709,10 +1710,30 @@ def _audit_routes(app: flask.Flask) -> None:
     in ``app.url_map``, not only those under :data:`_API_PREFIX`, so an API route
     registered at some other prefix cannot slip past it.
 
+    It also refuses a ``_SHELL_ROUTES`` row under :data:`_API_PREFIX`. ``_ApiRoute``
+    refuses a rule outside the prefix, and this is the converse, so the two tables are
+    disjoint by construction rather than by convention: without it an ``/api`` row in
+    the ungated table is declared, audits clean, and is served with no gate at all.
+
     Raises:
-        _RouteNotDeclared: if the app serves a route no row declares, or if a row
-            declares a route the app does not serve.
+        _RouteNotDeclared: if a ``_SHELL_ROUTES`` row claims a rule under
+            :data:`_API_PREFIX`, if the app serves a route no row declares, or if a
+            row declares a route the app does not serve.
     """
+    misfiled = tuple(
+        rule
+        for rule, _endpoint, _view, _methods in _SHELL_ROUTES
+        if rule.startswith(_API_PREFIX)
+    )
+    if misfiled:
+        raise _RouteNotDeclared(
+            f"_SHELL_ROUTES in src/splitwise_lite/web.py declares "
+            f"{', '.join(misfiled)} under {_API_PREFIX}, and every row in that table "
+            "is served with no session check, no CSRF check and no member check, so "
+            "it would answer anybody who asks. An API route belongs in _API_ROUTES, "
+            "in a row naming the access it requires; _SHELL_ROUTES is for the shell "
+            "document and the static files, which reach no ledger."
+        )
     declared = {
         (route.rule, route.endpoint, frozenset(route.methods) - {"HEAD", "OPTIONS"})
         for route in _API_ROUTES
@@ -1846,8 +1867,8 @@ def _before_request() -> None:
 
     An ``/api`` rule with no row in :data:`_API_ACCESS` is refused here rather than
     waved through. :func:`_audit_routes` has already refused to build an app that
-    serves one, so this is the second line, for a route registered after the factory
-    returned.
+    serves one, so this is the second line: it speaks for an app this factory did not
+    build, or for a rule added to one after that audit ran.
     """
     endpoint = flask.request.endpoint
     matched = flask.request.url_rule
@@ -1863,8 +1884,15 @@ def _before_request() -> None:
                 f"the rule {matched.rule} (endpoint {endpoint!r}) is under "
                 f"{_API_PREFIX} and no row in _API_ROUTES declares what it requires, "
                 "so the request is refused rather than served. Declare it in "
-                "src/splitwise_lite/web.py; it was registered after create_app "
-                "audited this app's route map."
+                "src/splitwise_lite/web.py, in a row naming the access it requires. "
+                # This hook sees a rule and a policy that is missing, and nothing
+                # about how the rule was registered. Naming one cause as a fact sends
+                # the reader to the wrong file, so the message says only what
+                # _audit_routes guarantees and leaves the rest open.
+                "How the rule came to be registered is not something this hook can "
+                "see. _audit_routes refuses to build an app that serves an "
+                "undeclared rule, so either this app was not built by create_app, or "
+                "the rule was added to it after that audit ran."
             )
         return
     if flask.request.method in _STATE_CHANGING_METHODS:
