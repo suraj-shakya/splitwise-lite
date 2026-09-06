@@ -96,11 +96,17 @@ screen shows every route and what each requires, which is what a reviewer needs 
 
 ### What this deliberately does not catch, recorded rather than hidden
 
-* A route registered **after** `create_app` returns, at a rule that does **not** start with
-  `/api`, is still ungated. The runtime check can only classify by the rule it matched, and
-  the audit has already run. Every API route lives under `/api` by construction (a row is
-  refused if its rule does not), so reaching this needs somebody to register an API route
-  outside the factory and outside the prefix.
+* A route registered **after** `create_app` returns, at a rule that is **not under** the
+  `/api` path segment, is still ungated. The runtime check can only classify by the rule it
+  matched, and the audit has already run. Every API route lives under `/api` by construction
+  (a row is refused if its rule does not), so reaching this needs somebody to register an
+  API route outside the factory and outside the prefix.
+
+  *Restated while implementing.* This first read "at a rule that does not start with `/api`",
+  which was the string test the code then made. `/api` is a path segment in all three guards
+  now, so `/apiary` is outside the prefix as well, and a rule of that shape registered after
+  the factory falls in this same recorded gap rather than being refused as an API rule. The
+  gap is the same one; this sentence says where its edge is.
 * The three policies are the three that exist today. This mechanism makes the policy for a
   route impossible to forget; it does not invent finer-grained authorisation, and
   membership of the group remains the only authorisation this product has.
@@ -295,12 +301,20 @@ the worktree root. Every path is relative to it.
     `test_a_signed_in_user_against_an_unconfigured_store_is_told_to_run_setup`,
     `test_two_apps_share_no_rate_limiter` and every CSRF, cookie, rate limit, error contract,
     static file, expense, balances and debt test in `tests/test_web_api.py`.
-28. `git diff` on `src/splitwise_lite/web.py` touches four regions and no others: the module
-    docstring, the constants region where `_ANONYMOUS_ENDPOINTS` and
+28. `git diff` on `src/splitwise_lite/web.py` touches five regions and no others: the import
+    block, the module docstring, the constants region where `_ANONYMOUS_ENDPOINTS` and
     `_MEMBER_OPTIONAL_ENDPOINTS` live today, the region around `_API_ENDPOINTS` and
     `create_app`, and `_before_request`. No view function, no error map, no cookie helper, no
     CSRF gate, no rate limiter, no store helper and no `__all__` entry is edited. `__all__`
     is byte-identical.
+
+    *Corrected while implementing.* As first written this criterion said `git diff` "touches
+    four regions and no others", and its list began at "the module docstring". The import
+    block is a fifth, and it is an edit this spec requires by name elsewhere: criterion 36
+    and the constraints both mandate `import enum`, which can go nowhere else. The
+    enumeration omitted the edit its own neighbour orders. Only the count and that one
+    entry change; the four regions originally listed, everything the criterion forbids and
+    the `__all__` requirement are unchanged.
 
 ### The demonstration that the mechanism bites
 
@@ -384,8 +398,15 @@ the worktree root. Every path is relative to it.
     it changes.
 37. No other test anywhere in `tests/` is edited, renamed, deleted, reordered, loosened or
     parameterised differently. `git diff --stat` over `tests/` shows one file,
-    `tests/test_web_api.py`, and its diff contains only the three changes above plus new
-    tests appended at the end of their section.
+    `tests/test_web_api.py`, and its diff contains only the four edits to existing tests
+    this spec requires, plus new tests appended at the end of their section.
+
+    *Corrected while implementing.* As first written this said the diff "contains only the
+    three changes above", counting criteria 34, 35 and 36. There is a fourth, mandated by
+    name in criterion 32: `test_the_module_docstring_records_every_decision_it_makes` gains
+    one string. "Three" contradicted it, so the count is the correction and nothing else is.
+    Two tests change shape, 34 and 35; two exact literals gain one entry each, 32 and 36;
+    and nothing anywhere is removed, renamed, reordered or loosened.
 
 ### The suite
 
