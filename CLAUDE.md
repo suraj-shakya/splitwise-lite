@@ -72,7 +72,9 @@ it.
 - `src/splitwise_lite/`: the package
 - `src/splitwise_lite/web.py`: the HTTP layer. The one module that imports a web
   framework, and the one place that decides cookies, CSRF, rate limiting and what a
-  `DomainError` becomes on the wire
+  `DomainError` becomes on the wire. Routes are declared in `_API_ROUTES` with the
+  access each one requires, and an app whose route map holds anything the tables do
+  not declare fails to build
 - `app/`: the front end shell, served as plain files and never imported by the
   package. `app/api.js` is the only file in it that calls the back end
 - `scripts/`: the dev server, the icon generator and the group setup command; no

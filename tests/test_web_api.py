@@ -634,6 +634,7 @@ def test_the_module_docstring_records_every_decision_it_makes() -> None:
         "Login rate limiting",
         "walking the raised exception's MRO",
         "Reading the ledger requires a member link",
+        "A route is registered with its access policy",
     ):
         assert stated in text, stated
 
@@ -693,6 +694,7 @@ def imported_packages(source: str) -> set[str]:
 def test_the_module_imports_flask_and_the_standard_library_only() -> None:
     assert imported_packages(web_source()) == {
         "__future__",
+        "enum",
         "hmac",
         "json",
         "secrets",
@@ -1986,13 +1988,35 @@ def test_a_signed_in_user_with_no_member_row_may_not_read_the_ledger(
 
 
 def test_the_member_requirement_is_the_default_and_the_exemptions_are_named() -> None:
-    assert web._MEMBER_OPTIONAL_ENDPOINTS == (
-        "signup",
-        "create_session",
-        "read_session",
-        "delete_session",
-    )
-    assert set(web._MEMBER_OPTIONAL_ENDPOINTS) < web._API_ENDPOINTS
+    # The exemptions are named per route, in the same row as everything else about
+    # that route, so all three partitions are asserted by value rather than as an
+    # absence from a literal somewhere else.
+    anonymous = {
+        endpoint
+        for endpoint, access in web._API_ACCESS.items()
+        if access is web._Access.ANONYMOUS
+    }
+    session = {
+        endpoint
+        for endpoint, access in web._API_ACCESS.items()
+        if access is web._Access.SESSION
+    }
+    member = {
+        endpoint
+        for endpoint, access in web._API_ACCESS.items()
+        if access is web._Access.MEMBER
+    }
+    assert anonymous == {"signup", "create_session", "delete_session"}
+    assert session == {"read_session"}
+    assert member == {
+        "list_members",
+        "list_expenses",
+        "create_expense",
+        "read_balances",
+        "read_debt",
+    }
+    assert set(web._API_ACCESS) == anonymous | session | member
+    assert set(web._API_ACCESS) == {row.endpoint for row in web._API_ROUTES}
 
 
 def test_authentication_is_checked_before_the_group_is_resolved(empty_app) -> None:
@@ -2044,6 +2068,394 @@ def test_two_groups_are_refused_with_both_ids_named(seeded: Path) -> None:
     assert body["error"]["code"] == "ambiguous_group"
     for group_id in ids:
         assert group_id in body["error"]["message"]
+
+
+def probe_view():
+    """A view a real task might write, which answers 200 on its own.
+
+    It is deliberately not a view that raises: a test whose probe crashes cannot tell
+    a working guard from a broken view, and the point of the guard is that a route
+    which *would* have answered is refused instead.
+    """
+    return web.flask.Response(
+        web.json.dumps({"leaked": "roster"}),
+        status=200,
+        mimetype="application/json",
+    )
+
+
+def test_the_access_levels_are_three_names_that_are_their_own_values() -> None:
+    # Following ``SettlementState`` in events.py: the name is the whole of the
+    # meaning, so a separate value would be a second thing to keep in step.
+    assert [member.name for member in web._Access] == [
+        "ANONYMOUS",
+        "SESSION",
+        "MEMBER",
+    ]
+    assert all(member.value == member.name for member in web._Access)
+
+
+def test_a_route_row_cannot_be_written_without_an_access_policy() -> None:
+    # The heart of task 51: a row that does not state what it requires is not a row,
+    # so "forgot to say" is not a state this table can be in.
+    import dataclasses
+
+    with pytest.raises(TypeError):
+        web._ApiRoute("/api/x", "x", probe_view, ("GET",))
+
+    declared = dataclasses.fields(web._ApiRoute)
+    assert [field.name for field in declared] == [
+        "rule",
+        "endpoint",
+        "view",
+        "methods",
+        "access",
+    ]
+    for field in declared:
+        assert field.default is dataclasses.MISSING, field.name
+        assert field.default_factory is dataclasses.MISSING, field.name
+    assert web._ApiRoute.__dataclass_params__.frozen
+    assert hasattr(web._ApiRoute, "__slots__")
+
+    row = web._ApiRoute("/api/x", "x", probe_view, ("GET",), web._Access.MEMBER)
+    assert (row.rule, row.endpoint, row.view, row.methods, row.access) == (
+        "/api/x",
+        "x",
+        probe_view,
+        ("GET",),
+        web._Access.MEMBER,
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        row.access = web._Access.ANONYMOUS
+
+
+BAD_ROUTE_ROWS = [
+    ((123, "x", probe_view, ("GET",)), TypeError, "rule", "123"),
+    (("/nope", "x", probe_view, ("GET",)), ValueError, "rule", "'/nope'"),
+    (("/api/x", 5, probe_view, ("GET",)), TypeError, "endpoint", "5"),
+    (("/api/x", "", probe_view, ("GET",)), ValueError, "endpoint", "''"),
+    (("/api/x", "x", probe_view, ["GET"]), TypeError, "methods", "['GET']"),
+    (("/api/x", "x", probe_view, ()), ValueError, "methods", "()"),
+    (("/api/x", "x", probe_view, (1,)), TypeError, "methods", "(1,)"),
+    (("/api/x", "x", probe_view, ("get",)), ValueError, "methods", "('get',)"),
+]
+
+
+@pytest.mark.parametrize(
+    "arguments, raised, named, offending",
+    BAD_ROUTE_ROWS,
+    ids=[f"{row[2]} {row[3]}" for row in BAD_ROUTE_ROWS],
+)
+def test_a_route_row_refuses_a_field_it_cannot_use(
+    arguments: tuple, raised: type[Exception], named: str, offending: str
+) -> None:
+    # Eagerly, in ``__post_init__``, in the style ``_Settings`` already uses, and each
+    # message names the offending field and the value it got.
+    with pytest.raises(raised) as error:
+        web._ApiRoute(*arguments, web._Access.MEMBER)
+    assert named in str(error.value)
+    assert offending in str(error.value)
+
+
+def test_a_route_row_refuses_an_access_that_is_not_an_access_level() -> None:
+    with pytest.raises(TypeError) as error:
+        web._ApiRoute("/api/x", "x", probe_view, ("GET",), "MEMBER")
+    assert "access" in str(error.value)
+    assert "'MEMBER'" in str(error.value)
+
+
+def test_the_route_tables_hold_exactly_the_routes_the_app_serves(app) -> None:
+    # Three rows share the rule ``/api/session`` and differ by endpoint and method:
+    # the table is keyed by row, not by path.
+    assert [
+        (row.rule, row.endpoint, row.methods, row.access) for row in web._API_ROUTES
+    ] == [
+        ("/api/signup", "signup", ("POST",), web._Access.ANONYMOUS),
+        ("/api/session", "create_session", ("POST",), web._Access.ANONYMOUS),
+        ("/api/session", "read_session", ("GET",), web._Access.SESSION),
+        ("/api/session", "delete_session", ("DELETE",), web._Access.ANONYMOUS),
+        ("/api/members", "list_members", ("GET",), web._Access.MEMBER),
+        ("/api/expenses", "list_expenses", ("GET",), web._Access.MEMBER),
+        ("/api/expenses", "create_expense", ("POST",), web._Access.MEMBER),
+        ("/api/balances", "read_balances", ("GET",), web._Access.MEMBER),
+        (
+            "/api/debts/<debtor_id>/<creditor_id>",
+            "read_debt",
+            ("GET",),
+            web._Access.MEMBER,
+        ),
+    ]
+    assert [
+        (rule, endpoint, methods)
+        for rule, endpoint, _view, methods in web._SHELL_ROUTES
+    ] == [
+        ("/", "shell_document", ("GET",)),
+        ("/<path:filename>", "static_path", ("GET",)),
+    ]
+    # The view named in the row is the view the app actually calls for that endpoint,
+    # so the table describes what is served rather than what somebody meant to serve.
+    for row in web._API_ROUTES:
+        assert app.view_functions[row.endpoint] is row.view
+    for _rule, endpoint, view, _methods in web._SHELL_ROUTES:
+        assert app.view_functions[endpoint] is view
+
+
+def test_every_api_rule_the_app_serves_has_a_declared_access_policy(app) -> None:
+    # The issue's third option, kept deliberately: a red test names the failure in
+    # the file where the fix is read, and it costs four lines.
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith(web._API_PREFIX):
+            assert rule.endpoint in web._API_ACCESS, rule.rule
+
+
+def test_an_api_route_added_after_the_factory_is_refused_by_the_audit(app) -> None:
+    app.add_url_rule("/api/probe", "probe", probe_view, methods=["GET"])
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web._audit_routes(app)
+    message = str(error.value)
+    assert "/api/probe" in message
+    assert "probe" in message
+    assert "_API_ROUTES" in message
+    assert "_SHELL_ROUTES" in message
+    assert "src/splitwise_lite/web.py" in message
+    assert "no session check, no CSRF check and no member check" in message
+    for level in ("ANONYMOUS", "SESSION", "MEMBER"):
+        assert level in message
+
+
+def test_a_route_outside_the_api_prefix_is_refused_by_the_audit_too(app) -> None:
+    # The audit covers every rule in the map, not only those under ``/api``, so an
+    # API route registered at some other prefix cannot slip past it at construction.
+    app.add_url_rule("/probe", "probe", probe_view, methods=["GET"])
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web._audit_routes(app)
+    assert "/probe" in str(error.value)
+
+
+def test_a_declared_route_the_app_does_not_serve_is_refused() -> None:
+    # An equality in both directions: a table claiming a route nobody registered is
+    # as much a failure as a route no table declares.
+    bare = web.flask.Flask(__name__, static_folder=None)
+    for row in web._API_ROUTES[:-1]:
+        bare.add_url_rule(row.rule, row.endpoint, row.view, methods=list(row.methods))
+    for rule, endpoint, view, methods in web._SHELL_ROUTES:
+        bare.add_url_rule(rule, endpoint, view, methods=list(methods))
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web._audit_routes(bare)
+    message = str(error.value)
+    assert "/api/debts/<debtor_id>/<creditor_id>" in message
+    assert "read_debt" in message
+    assert "does not serve" in message
+
+
+def test_two_rows_sharing_an_endpoint_name_are_refused_by_the_access_map() -> None:
+    # The policy is looked up by endpoint, so a duplicate would silently hand one row
+    # the other's policy, and the quieter of the two failures is the dangerous one.
+    rows = (
+        web._ApiRoute("/api/one", "same", probe_view, ("GET",), web._Access.MEMBER),
+        web._ApiRoute("/api/two", "same", probe_view, ("GET",), web._Access.SESSION),
+    )
+    with pytest.raises(ValueError) as error:
+        web._access_map(rows)
+    assert "same" in str(error.value)
+
+
+def test_a_route_registered_after_construction_is_refused_at_request_time(
+    app, caplog
+) -> None:
+    # The second line, for the case the audit cannot see. If the ``_before_request``
+    # branch is deleted this test fails, because the view would answer 200 with a
+    # roster to a caller holding no cookie at all.
+    import logging
+
+    assert probe_view().status_code == 200
+    app.add_url_rule("/api/probe", "probe", probe_view, methods=["GET"])
+    with caplog.at_level(logging.ERROR):
+        response = app.test_client().get("/api/probe")
+    assert response.status_code == 500
+    body = response.get_json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == web._GENERIC_500_MESSAGE
+    assert "leaked" not in response.get_data(as_text=True)
+    assert "roster" not in response.get_data(as_text=True)
+    assert "/api/probe" not in response.get_data(as_text=True)
+    assert "Traceback" in caplog.text
+
+
+def test_an_undeclared_rule_is_classified_by_the_matched_rule_not_the_path(
+    app,
+) -> None:
+    # ``/<path:filename>`` matches ``/api/nope``, so the naive implementation, which
+    # tests ``flask.request.path``, turns every unknown ``/api`` path into a 500.
+    with app.test_request_context("/api/nope"):
+        assert web.flask.request.path.startswith(web._API_PREFIX)
+        assert web.flask.request.url_rule is not None
+        assert web.flask.request.url_rule.rule == "/<path:filename>"
+
+
+def test_a_shell_row_under_the_api_prefix_is_refused_at_build_time(
+    seeded: Path, monkeypatch
+) -> None:
+    # The two tables have to be disjoint for the audit to mean what it says.
+    # ``_ApiRoute`` refuses a rule outside the prefix; without the converse check a
+    # row appended to the ungated table under ``/api`` audits clean, ``create_app``
+    # returns an app that serves it, and the failure moves to the one request in the
+    # one process that happens to reach ``_before_request``.
+    monkeypatch.setattr(
+        web,
+        "_SHELL_ROUTES",
+        web._SHELL_ROUTES + (("/api/dump", "dump", probe_view, ("GET",)),),
+    )
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web.create_app(store_path=seeded, secure_cookies=False, scrypt_params=CHEAP)
+    message = str(error.value)
+    assert "/api/dump" in message
+    assert "_SHELL_ROUTES" in message
+    assert "_API_ROUTES" in message
+    assert "src/splitwise_lite/web.py" in message
+    assert "no session check, no CSRF check and no member check" in message
+
+
+def test_the_request_time_refusal_claims_no_provenance_it_cannot_see(app) -> None:
+    # ``_before_request`` sees a rule carrying no policy and nothing whatever about
+    # how it got there. Naming one cause as a fact sends the reader to the wrong
+    # file, so the message states what the audit guarantees and leaves open the two
+    # possibilities that guarantee allows.
+    app.add_url_rule("/api/probe", "probe", probe_view, methods=["GET"])
+    with pytest.raises(web._RouteNotDeclared) as error:
+        with app.test_request_context("/api/probe"):
+            web._before_request()
+    message = str(error.value)
+    assert "/api/probe" in message
+    assert "probe" in message
+    assert "_API_ROUTES" in message
+    assert "src/splitwise_lite/web.py" in message
+    assert "registered after create_app audited this app's route map" not in message
+    assert "was not built by create_app" in message
+    assert "after that audit ran" in message
+
+
+def test_the_api_prefix_is_a_path_segment_and_not_a_string_prefix(
+    app, seeded: Path, monkeypatch
+) -> None:
+    # ``/apiary`` is not under ``/api``. All three guards ask this one question, so
+    # they agree with each other by construction; without the segment boundary they
+    # would agree on a boundary one character wide instead.
+    web._ApiRoute(web._API_PREFIX, "bare", probe_view, ("GET",), web._Access.MEMBER)
+    web._ApiRoute("/api/x", "x", probe_view, ("GET",), web._Access.MEMBER)
+    with pytest.raises(ValueError) as error:
+        web._ApiRoute("/apiary", "apiary", probe_view, ("GET",), web._Access.MEMBER)
+    assert "rule" in str(error.value)
+    assert "'/apiary'" in str(error.value)
+
+    # At request time the same boundary. A rule outside the prefix is not an API rule
+    # and is not refused as one, so this lands in the gap the spec already records
+    # for a route registered after the factory returned, rather than a second one.
+    app.add_url_rule("/apiary", "apiary", probe_view, methods=["GET"])
+    assert app.test_client().get("/apiary").status_code == 200
+
+    # And the audit's converse check reads it the same way: a shell row at
+    # ``/apiary`` is an ordinary ungated shell route, not a misfiled API one.
+    monkeypatch.setattr(
+        web,
+        "_SHELL_ROUTES",
+        web._SHELL_ROUTES + (("/apiary", "apiary", probe_view, ("GET",)),),
+    )
+    built = web.create_app(
+        store_path=seeded, secure_cookies=False, scrypt_params=CHEAP
+    )
+    assert built.test_client().get("/apiary").status_code == 200
+
+
+def test_a_route_outside_the_prefix_added_after_the_factory_is_still_ungated(
+    app,
+) -> None:
+    # The gap the spec records at "What this deliberately does not catch", pinned
+    # rather than left to be rediscovered. ``_before_request`` can only classify by
+    # the rule it matched, and this one is not under ``/api``, so it is served. The
+    # audit still refuses it at construction, so reaching this needs somebody to
+    # register a route outside the factory *and* outside the prefix. If that ever
+    # stops being true, in either direction, this test says so.
+    app.add_url_rule("/probe", "probe", probe_view, methods=["GET"])
+    response = app.test_client().get("/probe")
+    assert response.status_code == 200
+    assert response.get_json() == {"leaked": "roster"}
+
+
+def test_an_undeclared_rule_is_refused_before_the_csrf_gate_runs(app, caplog) -> None:
+    # Criterion 21's order, driven on a state-changing method: the rule with no
+    # declared policy is refused before any gate runs, so a POST carrying no CSRF
+    # header is the 500 and not a 403 ``csrf_failed``. Nothing else would notice
+    # those two branches being swapped.
+    import logging
+
+    app.add_url_rule("/api/probe", "probe", probe_view, methods=["POST"])
+    with caplog.at_level(logging.ERROR):
+        response = app.test_client().post("/api/probe")
+    assert response.status_code == 500
+    body = response.get_json()
+    assert body["error"]["code"] == "internal_error"
+    assert body["error"]["message"] == web._GENERIC_500_MESSAGE
+    assert "leaked" not in response.get_data(as_text=True)
+    assert "Traceback" in caplog.text
+
+
+def test_nothing_in_the_module_ever_writes_to_the_access_map() -> None:
+    # Criterion 8 says nothing writes to ``_API_ACCESS`` after import, and a plain
+    # dict does not enforce that. ``MappingProxyType`` would, but it needs ``types``,
+    # and ``test_the_module_imports_flask_and_the_standard_library_only`` pins that
+    # import set exactly, so enforcement lives here instead: a rebinding, a
+    # subscripted assignment, a deletion or a mutating method call on the name is a
+    # failure, and the name is bound exactly once.
+    import ast
+
+    writes: list[str] = []
+    bindings = 0
+    for node in ast.walk(ast.parse(web_source())):
+        targets: list[ast.expr] = []
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            targets = list(node.targets)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "_API_ACCESS":
+                if isinstance(node, ast.AnnAssign):
+                    bindings += 1
+                else:
+                    writes.append(ast.dump(node))
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "_API_ACCESS"
+            ):
+                writes.append(ast.dump(node))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "_API_ACCESS"
+            and node.func.attr not in {"get", "items", "keys", "values", "copy"}
+        ):
+            writes.append(ast.dump(node))
+    assert writes == []
+    assert bindings == 1
+
+
+def test_a_declared_shell_route_the_app_does_not_serve_is_refused() -> None:
+    # Criterion 15 from the other table. A missing shell row goes down the same code
+    # path as a missing API one, and the path is only worth having if both directions
+    # are known to reach it.
+    bare = web.flask.Flask(__name__, static_folder=None)
+    for row in web._API_ROUTES:
+        bare.add_url_rule(row.rule, row.endpoint, row.view, methods=list(row.methods))
+    for rule, endpoint, view, methods in web._SHELL_ROUTES[:-1]:
+        bare.add_url_rule(rule, endpoint, view, methods=list(methods))
+    with pytest.raises(web._RouteNotDeclared) as error:
+        web._audit_routes(bare)
+    message = str(error.value)
+    assert "/<path:filename>" in message
+    assert "static_path" in message
+    assert "does not serve" in message
 
 
 # --- Members ----------------------------------------------------------------
@@ -3343,12 +3755,11 @@ def seed_cycle(client, members: dict[str, str], monkeypatch) -> None:
 
 
 def test_the_debt_endpoint_is_in_the_api_endpoint_set_so_the_hooks_run(app) -> None:
-    # ``_before_request`` returns early for any endpoint not in this set, so a route
-    # registered without an entry gets no session check at all. It is in neither
-    # exemption tuple either, so it inherits the locked-down default.
-    assert "read_debt" in web._API_ENDPOINTS
-    assert "read_debt" not in web._ANONYMOUS_ENDPOINTS
-    assert "read_debt" not in web._MEMBER_OPTIONAL_ENDPOINTS
+    # ``_before_request`` reads this endpoint's policy out of ``_API_ACCESS``, and a
+    # rule under ``/api`` with no row there is refused rather than served. Naming the
+    # level is stronger than an absence from two exemption tuples: it says which of
+    # the three gates run, not merely that some do.
+    assert web._API_ACCESS["read_debt"] is web._Access.MEMBER
     response = app.test_client().get("/api/debts/whoever/somebody-else")
     assert response.status_code == 401
     assert response.get_json()["error"]["code"] == "not_authenticated"
