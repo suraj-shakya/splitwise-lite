@@ -225,8 +225,8 @@ quoted exactly, including case and the absence of a trailing full stop.
    (not `InvalidSplit`) when it is not a `Currency`, in the module's existing style: a wrong
    Python type is a programming error, not rejected user input. A bad currency and a zero
    total together produce the `TypeError`, not the `InvalidSplit`.
-8. `split.py` gains one module-private helper, whose docstring names it as going through
-   `money.py`'s one display edge:
+8. `split.py` gains one module-private **display** helper, whose docstring names it as
+   going through `money.py`'s one display edge:
 
    ```python
    def _formatted(cents: int, currency: Currency) -> str:
@@ -237,6 +237,35 @@ quoted exactly, including case and the absence of a trailing full stop.
    remaining `InvalidSplit` in the module that interpolates a bare integer is
    `f"{field} for {member_id!r} must be zero or positive, got {value}"` in
    `_ordered_from_mapping`, whose integer is a weight rather than money; see criterion 27.
+
+   Criterion 7's guard is the module's one other new private function,
+   `def _require_currency(value: object) -> Currency:`, called on the first line of each
+   of the three resolvers. Its body and its message are `balances.py::_require_currency`'s,
+   and its docstring says so and says why the two cannot share code. It renders nothing,
+   so the display rule above is untouched by it.
+
+   > **Amended 2026-09-07, after the first review of PR #62.** This criterion opened
+   > "`split.py` gains one module-private helper", and that count was read literally, as a
+   > cap on private functions of every kind. Criterion 7's guard was written inline in all
+   > three resolvers to honour it: twelve lines of triplicated `isinstance` and three
+   > copies of one message, none of them pinned, so a reword had three edit sites and two
+   > of them could drift without anything going red.
+   >
+   > The count was a proxy for the goal the rest of this criterion states, which is one
+   > display edge and no second renderer to reach for. A guard called on a resolver's
+   > first line is not a renderer and does not touch that goal, and it satisfies
+   > criterion 7's "before anything else" exactly as an inline `if` does. The tension
+   > was never 7 against 8.
+   >
+   > What settles it is that the repo settled it before this task existed.
+   > `balances.py:756` already carries `_require_currency`, with an identical body and an
+   > identical message, extracted by a sibling domain module that needed the same guard
+   > twice. Writing a third, fourth and fifth copy of it to satisfy a count was the wrong
+   > reading of the count.
+   >
+   > So the count is narrowed to what it always meant, display helpers, and the guard is
+   > named and permitted. Nothing else in this criterion changes, and neither does
+   > criterion 7.
 9. `_require_total` takes the currency and passes it to `_formatted`. `_allocate`,
    `_require_member_id`, `_ordered_from_iterable` and `_ordered_from_mapping` are unchanged
    in signature and in behaviour.

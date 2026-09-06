@@ -107,12 +107,7 @@ def split_equally(
             ``MAX_CENTS``, if the member list is empty, if a member id is empty, or if a
             member appears more than once.
     """
-    # Checked before the total, so a wrong currency is a TypeError a programmer sees
-    # rather than an InvalidSplit dressed up as somebody's rejected entry.
-    if not isinstance(currency, Currency):
-        raise TypeError(
-            f"currency must be a Currency, got {type(currency).__name__}: {currency!r}"
-        )
+    _require_currency(currency)
     total = _require_total(total_cents, currency)
     ordered = _ordered_from_iterable(member_ids)
     return _allocate(total, ordered, [1] * len(ordered))
@@ -146,10 +141,7 @@ def split_by_weight(
             ``MAX_CENTS``, if ``weights`` is empty, if a member id is empty, if a weight
             is negative, or if the weights sum to zero.
     """
-    if not isinstance(currency, Currency):
-        raise TypeError(
-            f"currency must be a Currency, got {type(currency).__name__}: {currency!r}"
-        )
+    _require_currency(currency)
     total = _require_total(total_cents, currency)
     ordered, values = _ordered_from_mapping(weights, "weight")
     return _allocate(total, ordered, values)
@@ -185,10 +177,7 @@ def split_exact(
             ``MAX_CENTS``, if ``amounts`` is empty, if a member id is empty, if an
             amount is negative, or if the amounts do not sum to the total.
     """
-    if not isinstance(currency, Currency):
-        raise TypeError(
-            f"currency must be a Currency, got {type(currency).__name__}: {currency!r}"
-        )
+    _require_currency(currency)
     total = _require_total(total_cents, currency)
     ordered, values = _ordered_from_mapping(amounts, "amount")
     allocated = sum(values)
@@ -254,6 +243,28 @@ def _formatted(cents: int, currency: Currency) -> str:
     may not import the web layer, but they go through the same one function.
     """
     return format_amount(Money(cents, currency))
+
+
+def _require_currency(value: object) -> Currency:
+    """Return ``value`` if it is a ``Currency``, else raise ``TypeError``.
+
+    Called on the first line of all three resolvers, before the total is looked at, so a
+    wrong currency is a ``TypeError`` a programmer sees rather than an ``InvalidSplit``
+    dressed up as somebody's rejected entry. Ordering is the whole point of the call
+    site: ``_require_total`` reaches ``_formatted`` on a refusable total, and ``Money``
+    would reject the same currency a moment later with a message of its own, so without
+    this the resolver would refuse in the right family for the wrong reason.
+
+    Body and message are ``balances.py::_require_currency``'s, deliberately and to the
+    character. The two cannot share code: neither domain module may import the other,
+    which is what ``test_split_imports_only_money_and_events_from_the_package`` holds
+    ``split.py`` to. Same compulsion as ``_formatted`` and ``web.py::_amount``.
+    """
+    if not isinstance(value, Currency):
+        raise TypeError(
+            f"currency must be a Currency, got {type(value).__name__}: {value!r}"
+        )
+    return value
 
 
 def _require_total(total_cents: object, currency: Currency) -> int:
