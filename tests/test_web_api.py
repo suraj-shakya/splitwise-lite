@@ -2244,8 +2244,18 @@ def test_a_route_outside_the_api_prefix_is_refused_by_the_audit_too(app) -> None
 def test_a_declared_route_the_app_does_not_serve_is_refused() -> None:
     # An equality in both directions: a table claiming a route nobody registered is
     # as much a failure as a route no table declares.
+    #
+    # The withheld row is chosen by endpoint, not by position. It used to be
+    # ``_API_ROUTES[:-1]``, which made this test's subject whichever row happened to
+    # sit last, so appending a route repointed it at the new endpoint and it stayed
+    # green while asserting about something it was never written about. It also
+    # handed everyone who adds a route an obligation nothing enforced: keep the debts
+    # row last. Selecting by name retires both.
+    withheld = "read_debt"
+    declared = [row for row in web._API_ROUTES if row.endpoint != withheld]
+    assert len(declared) == len(web._API_ROUTES) - 1, withheld
     bare = web.flask.Flask(__name__, static_folder=None)
-    for row in web._API_ROUTES[:-1]:
+    for row in declared:
         bare.add_url_rule(row.rule, row.endpoint, row.view, methods=list(row.methods))
     for rule, endpoint, view, methods in web._SHELL_ROUTES:
         bare.add_url_rule(rule, endpoint, view, methods=list(methods))
