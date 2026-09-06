@@ -806,6 +806,74 @@ def shell_digest(
     return running.hexdigest()[:12]
 
 
+def recorded_digest() -> str:
+    """The digest `app/sw.js` currently claims, read straight out of the source."""
+    source = (APP / "sw.js").read_text(encoding="utf-8")
+    found = re.findall(r"var SHELL_DIGEST = '([0-9a-f]{12})';", source)
+    assert len(found) == 1, (
+        "app/sw.js declares SHELL_DIGEST exactly once, as twelve lowercase hex "
+        f"characters in single quotes. Found {len(found)}."
+    )
+    return found[0]
+
+
+def stale_digest_message(recorded: str, computed: str) -> str:
+    """What the enforcing test says when the recorded value has gone stale.
+
+    Written for somebody who has just edited `app/app.js`, has never opened
+    `app/sw.js`, and has no reason to know what a service worker precache is. It
+    says what is wrong, what it costs, and the one line to change. If reading it
+    does not make the fix obvious, the message is the thing to improve.
+    """
+    return (
+        f"app/sw.js records the shell as '{recorded}'.\n"
+        f"The files in app/ now come to '{computed}'.\n"
+        "\n"
+        "So one of the files the app keeps a copy of has changed, and the cache "
+        "name in app/sw.js has not. Every browser that has already installed this "
+        "app keeps its own copy of the shell files, filed under that cache name, "
+        "and serves that copy without asking the server again. Until the name "
+        "changes, everyone who already has the app goes on getting the old files, "
+        "your change reaches nobody, and nothing anywhere reports an error. That "
+        "has happened twice in this repo, and both times it looked like success.\n"
+        "\n"
+        "Fix it by changing one line in app/sw.js to read exactly:\n"
+        "\n"
+        f"    var SHELL_DIGEST = '{computed}';\n"
+        "\n"
+        "That is the whole fix, and it is the whole of what this test is asking "
+        "for. VERSION needs bumping only if you changed how the worker itself "
+        "behaves; editing a file under app/ is not that, so leave VERSION where "
+        "it is.\n"
+        "\n"
+        "This does not know which files changed: it is one number over all of "
+        "them together. `git status app/` will tell you."
+    )
+
+
+def test_the_cache_name_is_built_from_the_version_and_the_digest() -> None:
+    # A SHELL_DIGEST that the cache name does not use is an inert constant, and the
+    # whole mechanism would be decorative: the value would still have to be pasted
+    # in to go green, and every installed client would still be served the old shell
+    # out of a cache whose name never moved. The name is what the browser keys on,
+    # so the digest has to be in the name.
+    source = (APP / "sw.js").read_text(encoding="utf-8")
+    assert (
+        "var CACHE = 'splitwise-lite-shell-' + VERSION + '-' + SHELL_DIGEST;" in source
+    )
+    assignments = re.findall(r"^\s*(?:var )?CACHE = .*$", source, re.M)
+    assert len(assignments) == 1, assignments
+
+
+def test_the_recorded_digest_matches_the_files_it_covers() -> None:
+    # The one test this whole section exists for. pytest.fail rather than a bare
+    # assert, so the reader gets the prose and not a two-string repr diff.
+    recorded = recorded_digest()
+    computed = shell_digest()
+    if recorded != computed:
+        pytest.fail(stale_digest_message(recorded, computed))
+
+
 def test_the_digest_refuses_an_entry_it_cannot_classify() -> None:
     # Nothing under app/ has an unknown extension today. When something does, the
     # digest must not guess: a text file hashed raw is machine-dependent, and a
