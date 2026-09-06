@@ -103,7 +103,7 @@ pin them.
 ## The decision: what replaces the inverted test
 
 Deleting the test and putting nothing back leaves nothing guarding the documents, and the
-hazard is real: five backlog features are open, and the natural next mistake is a
+hazard is real: backlog features are open, and the natural next mistake is a
 document that promises one of them. So something replaces it. The shape matters more than
 the fact.
 
@@ -178,7 +178,7 @@ written into the entry's own reason rather than papered over.
 
 `CLAUDE.md` and `README.md` describe the app that exists: three screens that read the
 live ledger behind a sign-in gate, what still needs `setup_group.py` and a linked account
-before anything shows, and the five backlog capabilities that genuinely do not exist yet.
+before anything shows, and the backlog capabilities that genuinely do not exist yet.
 The test that required the word `placeholder` is gone, replaced by a guard whose subject
 is the relation between what the documents claim and what is in `app/`, so a claim
 without machinery and machinery without a claim are both red.
@@ -446,9 +446,10 @@ establish the replacement guard actually bites.
       and a reason naming `test_the_api_client_offers_exactly_the_named_calls` as the
       mechanism that covers them, because a client call is the only way any of them can
       reach the server. Each reason states plainly that this is a **prompt** and not an
-      **interlock**: the surface test goes red and its message names both lists, but one
-      string added to `API_SURFACE` clears that red with both documents left stale, so
-      the failure message is the whole of the enforcement.
+      **interlock**, and states both limits on it: one string added to `API_SURFACE`
+      clears the red with both documents left stale, and the red only comes at all if
+      the capability arrives as a new top-level key. A reason that says the capability
+      cannot arrive without a new name does not meet this criterion.
     * `The incompleteness signal`: no substring rule, and a reason saying plainly that
       nothing in the suite would catch this one and why.
 
@@ -469,9 +470,20 @@ establish the replacement guard actually bites.
     > one string; for `The incompleteness signal` there is nothing at all, which its own
     > line has always said. So the whole of this task's enforcement should be read as a
     > two-way pin between the two documents and the literal, plus a prompt for three
-    > capabilities and silence for a fourth. Restoring an interlock needs a substring a
-    > capability cannot arrive without, and for the four that remain no such substring is
-    > knowable in advance.
+    > capabilities and silence for a fourth.
+    >
+    > **Amended again 2026-09-07, after the second review.** This paragraph ended
+    > "Restoring an interlock needs a substring a capability cannot arrive without, and
+    > for the four that remain no such substring is knowable in advance." That was an
+    > unchecked guarantee of the kind this whole task exists to remove, and the reasons
+    > it summarised carried the same one. QA disproved it by building the capability
+    > rather than arguing about it: a void route reached through the existing
+    > `addExpense` key left `test_the_api_client_offers_exactly_the_named_calls`
+    > silent. Re-run here against this suite's own parse, the key set stayed at
+    > fourteen, unchanged, so nothing fires. The prompt is therefore conditional on
+    > house style and not guaranteed, which the requirement above now demands each
+    > reason say. What an interlock would need in future is left unstated here, because
+    > it has not been worked out and asserting it was the error.
 25. Each of the five tests fails with prose rather than a bare assertion. QA reads all
     five messages while performing criteria 29 to 32 and confirms each says which file is
     wrong, what was expected, and what to do next: if the capability landed, move its
@@ -650,12 +662,29 @@ rediscovered a third time.
    task 12 branch is adding its own block to this same file"; `app/app.js:680` and
    `app/app.js:684` say "two sibling branches are editing this same file" and "which both
    sibling branches also need"; `app/app.js:1259` repeats it; `app/sw.js:4` says "task
-   10's data cannot go stale". All three tasks landed. The comments that name *open*
-   tasks are accurate and stay: `app/app.js:150` (tasks 16 and 17), `app/app.js:1524`
-   and `app/index.html:240` (tasks 13 and 16), `app/app.js:1654` (task 14). Any fix moves
-   `SHELL_DIGEST`, so the issue should say so and expect the pasted line.
+   10's data cannot go stale". All three tasks landed. Every line number in that list
+   was re-checked on 2026-09-07 against `70f41d3` and each still points at the comment
+   named.
+
+   The comments that name *open* tasks are accurate and stay. Re-checked the same day,
+   because #56 moved most of this file: `app/app.js:150` (tasks 16 and 17),
+   `app/index.html:240` (task 16), `app/app.js:376` and `:377` (task 16),
+   `app/app.js:2198` (task 16), and `app/app.js:2077`, `:2086` and `:2144` (task 14).
+   `app/app.js:1524` and `app/index.html:255` describe task 13 in the past tense, which
+   is accurate now that it has shipped. Any fix moves `SHELL_DIGEST`, so the issue should
+   say so and expect the pasted line.
+
+   > **Corrected 2026-09-07, after the second review of PR #59.** The open-task list read
+   > "`app/app.js:150` (tasks 16 and 17), `app/app.js:1524` and `app/index.html:240`
+   > (tasks 13 and 16), `app/app.js:1654` (task 14)". Two things were wrong after #56.
+   > Task 13 is not open, and the comment at `app/app.js:1524` now describes it as
+   > landed. And `app/app.js:1654` is `balancesNetRow`, not a task 14 comment; the task
+   > 14 comments moved to 2077, 2086 and 2144. The first half of this finding, the
+   > merged-branch comments, was checked line by line and needed no change.
 2. **`plans/tasks/49-continuous-integration.md` criterion 23 pins `2061 passed`** and
-   criterion 45 pins the same number. The suite is at 2172. That file is a record and
+   criterion 45 pins the same number, and `plans/tasks/49-continuous-integration.md:57`
+   says "the suite is 2061 tests"; all three were re-checked on 2026-09-07. The suite is
+   at 2227. That file is a record and
    should not be rewritten, but a reader running its criteria today will get a false
    negative. Worth one line in that file saying the count was correct on the day, or
    worth leaving alone deliberately. Raised, not decided.
@@ -699,12 +728,19 @@ that is believed to work, which is the same category of thing as the test it rep
 
 ## Deviations
 
-The suite count is one of them now, and deviation 5 says why. `uv run python -m pytest`
-reports `2227 passed`, with nothing skipped and nothing xfailed; criterion 35 predicts
-`2176`, a figure computed against a `master` that has since moved twice. What follows is
-five places where a criterion's wording and the observed result differ. Four of them
-changed no criterion and are the record of what running them produced. The fifth did
-change six, under an explicit instruction, and says so.
+The suite count is not one of them. `uv run python -m pytest` reports `2227 passed`,
+with nothing skipped and nothing xfailed, which is what criterion 35 now predicts; the
+figure it predicted before, `2176`, was computed against a `master` that has since moved
+twice, and criterion 35 was amended to match. What follows is five places where a
+criterion's wording and the observed result differ. Four of them changed no criterion and
+are the record of what running them produced. The fifth changed nine, across two rounds,
+each under an explicit instruction, and says so.
+
+> **Corrected 2026-09-07, after the second review of PR #59.** This paragraph said "The
+> suite count is one of them now" and "criterion 35 predicts `2176`". It was written
+> while 35 still said 2176 and was not revisited when 35 was amended to 2227 in the same
+> round. With 35 amended the count matches the observed run, so it is not a deviation at
+> all.
 
 1. **Criterion 30 turns one test red, not two.** The probe adds a sixth bullet,
    `**Recurring expenses**`, to `CLAUDE.md`'s first list only, so only
@@ -724,8 +760,17 @@ change six, under an explicit instruction, and says so.
    the content its own sub-bullets require. `Install and open offline` alone has to carry
    the home screen, the offline shell, the `localhost` restriction, the uncached API, the
    message that follows and the expense that cannot be recorded. Every bullet in both
-   documents is written as tightly as that content allows and runs to three or four
-   wrapped lines. Nothing in the suite pins bullet length.
+   documents is written as tightly as its own content allows, and the lengths that
+   produces were counted on 2026-09-07 rather than estimated: one line at the shortest
+   (`Mark as paid` in `CLAUDE.md`) and six at the longest (`Transfer drill-down`, six in
+   each file), with most at three or four. Nothing in the suite pins bullet length.
+
+   > **Corrected 2026-09-07, after the second review of PR #59.** This deviation said
+   > every bullet "runs to three or four wrapped lines". That was true of the ten bullets
+   > it was written against and is not true now: `Transfer drill-down` arrived at six
+   > lines with criterion 4's amendment, and `Mark as paid` is one. The deviation's
+   > substance, that criterion 4's "one or two lines" is unreachable, is unaffected and
+   > is in fact made stronger by the six-line bullet.
 
 4. **Criterion 22's "the word `placeholder` is asserted by nothing anywhere in the
    suite"** is satisfied for the documents, which is what the criterion is about: no test
@@ -748,9 +793,11 @@ change six, under an explicit instruction, and says so.
    a true assertion about markup would be a loss, not because a criterion protects it.
    (`tests/test_balances.py:1648` uses the word in a comment and asserts nothing.)
 
-5. **Criteria 4, 6, 7, 8, 24 and 35 were overtaken by a merge, and the branch was rebased
-   onto it.** They were written against `8651b9d`, where `.debt(` was genuinely absent
-   from `app/app.js`. #56 landed backlog task 13 and put it there. Rebasing onto
+5. **Nine criteria were overtaken by a merge, and the branch was rebased onto it.**
+   Criteria 4, 6, 7, 8, 24 and 35 in the first amendment round; 15, 30 and 32 in the
+   second, after a review and a QA pass each found more of the same. They were written
+   against `8651b9d`, where `.debt(` was genuinely absent from `app/app.js`. #56 landed
+   backlog task 13 and put it there. Rebasing onto
    `70f41d3` turned `test_nothing_the_documents_call_missing_is_in_the_shell` red, which
    is this task's guard doing the exact thing this task exists to make it do, so the
    capability was moved rather than the rule weakened or deleted. Six criteria went false
@@ -780,8 +827,26 @@ change six, under an explicit instruction, and says so.
    * Criterion 35 read `2176 passed` and now reads `2227 passed`: `70f41d3` reports
      `2223`, and this branch deletes one test and adds five.
 
-   **All six were amended on 2026-09-07, in place, each with a dated marker quoting the
-   wording it replaced.** That was escalated first and not done unilaterally. The task
+   The second round added three. **Criterion 15** said `README.md` carries "the same
+   five backlog citations"; there are four, and both files were re-parsed to confirm it.
+   **Criterion 30** described its probe as adding a sixth bullet, which is a seventh once
+   criterion 4 gained one, and it also claimed two tests go red where deviation 1 has
+   recorded since the first run that only one does. **Criterion 32** described a probe
+   that can no longer produce its stated result: adding an `api.debt(` call now leaves
+   `test_nothing_the_documents_call_missing_is_in_the_shell` green, because criterion 24
+   requires that substring present. The rule survives inverted and criterion 32 now
+   describes the inverted probe, which was run here before the criterion was rewritten.
+
+   Two markers written in the first round were themselves wrong and are corrected in
+   place. Criterion 7's said backlog task 13's citation "goes with its bullet into
+   `What works today`"; it was dropped, and that false account is what concealed
+   criterion 15's stale count. Criterion 4's said "the other five sub-bullets are
+   untouched"; four are, since one was added and one amended. A marker is not exempt from
+   the standard it enforces, and these two were the defect this task exists to fix
+   appearing inside this task's own audit trail.
+
+   **All nine were amended in place, each with a dated marker quoting the wording it
+   replaced.** That was escalated first and not done unilaterally. The task
    file for a branch is authored on that branch, so an engineer editing the criteria
    their own work is judged against removes the only independence the process has, and
    the right default is to flag a false criterion and stop. The amendment was made only
@@ -797,6 +862,17 @@ change six, under an explicit instruction, and says so.
    Criterion 24's marker carries one thing that is not bookkeeping, and it is recorded
    there rather than only in the literal because a guard described as stronger than it is
    would be this issue's own defect one level up: **nothing left in `NOT_YET` is an
-   interlock.** `Transfer drill-down` was the only one and it has been spent. What
-   remains is a two-way pin between the two documents and the literal, a prompt for three
-   capabilities, and silence for a fourth.
+   interlock.** `Transfer drill-down` was the only one and it has been spent.
+
+   That conclusion was right and still too generous, which QA established by building the
+   capabilities rather than reasoning about them. The three entries called prompts rest
+   on `test_the_api_client_offers_exactly_the_named_calls`, and their reasons claimed a
+   capability "cannot arrive without" a new `API_SURFACE` name. It can. QA reached a void
+   route through the existing `addExpense` key and the surface test never fired; the same
+   probe was re-run here against this suite's own parse on 2026-09-07 and the key set
+   stayed at fourteen, unchanged. So the prompt is conditional on house style, not
+   guaranteed, and all four reasons plus the vocabulary above `NOT_YET` now say so. What
+   remains is an exact two-way pin between the two documents and the literal, asserted on
+   every push; a prompt for three capabilities that an implementer can route around
+   without noticing; and silence for a fourth. Nothing in this task now claims a
+   capability cannot arrive without a new name.
