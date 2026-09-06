@@ -1366,7 +1366,6 @@ def test_the_transfer_row_is_a_disclosure_and_nothing_hand_rolled() -> None:
         "createElement('a')",
         "createElement('details')",
         "createElement('summary')",
-        "setAttribute('role'",
         "tabindex",
         "addEventListener('keydown'",
         "addEventListener('keyup'",
@@ -1376,6 +1375,24 @@ def test_the_transfer_row_is_a_disclosure_and_nothing_hand_rolled() -> None:
         "onclick",
     ):
         assert forbidden not in region, forbidden
+    # `role` is the one item on that list this test reasons about rather than
+    # forbids outright. A ban on the byte sequence forbade what criterion 51
+    # requires this region to ship, a role="status" live region in every debt
+    # region, and the answer to that is not to spell the attribute through a
+    # variable: an indirection is a hole in the ban, and it takes the word out of
+    # the source where a reader and a grep both look for it. So the rule is the one
+    # the ban always meant. Every attribute here is named by a literal, which is
+    # what makes the source readable in full, and the only role this region sets is
+    # `status`. An interactive role hand-set on a div still cannot get in, and now
+    # neither can a double-quoted, templated or aliased spelling of one.
+    for named in re.findall(r"setAttribute\(\s*([^,]+),", region):
+        assert re.fullmatch(r"'[a-z-]+'", named.strip()), named
+    for value in re.findall(
+        r"""setAttribute\(\s*['"`]role['"`]\s*,\s*([^)]*)\)""", region
+    ):
+        assert value.strip() == "'status'", value
+    # The property form of the same act, which no rule about setAttribute can see.
+    assert re.search(r"\.role\s*=", region) is None
 
 
 def test_the_drill_down_never_moves_focus() -> None:

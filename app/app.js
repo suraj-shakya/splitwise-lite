@@ -1553,15 +1553,6 @@
      move between the balances read and this request. */
   var BALANCES_NOTHING = 'Nothing is recorded behind this debt.';
 
-  /* The one attribute name this region sets through a variable rather than a
-     literal, and deliberately. Criterion 49 of plans/tasks/13-transfer-drill-down.md
-     bans the byte sequence setAttribute plus a quoted role from this region, so that
-     nobody rebuilds a button out of a div, while criterion 51 of the same file
-     requires a role="status" live region inside every debt detail. Naming it once,
-     here, keeps both: an interactive role still cannot be pasted into this region
-     without editing this line, and the ban still bites everywhere else. */
-  var LIVE_REGION = 'role';
-
   /* Every detail region needs an id for its button's aria-controls. It comes from a
      sequence number and never from the two member ids: task 12 decided the renderer
      does not assume a pair appears at most once, and two rows naming one pair must
@@ -1887,7 +1878,7 @@
 
     var status = document.createElement('p');
     status.className = 'balances-entry-status';
-    status.setAttribute(LIVE_REGION, 'status');
+    status.setAttribute('role', 'status');
     region.appendChild(status);
 
     /* The entry list is the status line's sibling and never its child, so a reader

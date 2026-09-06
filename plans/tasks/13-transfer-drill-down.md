@@ -794,8 +794,31 @@ reading a file or running the suite.
 
 49. Both controls are real `<button type="button">` elements. The balances region contains no
     `createElement('a')`, `createElement('details')`, `createElement('summary')`,
-    `setAttribute('role'`, `tabindex`, `onclick`, and no `keydown`, `keyup`, `keypress`,
-    `pointerdown` or `touchstart` listener.
+    `tabindex`, `onclick`, and no `keydown`, `keyup`, `keypress`, `pointerdown` or
+    `touchstart` listener. Every `setAttribute` in the region names its attribute with a
+    single-quoted literal, every `setAttribute('role', X)` has `X` equal to `'status'`, and
+    the region assigns no `.role` property.
+
+    > **Amended 2026-09-06, after the first review of PR #56.** The list above used to hold
+    > `setAttribute('role'` as a twelfth banned byte sequence, alongside the others. That
+    > contradicted criterion 51 of this same file, which requires a `role="status"` live
+    > region inside every debt region: markup cannot ship a region built at run time, so the
+    > shipped code has to set that role, and the ban forbade the only way to do it.
+    >
+    > The first fix was an indirection, `var LIVE_REGION = 'role';`, which satisfied the
+    > letter of the ban and was the wrong answer. It made the ban weaker, not stronger:
+    > `setAttribute(LIVE_REGION, 'button')` passed it, so anyone rebuilding a button out of a
+    > div had a sanctioned, documented way through. The ban was porous before that anyway,
+    > blind to `setAttribute("role"` with double quotes, to a template literal and to
+    > `el.role = 'button'`. And it bought nothing, because what criterion 49 actually means is
+    > asserted behaviourally and is unaffected: `button.tagName === 'BUTTON'`,
+    > `button.type === 'button'`, and a transfer region's children each reporting a `role` of
+    > `null`.
+    >
+    > So the ban moves to what it always meant. Forbidding a hand-set interactive role is kept
+    > and widened, permitting the one role criterion 51 requires is added, and the word `role`
+    > stays in `app/app.js` where a reader and a grep can both find it. The literal-attribute
+    > rule is what closes the indirection for good. Criterion 70 carries the same change.
 50. The balances region contains no `.focus(`. Focus is never moved by this task, in either
     direction, and no scenario asserts focus movement.
 51. Each debt region holds exactly one `role="status"` element, holding only the waiting,
@@ -878,9 +901,17 @@ reading a file or running the suite.
     `balances-drill-hint` so `test_the_balances_section_carries_every_id_the_screen_toggles`
     passes.
 70. `test_no_transfer_row_pretends_to_be_tappable` is **replaced** by a test whose name says
-    what is now true, keeping exactly the bans of criterion 49 and dropping exactly three:
-    `createElement('button')`, `aria-expanded` and `addEventListener('click'`. Its comment
-    records that the row is now a disclosure and why the list shrank.
+    what is now true, carrying exactly criterion 49 as amended: the ten remaining bans, the
+    literal-attribute rule, the `role` value rule and the `.role` property rule. Three of task
+    12's bans are dropped: `createElement('button')`, `aria-expanded` and
+    `addEventListener('click'`. Its comment records that the row is now a disclosure, why the
+    list shrank, and why `role` is reasoned about rather than forbidden.
+
+    > **Amended 2026-09-06, after the first review of PR #56.** This line used to read
+    > "keeping exactly the bans of criterion 49 and dropping exactly three". Criterion 49 no
+    > longer bans `setAttribute('role'` outright, for the reasons recorded under it, so this
+    > one changes with it: the same test, one absence swapped for three rules that say what
+    > that absence was for. The three dropped bans are unchanged, and no other ban moves.
 71. `test_nothing_asks_for_provenance_that_is_not_in_the_payload` is **deleted**. It asserts
     the opposite of this task. It is not renamed, not kept alongside and not xfailed.
 72. `test_the_balances_block_offers_no_affordance_that_does_nothing` is **replaced** by a test
