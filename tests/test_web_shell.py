@@ -817,17 +817,23 @@ def recorded_digest() -> str:
     return found[0]
 
 
-def stale_digest_message(recorded: str, computed: str) -> str:
+def stale_digest_message(recorded: str, computed: str, covered: int) -> str:
     """What the enforcing test says when the recorded value has gone stale.
 
     Written for somebody who has just edited `app/app.js`, has never opened
     `app/sw.js`, and has no reason to know what a service worker precache is. It
     says what is wrong, what it costs, and the one line to change. If reading it
     does not make the fix obvious, the message is the thing to improve.
+
+    `covered` is how many files the digest is taken over, passed in rather than
+    written into the prose. Saying "the files in app/" would be wrong: app/sw.js is
+    in app/, is not one of them, and is the very file the reader is being sent to
+    edit. Anybody chasing that would have to open a second file to find out which
+    set is meant, which is the one thing this message exists not to require.
     """
     return (
         f"app/sw.js records the shell as '{recorded}'.\n"
-        f"The files in app/ now come to '{computed}'.\n"
+        f"The {covered} files it precaches now come to '{computed}'.\n"
         "\n"
         "So one of the files the app keeps a copy of has changed, and the cache "
         "name in app/sw.js has not. Every browser that has already installed this "
@@ -871,7 +877,7 @@ def test_the_recorded_digest_matches_the_files_it_covers() -> None:
     recorded = recorded_digest()
     computed = shell_digest()
     if recorded != computed:
-        pytest.fail(stale_digest_message(recorded, computed))
+        pytest.fail(stale_digest_message(recorded, computed, len(precache_entries())))
 
 
 def test_the_digest_refuses_an_entry_it_cannot_classify() -> None:
