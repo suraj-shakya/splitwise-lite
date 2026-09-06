@@ -505,8 +505,18 @@ def test_a_bad_currency_is_a_type_error_even_when_the_total_is_refusable(
     resolve, currency: object
 ) -> None:
     """The currency is checked before anything else, so a programming error never
-    arrives at the screen dressed as rejected user input."""
-    with pytest.raises(TypeError):
+    arrives at the screen dressed as rejected user input.
+
+    The message is pinned, and anchored, because without both this test cannot fail
+    for the reason its name gives. Delete the resolver's own guard and a refusable
+    total still reaches ``_formatted``, where ``Money`` rejects the same currency, so
+    a bare ``pytest.raises(TypeError)`` goes green on somebody else's refusal and the
+    ordering this test exists for is asserted nowhere. ``match`` is an ``re.search``,
+    and ``Money`` says ``Money currency must be a Currency, ...``, which *contains*
+    the resolver's sentence: the leading ``^`` is the whole of what tells the two
+    apart. This is also the one test that pins the guard's wording in every mode.
+    """
+    with pytest.raises(TypeError, match=r"^currency must be a Currency"):
         resolve(0, currency)
 
 
