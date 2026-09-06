@@ -116,6 +116,16 @@ SCENARIOS = [
     "a_roster_without_the_acting_member_defaults_to_the_first_one",
     "switching_modes_twice_still_names_every_member_once",
     "a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives",
+    # A screen that waits for a session, and a draft that survives signing back in
+    "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone",
+    "a_route_change_behind_the_not_linked_notice_asks_for_nothing",
+    "a_route_change_under_a_curtain_a_live_session_raised_asks_for_nothing",
+    "a_route_change_with_no_api_client_loaded_asks_for_nothing",
+    "the_retry_controls_behind_the_gate_ask_for_nothing",
+    "an_interrupted_save_keeps_what_was_typed_through_signing_back_in",
+    "an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows",
+    "signing_out_clears_the_draft_before_the_next_person_signs_in",
+    "a_sign_out_the_server_refuses_leaves_the_draft_alone",
 ]
 
 # The three mutants the harness is measured against, as anchored substitutions applied
@@ -164,6 +174,26 @@ MUTANT_C = {
     "file": "app/api.js",
     "find": "return 'refused';",
     "replace": "return '';",
+}
+# Mutant D: the feed goes back to asking only whether the client has loaded, which is
+# what all three screens asked before there was a session guard, and is defect 1 in
+# the shape it shipped in. The app still works for somebody signed in; what comes back
+# is one screen reading the ledger while a curtain is over it, and a request certain to
+# be refused going out on every route change made by somebody who is signed out.
+MUTANT_D = {
+    "file": "app/app.js",
+    "find": "if (!ledgerIsUp() || window.location.hash !== FEED_ROUTE || feedBusy) {",
+    "replace": "if (!api || window.location.hash !== FEED_ROUTE || feedBusy) {",
+}
+# Mutant E: showApp() clears the add form again, which is defect 2 exactly. A curtain
+# coming down is treated as a visit to the screen, so the draft the 401 correctly
+# preserved is thrown away by the person doing the one thing the gate is telling them
+# to do. Every other screen behaves, and so does the add screen on a real navigation:
+# only the resume is wrong, which is why a scenario that navigates cannot see it.
+MUTANT_E = {
+    "file": "app/app.js",
+    "find": "addResumed();",
+    "replace": "addEntered();",
 }
 
 REFUSED = "a_refused_sign_in_tells_the_person_why"
@@ -382,6 +412,38 @@ def test_mutant_c_a_classifier_that_drops_what_it_does_not_recognise_is_killed()
     # client and nowhere else, so that is the only place a mutation of it can land.
     loaded = loaded_under(MUTANT_C)
     assert loaded["app/app.js"] == (REPO / "app" / "app.js").read_text(encoding="utf-8")
+
+
+# The two scenarios that stand or fall with the mutants below. Neither turns red on
+# master, because neither defect was pinned by anything before them: a new scenario
+# that passes proves nothing on its own, and these two mutants are what prove it bites.
+BEHIND_THE_GATE = "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone"
+THE_DRAFT = "an_interrupted_save_keeps_what_was_typed_through_signing_back_in"
+
+
+def test_mutant_d_a_screen_that_only_checks_the_client_loaded_is_killed() -> None:
+    found = killed(MUTANT_D)
+    assert not found[BEHIND_THE_GATE]["passed"]
+    messages = " ".join(found[BEHIND_THE_GATE]["failures"])
+    # The right failure, not a coincidence: the feed asked the server for the ledger
+    # on a route change made by somebody who is looking at the sign-in gate.
+    assert "GET /api/expenses" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # One screen broken, not the app: the other two still wait for a session, and
+    # somebody signed in still gets their feed.
+    assert found["boot_with_a_linked_session_shows_the_app"]["passed"]
+
+
+def test_mutant_e_clearing_the_draft_when_the_curtain_lifts_is_killed() -> None:
+    found = killed(MUTANT_E)
+    assert not found[THE_DRAFT]["passed"]
+    messages = " ".join(found[THE_DRAFT]["failures"])
+    # The right failure: the amount that was typed is gone from the field.
+    assert "#add-amount" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # A navigation still clears, which is what makes this a resume defect rather than
+    # a clearing that stopped happening altogether.
+    assert found["leaving_add_and_coming_back_starts_a_fresh_entry"]["passed"]
 
 
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------

@@ -3232,6 +3232,319 @@ const SCENARIOS = [
         'GET /api/members'
       ]);
     }
+  },
+  /* --- Task 43: a screen waits for a session, and a draft survives signing back
+         in ------------------------------------------------------------------ */
+
+  {
+    /* Three route changes with the gate up. Nothing is read, focus stays in the
+       gate, and the sentence the server sent about the refused sign-in is still
+       there to read afterwards: a request nobody asked for takes a 401, and that
+       401 blanks #gate-error and refocuses #gate-title on its way past, so a person
+       who pressed Back would lose what they had just been told. Everything render()
+       does apart from moving focus is unchanged, which is why the screens, the tab
+       and the title are asserted here as well. */
+    name: 'a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone',
+    async run(page) {
+      page.respond('GET', '/session', noSession());
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.is(
+        page.el('gate-error').textContent,
+        REFUSED,
+        '#gate-error text before the route changes'
+      );
+      /* Set directly, so the claim that the add screen left it alone is falsifiable:
+         a screen that cleared it would otherwise be indistinguishable from one that
+         never ran at all. */
+      page.el('add-amount').value = '12.50';
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      page.same(visibleScreens(page), ['screen-balances'], 'the screens on show');
+      page.same(currentTabs(page), ['#/balances'], 'aria-current');
+      page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
+      await page.goTo('#/feed');
+      gateIsUp(page, 'after three route changes behind the gate');
+      page.is(page.focused, page.el('gate-title'), 'focus');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, REFUSED, '#gate-error text');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.same(visibleScreens(page), ['screen-feed'], 'the screens at the end');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
+    }
+  },
+
+  {
+    /* The same three route changes with the not-linked notice up. A session view is
+       held here and it carries no member, which is what says no: every endpoint
+       these three screens read refuses an account nobody has linked, by name. */
+    name: 'a_route_change_behind_the_not_linked_notice_asks_for_nothing',
+    async run(page) {
+      page.respond('GET', '/session', ok(NO_MEMBER));
+      await page.boot();
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      await page.goTo('#/feed');
+      noticeIsUp(page, 'unlinked', 'three route changes behind the notice', true);
+      page.is(
+        page.global('window.SplitwiseApi.cachedSession().member'),
+        null,
+        'the cached session view carries no member'
+      );
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* The case a session check on its own cannot catch. A 500 raises a curtain and
+       leaves the cached session view exactly where it was, which is api.js's
+       decision and stands, so this client still holds a live and linked session
+       while nobody can see the ledger. What refuses the three reads here is that
+       show() last raised a notice, and nothing else would. */
+    name: 'a_route_change_under_a_curtain_a_live_session_raised_asks_for_nothing',
+    async run(page) {
+      page.startAt('#/balances');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(EMPTY_ROSTER));
+      page.respond('GET', '/balances', serverError());
+      await page.boot();
+      noticeIsUp(page, 'problem', 'a 500 answering the balances read', true);
+      await page.goTo('#/feed');
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      noticeIsUp(page, 'problem', 'three route changes under the curtain', true);
+      page.is(
+        page.el('notice-problem').textContent,
+        GENERIC_500,
+        '#notice-problem text'
+      );
+      page.is(
+        page.global('window.SplitwiseApi.cachedSession().member.id'),
+        'mem-1',
+        'the session this curtain went up over is still live and still linked'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* With no client there is nothing to ask and nothing to ask it with. Whether one
+       is loaded is read before anything is read off it, so a hashchange that arrives
+       before the client has loaded, or after it has failed to load at all, returns
+       rather than throwing on its way to the offline curtain. */
+    name: 'a_route_change_with_no_api_client_loaded_asks_for_nothing',
+    async run(page) {
+      page.absent('api.js');
+      await page.boot();
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      await page.goTo('#/feed');
+      noticeIsUp(page, 'offline', 'three route changes with no client', false);
+      page.is(page.global('typeof window.SplitwiseApi'), 'undefined', 'SplitwiseApi');
+      page.expectRequests([]);
+    }
+  },
+
+  {
+    /* Both retry controls, each clicked while its own screen's route is the current
+       one, so the route guard cannot be what refuses them and the session guard is
+       what does. Neither read even reaches its in-flight state. */
+    name: 'the_retry_controls_behind_the_gate_ask_for_nothing',
+    async run(page) {
+      page.respond('GET', '/session', noSession());
+      await page.boot();
+      await page.dispatch(page.el('feed-retry'), 'click');
+      await page.goTo('#/add');
+      await page.dispatch(page.el('add-roster-retry'), 'click');
+      gateIsUp(page, 'after both retry controls behind the gate');
+      page.is(page.focused, page.el('gate-title'), 'focus');
+      page.is(page.el('feed-loading').hidden, true, '#feed-loading');
+      page.same(addRosterStates(page), [false, false, false], 'the roster states');
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* The 401 keeps everything typed, which is today's behaviour and is pinned here
+       at the mid-point. Then the person does the one thing the gate is telling them
+       to do, and it is all still there afterwards: the curtain coming down on a
+       screen they never left is not a visit to it. The roster is read again and the
+       picker rebuilt, so the marker and the default payer are true for whoever is
+       signed in now. */
+    name: 'an_interrupted_save_keeps_what_was_typed_through_signing_back_in',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(
+        page.el('add-amount').value,
+        '12.50',
+        '#add-amount while the gate is up'
+      );
+      page.is(
+        page.el('add-description').value,
+        'Milk',
+        '#add-description while the gate is up'
+      );
+      page.is(page.el('add-submit').disabled, false, '#add-submit');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'after signing back in');
+      page.is(
+        page.el('add-amount').value,
+        '12.50',
+        '#add-amount after signing back in'
+      );
+      page.is(
+        page.el('add-description').value,
+        'Milk',
+        '#add-description after signing back in'
+      );
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-error').hidden, true, '#add-error');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)', 'Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.el('add-payer').value, 'mem-1', '#add-payer value');
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_MILK },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* What a resume keeps and what it rebuilds, pinned as a decision rather than
+       left as an accident. The mode stays on uneven amounts, because returning it to
+       Equally would silently turn three uneven shares into an even split, which is a
+       wrong ledger entry one tap away; the rows come back empty, because the roster
+       read rebuilds them, and rebuilding is what keeps the marker and the default
+       payer true for whoever is holding the phone now. */
+    name: 'an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.el('add-amount').value = '10.00';
+      await addChooseMode(page, 'add-mode-exact');
+      const shares = addPersonFields(page);
+      shares[0].value = '8.00';
+      shares[2].value = '1.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      /* Held at the mid-point, so "rebuilt empty" below is a change and not a field
+         that was empty all along. */
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['8.00', '', '1.50'],
+        'the typed shares while the gate is up'
+      );
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'after signing back in');
+      page.is(page.el('add-amount').value, '10.00', '#add-amount');
+      page.same(addModeChecks(page), [false, false, true], 'the three mode radios');
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['', '', ''],
+        'the share fields, rebuilt empty'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_UNEVEN_SHORT },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* A visit that really ended takes the draft with it, and a flat shares phones:
+       without this, Sam types an expense, signs out, and Ali signs in to find Sam's
+       amount and description sitting in the form with Ali named as the payer. It is
+       still empty when the next sign-in brings the frame back, because a resume
+       clears nothing and there is nothing left to keep. */
+    name: 'signing_out_clears_the_draft_before_the_next_person_signs_in',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('DELETE', '/session', noContent());
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await addChooseMode(page, 'add-mode-exact');
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+      page.is(page.el('add-amount').value, '', '#add-amount after signing out');
+      page.is(
+        page.el('add-description').value,
+        '',
+        '#add-description after signing out'
+      );
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'the next person signing in');
+      page.is(page.el('add-amount').value, '', '#add-amount');
+      page.is(page.el('add-description').value, '', '#add-description');
+      page.same(
+        addModeChecks(page),
+        [true, false, false],
+        'the three mode radios after signing in'
+      );
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* A sign out the server refused did not end the visit, so it takes nothing with
+       it. The curtain over it is the client's, escalated because the sign out button
+       discards its own rejection and nobody else speaks for this one. */
+    name: 'a_sign_out_the_server_refuses_leaves_the_draft_alone',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('DELETE', '/session', csrfRefused());
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('sign-out'), 'click');
+      noticeIsUp(page, 'problem', 'a refused sign out', true);
+      page.is(page.el('notice-problem').textContent, STALE_FORM, '#notice-problem text');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.is(page.el('add-description').value, 'Milk', '#add-description');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'DELETE', path: '/session', body: NO_BODY }
+      ]);
+    }
   }
 ];
 
