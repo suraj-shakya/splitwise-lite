@@ -72,6 +72,8 @@ const CODES = {
   authenticationFailed: 'authentication_failed',
   memberNotLinked: 'member_not_linked',
   csrfFailed: 'csrf_failed',
+  /* split_exact's refusal, which the add screen shows verbatim. */
+  invalidSplit: 'invalid_split',
   emailAlreadyRegistered: 'email_already_registered',
   internalError: 'internal_error'
 };
@@ -131,6 +133,30 @@ function element(tag, attributes, sink) {
        browser does once a field has been typed into. */
     value: attributes.value === undefined ? '' : attributes.value,
     disabled: attributes.disabled !== undefined,
+
+    /* checked and type are reflected off their attributes the way hidden is, and both
+       are here deliberately rather than incidentally: the guarded proxy refuses a set
+       of any property the stub does not define, and the add screen creates checkboxes
+       and text inputs at run time and sets all three mode radios explicitly when it
+       clears the form. Reflecting checked also means a radio that ships with the
+       attribute reads as checked before a line of app.js has run, which is what makes
+       "equal across everyone is the default in the markup" checkable. */
+    get checked() {
+      return own.attributes.checked !== undefined;
+    },
+    set checked(on) {
+      if (on) {
+        own.attributes.checked = '';
+      } else {
+        delete own.attributes.checked;
+      }
+    },
+    get type() {
+      return own.attributes.type === undefined ? '' : own.attributes.type;
+    },
+    set type(value) {
+      own.attributes.type = String(value);
+    },
 
     get hidden() {
       return own.attributes.hidden !== undefined;
@@ -420,6 +446,12 @@ function jarValue(jar, name) {
    status, ok and json() and nothing else. */
 function ok(payload) {
   return { status: 200, ok: true, json: () => Promise.resolve(payload) };
+}
+
+function created(payload) {
+  /* 201, which is what a recorded expense comes back as. api.js reads status, ok and
+     json() and nothing else, so this is the whole of it. */
+  return { status: 201, ok: true, json: () => Promise.resolve(payload) };
 }
 
 function failure(status, code, message) {
@@ -1106,6 +1138,117 @@ function appIsUp(page, what) {
   curtains(page, 'app', what, true);
 }
 
+/* --- Task 10: the add screen -------------------------------------------- */
+
+/* Three members, in the order the roster endpoint returned them, so a screen that
+   sorted, reversed or deduplicated the list fails on the option order alone. The
+   acting member of A_MEMBER is mem-1, which is also the first member: the payer
+   default is asserted through the body the screen sends, never through the session
+   cache, because issue #37 records that the cache is otherwise only ever asserted
+   null. */
+const ADD_ROSTER = {
+  members: [
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-3', display_name: 'Jo' }
+  ]
+};
+const ADD_ONE_MEMBER = { members: [{ id: 'mem-1', display_name: 'Sam' }] };
+
+/* One 201 body in _expense_view shape, and deliberately not what any scenario types:
+   the confirmation echoes the server or it says nothing, so a screen that rendered
+   the typed text instead fails here. */
+const ADD_CREATED = {
+  expense: {
+    id: 'exp-1',
+    description: 'Milk',
+    amount: '12.50',
+    payer_id: 'mem-1',
+    created_by: 'mem-1',
+    created_at: '2026-09-03T08:00:00.000000',
+    allocations: [
+      { member_id: 'mem-1', amount: '4.17' },
+      { member_id: 'mem-2', amount: '4.17' },
+      { member_id: 'mem-3', amount: '4.16' }
+    ]
+  }
+};
+
+/* split_exact's own refusal, pinned by
+   tests/test_web_api.py::test_exact_amounts_that_do_not_add_up_report_both_figures.
+   Its figures are raw cents against dollars the person typed, and it is still shown
+   word for word: the alternatives are inventing replacement copy for one code, which
+   drifts from web.py the day either changes, or dividing by a hundred in JavaScript,
+   which is the one thing this codebase exists to prevent. Raised as its own issue
+   against src/splitwise_lite/split.py. */
+const ADD_SUM_REFUSED = 'exact amounts sum to 950, not the total 1000';
+
+/* Every body spelled out rather than rebuilt from the values a scenario typed in: a
+   request whose payload is asserted against a copy of the code that built it asserts
+   nothing. Four keys, in this order, and never currency, id, created_at, created_by
+   or now, each of which web.py refuses by name. */
+const ADD_EQUALLY = '{"description":"","amount":"12.50","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
+const ADD_WITHOUT_ALI = '{"description":"","amount":"12.50","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-1","mem-3"]}}';
+const ADD_UNEVEN = '{"description":"","amount":"10.00","payer_id":"mem-1",' +
+  '"split":{"mode":"exact","amounts":{"mem-1":"8.00","mem-3":"2.00"}}}';
+const ADD_UNEVEN_SHORT = '{"description":"","amount":"10.00","payer_id":"mem-1",' +
+  '"split":{"mode":"exact","amounts":{"mem-1":"8.00","mem-3":"1.50"}}}';
+const ADD_DESCRIBED = '{"description":"what was typed","amount":"9.99",' +
+  '"payer_id":"mem-1","split":{"mode":"equal",' +
+  '"member_ids":["mem-1","mem-2","mem-3"]}}';
+const ADD_ALONE = '{"description":"","amount":"12.50","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-1"]}}';
+const ADD_MILK = '{"description":"Milk","amount":"12.50","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
+
+const ADD_MODES = ['add-mode-equal', 'add-mode-some', 'add-mode-exact'];
+
+async function addBoot(page, roster) {
+  /* Every add scenario starts on the add screen, so its request list is the session
+     read and this screen's own roster read, with no feed or balances read involved.
+     That is a screen which reads only on its own route working as designed. */
+  page.startAt('#/add');
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/members', ok(roster));
+  await page.boot();
+}
+
+async function addChooseMode(page, id) {
+  /* What a browser does when a radio in a group is tapped: the group's other radios
+     go unchecked, that one goes checked, and change fires on it. The stub models no
+     radio group, so the scenario does that half rather than the screen doing it. */
+  ADD_MODES.forEach((mode) => {
+    page.el(mode).checked = mode === id;
+  });
+  await page.dispatch(page.el(id), 'change');
+}
+
+function addPayerOptions(page) {
+  return page.el('add-payer').querySelectorAll('option');
+}
+
+function addPersonFields(page) {
+  return page.query('.add-person input');
+}
+
+function addModeChecks(page) {
+  return ADD_MODES.map((id) => page.el(id).checked);
+}
+
+function addRosterStates(page) {
+  return ['add-roster-busy', 'add-roster-error', 'add-empty-roster'].map(
+    (id) => !page.el(id).hidden
+  );
+}
+
+function addErrorsShown(page) {
+  return ['add-error-amount', 'add-error-roster', 'add-error-server'].map(
+    (id) => !page.el(id).hidden
+  );
+}
+
 const SCENARIOS = [
   {
     name: 'boot_with_no_session_shows_the_gate',
@@ -1706,6 +1849,446 @@ const SCENARIOS = [
         'the message names the selector, and was: ' + message
       );
       page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  /* --- Task 10: the add screen ------------------------------------------- */
+
+  {
+    /* The ten second requirement, in the only two facts that exist at the moment the
+       roster read goes out: the keypad is already up, and the screen already says
+       what it is doing. Focus is asserted while the add screen is the visible one,
+       and the scenario below is its pair. */
+    name: 'opening_add_focuses_the_amount_field_and_reads_the_roster',
+    async run(page) {
+      page.startAt('#/add');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(ADD_ROSTER));
+      let whenAsked = null;
+      page.onRequest('GET', '/members', () => {
+        whenAsked = {
+          focused: page.focused === page.el('add-amount'),
+          busy: !page.el('add-roster-busy').hidden,
+          options: addPayerOptions(page).length
+        };
+      });
+      await page.boot();
+      page.same(
+        whenAsked,
+        { focused: true, busy: true, options: 0 },
+        'when the roster read went out'
+      );
+      page.same(addRosterStates(page), [false, false, false], 'the roster states');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)', 'Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      page.same(
+        addPayerOptions(page).map((option) => option.value),
+        ['mem-1', 'mem-2', 'mem-3'],
+        '#add-payer option values'
+      );
+      page.is(page.el('add-payer').value, 'mem-1', '#add-payer value');
+      page.is(page.el('add-people').childNodes.length, 0, '#add-people rows');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      page.is(page.el('add-currency').hidden, false, '#add-currency');
+      page.is(page.el('add-currency-code').textContent, 'AUD', '#add-currency-code');
+      page.expectRequests(['GET /api/session', 'GET /api/members']);
+    }
+  },
+
+  {
+    /* The pair to the focus assertion above. focus() on a hidden element is recorded
+       as a focus anyway, per issue #37, so every focus claim here is made while the
+       add screen is the visible one and paired with one that shows focus went
+       elsewhere when it is not. */
+    name: 'the_add_screen_takes_focus_only_while_it_is_the_current_screen',
+    async run(page) {
+      page.startAt('#/add');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(ADD_ROSTER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      await page.boot();
+      page.same(visibleScreens(page), ['screen-add'], 'the screens on show');
+      page.is(page.focused, page.el('add-amount'), 'focus on entering add');
+      await page.goTo('#/feed');
+      page.same(visibleScreens(page), ['screen-feed'], 'after leaving');
+      page.is(page.focused, page.el('title-feed'), 'focus after leaving');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/expenses',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The common case, and the whole reason the screen is shaped the way it is: an
+       amount and one tap. The payer, the description and the split need no input. */
+    name: 'an_amount_and_one_tap_records_an_equal_split_across_everyone',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
+      ]);
+    }
+  },
+
+  {
+    /* "Everyone except one" is a single untick, and it still sends `equal`: split.py
+       says equal across everyone and equal across a subset are both split_equally
+       over the member list the caller assembles. */
+    name: 'unticking_someone_sends_an_equal_split_over_the_rest',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '12.50';
+      await addChooseMode(page, 'add-mode-some');
+      const rows = addPersonFields(page);
+      page.is(rows.length, 3, 'the people rows');
+      page.same(
+        rows.map((row) => row.type),
+        ['checkbox', 'checkbox', 'checkbox'],
+        'the row controls'
+      );
+      page.same(rows.map((row) => row.checked), [true, true, true], 'every row ticked');
+      page.is(page.el('add-hint-some').hidden, false, '#add-hint-some');
+      page.is(page.el('add-hint-exact').hidden, true, '#add-hint-exact');
+      rows[1].checked = false;
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_WITHOUT_ALI }
+      ]);
+    }
+  },
+
+  {
+    /* The shares go out as the characters that were typed, and a member left blank is
+       left out of the request entirely, which is what "not sharing this one" means. */
+    name: 'uneven_amounts_are_sent_as_strings_and_the_blanks_are_left_out',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '10.00';
+      await addChooseMode(page, 'add-mode-exact');
+      const rows = addPersonFields(page);
+      page.is(rows.length, 3, 'the people rows');
+      page.same(rows.map((row) => row.type), ['text', 'text', 'text'], 'the row controls');
+      page.same(rows.map((row) => row.value), ['', '', ''], 'every row empty');
+      page.is(page.el('add-hint-exact').hidden, false, '#add-hint-exact');
+      page.is(page.el('add-hint-some').hidden, true, '#add-hint-some');
+      rows[0].value = '8.00';
+      rows[2].value = '2.00';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_UNEVEN }
+      ]);
+    }
+  },
+
+  {
+    /* The refusal that matters most, shown in the resolver's own words including its
+       raw cent figures, and nothing the person typed is thrown away by it. */
+    name: 'shares_that_do_not_add_up_show_the_resolvers_own_message_and_keep_the_draft',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond(
+        'POST',
+        '/expenses',
+        failure(400, CODES.invalidSplit, ADD_SUM_REFUSED)
+      );
+      page.el('add-amount').value = '10.00';
+      await addChooseMode(page, 'add-mode-exact');
+      const rows = addPersonFields(page);
+      rows[0].value = '8.00';
+      rows[2].value = '1.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      appIsUp(page, 'a refused save');
+      page.is(page.el('add-error').hidden, false, '#add-error');
+      page.is(
+        page.el('add-error-server').textContent,
+        ADD_SUM_REFUSED,
+        '#add-error-server text'
+      );
+      page.same(addErrorsShown(page), [false, false, true], 'the three error children');
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-amount').value, '10.00', '#add-amount');
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['8.00', '', '1.50'],
+        'the typed shares'
+      );
+      page.same(addModeChecks(page), [false, false, true], 'the three mode radios');
+      page.is(page.el('add-submit').disabled, false, '#add-submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_UNEVEN_SHORT }
+      ]);
+    }
+  },
+
+  {
+    /* One of the screen's own two refusals: a check on whether there is anything to
+       send, not a judgement of an amount. parse_amount is the only judge, and asking
+       it costs a save. */
+    name: 'saving_with_no_amount_typed_asks_for_one_and_sends_nothing',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.is(page.el('add-error').hidden, false, '#add-error');
+      page.same(addErrorsShown(page), [true, false, false], 'the three error children');
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.expectRequests(['GET /api/session', 'GET /api/members']);
+    }
+  },
+
+  {
+    /* The confirmation is evidence rather than a claim: every word of it comes from
+       the 201 body and none of it from what was typed. The screen stays where it is,
+       so a second receipt is ten seconds again. */
+    name: 'a_successful_save_clears_the_form_and_confirms_from_the_response',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.el('add-amount').value = '9.99';
+      page.el('add-description').value = 'what was typed';
+      await addChooseMode(page, 'add-mode-some');
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.is(page.el('add-saved').hidden, false, '#add-saved');
+      page.is(page.el('add-saved-amount').textContent, '12.50', '#add-saved-amount');
+      page.is(
+        page.el('add-saved-description').textContent,
+        ' for Milk',
+        '#add-saved-description'
+      );
+      page.is(page.el('add-amount').value, '', '#add-amount');
+      page.is(page.el('add-description').value, '', '#add-description');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      page.is(page.el('add-people').childNodes.length, 0, '#add-people rows');
+      page.is(page.el('add-payer').value, 'mem-1', '#add-payer value');
+      page.same(addErrorsShown(page), [false, false, false], 'the three error children');
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.is(page.hash, '#/add', 'location.hash');
+      page.same(page.pushStates, [], 'history.pushState');
+      page.same(page.replaceStates, [], 'history.replaceState');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_DESCRIBED }
+      ]);
+    }
+  },
+
+  {
+    /* A 403 that is not member_not_linked, which announce() passes straight through
+       to the caller. The screen shows the server's message and neither curtain
+       appears. */
+    name: 'a_stale_form_refused_by_the_server_says_so_on_the_screen',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', csrfRefused());
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      appIsUp(page, 'a stale form');
+      page.is(page.el('notice-unlinked').hidden, true, '#notice-unlinked');
+      page.is(page.el('notice-offline').hidden, true, '#notice-offline');
+      page.is(
+        page.el('add-error-server').textContent,
+        'That form went stale.',
+        '#add-error-server text'
+      );
+      page.same(addErrorsShown(page), [false, false, true], 'the three error children');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
+      ]);
+    }
+  },
+
+  {
+    /* Observed when the request goes out, because that is the only moment it exists,
+       and asserted after settling. Whether a disabled control really refuses a tap is
+       browser-only and is not claimed here. */
+    name: 'the_save_control_is_disabled_while_the_save_is_in_flight',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      let inFlight = null;
+      page.onRequest('POST', '/expenses', () => {
+        inFlight = {
+          disabled: page.el('add-submit').disabled,
+          saving: !page.el('add-saving').hidden
+        };
+      });
+      page.el('add-amount').value = '12.50';
+      page.is(page.el('add-submit').disabled, false, '#add-submit before');
+      page.is(page.el('add-saving').hidden, true, '#add-saving before');
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(
+        inFlight,
+        { disabled: true, saving: true },
+        'while the save was in flight'
+      );
+      page.is(page.el('add-submit').disabled, false, '#add-submit afterwards');
+      page.is(page.el('add-saving').hidden, true, '#add-saving afterwards');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
+      ]);
+    }
+  },
+
+  {
+    /* The screen's own in-flight flag is the guard, not the disabled attribute: the
+       form's submit listener is re-invoked directly through the stub's listeners map
+       while the first request is still in the air, which is what a dispatched submit
+       does whatever the control looks like. */
+    name: 'a_second_submit_while_the_first_is_in_flight_sends_one_request',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      let again = true;
+      page.onRequest('POST', '/expenses', () => {
+        if (!again) {
+          return;
+        }
+        /* Once only. A screen without the flag would otherwise recurse rather than
+           fail with a readable request list. */
+        again = false;
+        const event = {
+          type: 'submit',
+          defaultPrevented: false,
+          preventDefault() {
+            event.defaultPrevented = true;
+          }
+        };
+        (page.el('add-form').listeners.submit || []).forEach((handler) =>
+          handler(event)
+        );
+      });
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.is(again, false, 'the second submit ran');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
+      ]);
+    }
+  },
+
+  {
+    /* A roster that did not arrive is not an empty group and must never read as one,
+       and it never costs the person what they have typed. */
+    name: 'a_roster_that_does_not_arrive_offers_a_retry_and_keeps_what_was_typed',
+    async run(page) {
+      page.startAt('#/add');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respondInOrder('GET', '/members', [unreadable(404), ok(ADD_ROSTER)]);
+      await page.boot();
+      page.same(addRosterStates(page), [false, true, false], 'the roster states');
+      page.is(page.el('add-payer').childNodes.length, 0, '#add-payer options');
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(addErrorsShown(page), [false, true, false], 'the three error children');
+      await page.dispatch(page.el('add-roster-retry'), 'click');
+      page.same(addRosterStates(page), [false, false, false], 'after the retry');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount after the retry');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)', 'Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* A flat of one is a real group, and nothing on the screen says anything special
+       about it: the same form, the same states and the same split shape. */
+    name: 'a_group_with_one_member_still_records_an_expense',
+    async run(page) {
+      await addBoot(page, ADD_ONE_MEMBER);
+      page.respond('POST', '/expenses', created(ADD_CREATED));
+      page.same(addRosterStates(page), [false, false, false], 'the roster states');
+      page.same(addErrorsShown(page), [false, false, false], 'the three error children');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)'],
+        '#add-payer option text'
+      );
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_ALONE }
+      ]);
+    }
+  },
+
+  {
+    /* Reachable through a half-finished setup_group.py run. There is nobody to share
+       an expense with, so the screen says so and sends nothing. */
+    name: 'a_group_with_no_members_says_so_and_saves_nothing',
+    async run(page) {
+      await addBoot(page, EMPTY_ROSTER);
+      page.same(addRosterStates(page), [false, false, true], 'the roster states');
+      page.is(page.el('add-payer').childNodes.length, 0, '#add-payer options');
+      page.is(page.el('add-people').childNodes.length, 0, '#add-people rows');
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      page.same(addErrorsShown(page), [false, true, false], 'the three error children');
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.expectRequests(['GET /api/session', 'GET /api/members']);
+    }
+  },
+
+  {
+    /* The offline notice is api.js's and covers the whole frame. This screen writes
+       nothing underneath it and throws nothing away, which is what makes that
+       notice's standing promise, "nothing you have recorded is lost", true here. */
+    name: 'a_save_that_gets_no_answer_never_says_it_saved',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', networkFailure());
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('add-form'), 'submit');
+      noticeIsUp(page, 'offline', 'a save that got no answer', true);
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-error').hidden, true, '#add-error');
+      page.same(addErrorsShown(page), [false, false, false], 'the three error children');
+      page.is(page.el('add-error-server').textContent, '', '#add-error-server text');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.is(page.el('add-description').value, 'Milk', '#add-description');
+      page.is(page.el('add-submit').disabled, false, '#add-submit');
+      page.is(page.el('add-saving').hidden, true, '#add-saving');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_MILK }
+      ]);
     }
   }
 ];

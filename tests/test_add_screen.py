@@ -506,6 +506,27 @@ def test_the_screen_never_reads_an_amount_as_anything_but_a_string() -> None:
         assert banned not in source, banned
 
 
+def add_region() -> str:
+    """The task 10 region of app.js: its banner comment to the gate's banner."""
+    source = app_js()
+    start = "/* --- The expense entry form ---"
+    end = "/* --- The gate ---"
+    assert start in source, "app.js opens the add region with a banner comment"
+    assert end in source, "app.js opens the gate region with a banner comment"
+    opened = source.index(start)
+    closed = source.index(end, opened)
+    return source[opened:closed]
+
+
+def test_the_add_screen_registers_none_of_the_three_global_handlers() -> None:
+    # A 401, a 403 member_not_linked and a request that got no answer are task 9a's
+    # three screens, reused unchanged. This screen owns only "anything else", and
+    # shows no sign-in prompt, no "not linked" notice and no offline message.
+    region = add_region()
+    for banned in ("onUnauthenticated", "onNotLinked", "onOffline"):
+        assert banned not in region, banned
+
+
 # --- The service worker -----------------------------------------------------
 
 

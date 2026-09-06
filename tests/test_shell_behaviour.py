@@ -71,6 +71,22 @@ SCENARIOS = [
     "the_csrf_token_is_read_at_request_time_not_cached",
     "a_204_is_not_parsed_as_json",
     "an_unsupported_selector_is_a_loud_failure_not_a_null",
+    # The add screen
+    "opening_add_focuses_the_amount_field_and_reads_the_roster",
+    "the_add_screen_takes_focus_only_while_it_is_the_current_screen",
+    "an_amount_and_one_tap_records_an_equal_split_across_everyone",
+    "unticking_someone_sends_an_equal_split_over_the_rest",
+    "uneven_amounts_are_sent_as_strings_and_the_blanks_are_left_out",
+    "shares_that_do_not_add_up_show_the_resolvers_own_message_and_keep_the_draft",
+    "saving_with_no_amount_typed_asks_for_one_and_sends_nothing",
+    "a_successful_save_clears_the_form_and_confirms_from_the_response",
+    "a_stale_form_refused_by_the_server_says_so_on_the_screen",
+    "the_save_control_is_disabled_while_the_save_is_in_flight",
+    "a_second_submit_while_the_first_is_in_flight_sends_one_request",
+    "a_roster_that_does_not_arrive_offers_a_retry_and_keeps_what_was_typed",
+    "a_group_with_one_member_still_records_an_expense",
+    "a_group_with_no_members_says_so_and_saves_nothing",
+    "a_save_that_gets_no_answer_never_says_it_saved",
 ]
 
 # The two mutants the harness is measured against, as anchored substitutions applied
