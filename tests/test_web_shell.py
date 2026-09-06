@@ -929,6 +929,75 @@ def test_reordering_the_entries_leaves_the_digest_alone() -> None:
     assert shell_digest(entries=list(reversed(entries))) == shell_digest(entries=entries)
 
 
+# --- The precache list against app/ ----------------------------------------
+
+# The same bug, one level out. A file added to app/ and not to SHELL is not
+# precached, does not work offline, and the digest does not cover it either, because
+# the digest only ever sees what SHELL names. test_app_holds_exactly_the_promised_files
+# forces the new file into APP_FILES and test_the_worker_precaches_exactly_the_shell
+# compares SHELL against SHELL_PRECACHE, but nothing related the two: both literals
+# could be edited consistently with SHELL left short and the suite stayed green. This
+# relates them, so the omission has to be deliberate and has to carry its reason.
+
+# path -> why it is in app/ and deliberately not in SHELL. One entry today.
+NOT_PRECACHED = {
+    "sw.js": (
+        "The browser fetches the worker script itself and byte-compares it against "
+        "the copy it is running, and that comparison is the only thing that ever "
+        "replaces a worker. A worker handed its own cached self would compare equal "
+        "forever and could never be replaced, which is the one failure with no way "
+        "out short of unregistering by hand."
+    ),
+}
+
+
+def unlisted_shell_file_message(missing: list[str], unknown: list[str]) -> str:
+    """What the test below says when SHELL and app/ have come apart.
+
+    Written for whoever has just added a file to app/ and has no reason to know
+    that a second list decides what the installed app is made of.
+    """
+    parts = []
+    if missing:
+        parts.append(
+            "These files are in app/, and the worker does not precache them:\n\n"
+            + "\n".join(f"    {path}" for path in missing)
+            + "\n\n"
+            "So they are not part of the installed app. They are fetched from the "
+            "network every time, the app does not open offline without them, and "
+            "the cache name does not move when they change, because it only covers "
+            "what the worker precaches. Somebody has to decide which of two things "
+            "is meant. Either add the path to SHELL in app/sw.js, which precaches "
+            "it and folds it into the digest; or add it to NOT_PRECACHED in "
+            "tests/test_web_shell.py with a sentence saying why it stays out, the "
+            "way sw.js does."
+        )
+    if unknown:
+        parts.append(
+            "The worker precaches these, and app/ does not hold them:\n\n"
+            + "\n".join(f"    {path}" for path in unknown)
+            + "\n\n"
+            "A SHELL entry with no file behind it fails the whole install, so no "
+            "visitor gets a worker at all. Either the file was deleted and SHELL in "
+            "app/sw.js still names it, or APP_FILES in this file has not been told "
+            "the file exists."
+        )
+    return "\n\n".join(parts)
+
+
+def test_the_precache_list_covers_app_minus_the_named_omissions() -> None:
+    for path in NOT_PRECACHED:
+        assert path in APP_FILES, f"{path} is named as an omission but is not in app/"
+    expected = APP_FILES - set(NOT_PRECACHED)
+    entries = set(precache_entries())
+    if entries != expected:
+        pytest.fail(
+            unlisted_shell_file_message(
+                missing=sorted(expected - entries), unknown=sorted(entries - expected)
+            )
+        )
+
+
 # --- Docs ------------------------------------------------------------------
 
 RUN_COMMAND = "uv run python scripts/serve.py --store ledger.sqlite3"
