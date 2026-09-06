@@ -7,10 +7,13 @@
    the shell may open offline, and that is the whole of it.
 
    To ship a changed asset, bump VERSION and reload. Activation then deletes every
-   older cache, so exactly one entry stays in Cache Storage. To clear a worker that
-   is stuck: DevTools, Application, Service Workers, Unregister. */
+   older cache, so exactly one entry stays in Cache Storage. Bump VERSION in the same
+   commit as any change to a file in SHELL: the shell is answered from the cache and
+   never revalidated, so until the cache name changes a returning user is served the
+   old files however carefully the new ones were written. To clear a worker that is
+   stuck: DevTools, Application, Service Workers, Unregister. */
 
-var VERSION = 'v2';
+var VERSION = 'v3';
 var CACHE = 'splitwise-lite-shell-' + VERSION;
 
 /* Exactly the shell. Relative, like every other URL in app/, so the directory can

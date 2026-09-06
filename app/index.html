@@ -131,12 +131,102 @@
   <section class="screen screen--add" id="screen-add" aria-labelledby="title-add" hidden>
     <h1 class="screen-title" id="title-add" tabindex="-1">Add</h1>
     <p class="lede">Record a new expense and choose how it is shared.</p>
-    <div class="card">
-      <p class="marker">Placeholder. Task 10 fills this with expense entry.</p>
-      <ul class="notes">
-        <li>Entry has to be quick, so this screen sits in the middle of the nav.</li>
-        <li>There is no form here yet, and no data behind it.</li>
-      </ul>
+
+    <!-- The group's one currency code, taken from the session view the client
+         already holds, so naming it costs no extra request. Hidden until one has
+         arrived, and never a symbol: the server formats amounts without one on
+         purpose and the front end does not overrule that. -->
+    <p class="add-note" id="add-currency" hidden>Amounts are in <span id="add-currency-code"></span>.</p>
+
+    <!-- novalidate, because every refusal this form can make is one the server owns,
+         and a browser bubble in the browser's own words is a second error contract
+         that drifts from the first the day either changes. -->
+    <form class="add-form" id="add-form" novalidate>
+      <label class="add-label" for="add-amount">Amount</label>
+      <!-- Text with a decimal keypad, and never a number input: a number input hands
+           back a value the browser has normalised and localised, exposes
+           valueAsNumber as a float, and adds a stepper to a field with nothing to
+           step. Amounts are strings from this field to web.py, unchanged. -->
+      <input class="add-field" id="add-amount" type="text" inputmode="decimal"
+             autocomplete="off">
+
+      <label class="add-label" for="add-description">Description (optional)</label>
+      <!-- 500 matches the store's CHECK (length(description) <= 500), so a 409
+           constraint_violated is unreachable from this screen. -->
+      <input class="add-field" id="add-description" type="text" maxlength="500"
+             autocomplete="off">
+
+      <label class="add-label" for="add-payer">Paid by</label>
+      <!-- Empty in the committed document: every option comes from the roster, and a
+           sample name on a money app is indistinguishable from a wrong real one. -->
+      <select class="add-field add-select" id="add-payer"></select>
+
+      <!-- Three options in one wrapping row rather than three stacked rows, so Save
+           stays within one short scroll at 320px with the keyboard up. Equal across
+           everyone ships chosen, so the common case needs nothing loaded, resolved or
+           tapped. There is no weight mode: it stays reachable through the API and
+           unexposed here, because a weight typo produces a wrong but valid split
+           where a wrong exact share is refused with both figures named. -->
+      <fieldset class="add-modes">
+        <legend class="add-legend">Split</legend>
+        <label class="add-mode"><input id="add-mode-equal" type="radio"
+          name="add-split" checked>Equally</label>
+        <label class="add-mode"><input id="add-mode-some" type="radio"
+          name="add-split">Some people</label>
+        <label class="add-mode"><input id="add-mode-exact" type="radio"
+          name="add-split">Uneven amounts</label>
+      </fieldset>
+
+      <p class="add-hint" id="add-hint-some" hidden>Untick anyone who is not sharing
+        this expense.</p>
+      <!-- The standing hint that stops split_exact's refusal being a surprise. No
+           running total, no remaining figure and no "you are out by" line: all three
+           are money arithmetic in JavaScript, which this codebase is built to
+           prevent. -->
+      <p class="add-hint" id="add-hint-exact" hidden>These shares must add up to the
+        total exactly. Leave someone blank to keep them off this expense.</p>
+
+      <!-- Empty in the committed document. One row per member is built from the
+           roster when a mode that needs them is chosen, and from nothing else. -->
+      <div class="add-people" id="add-people"></div>
+
+      <p class="add-note" id="add-roster-busy" hidden>Fetching the people in this
+        group.</p>
+      <!-- Claims nothing about what was typed: a roster that did not arrive must
+           never read as a form that has been thrown away. -->
+      <div class="add-panel add-panel--failed" id="add-roster-error" hidden>
+        <p class="add-panel-text">The people in this group did not arrive. Nothing you
+          have typed is lost.</p>
+        <button class="add-retry" id="add-roster-retry" type="button">Try again</button>
+      </div>
+      <!-- Reachable through a half-finished setup_group.py run, which is why the
+           balances screen has one too. -->
+      <p class="add-note" id="add-empty-roster" hidden>This group has no members yet,
+        so there is nothing to record.</p>
+
+      <button class="add-submit" id="add-submit" type="submit">Save</button>
+    </form>
+
+    <!-- The confirmation echoes the server's own 201 body and never what was typed,
+         so it says the ledger holds this rather than that the screen tried. The link
+         is a plain anchor, because routing is anchors plus hashchange and no click
+         handler is registered on it. -->
+    <div id="add-status" role="status">
+      <p class="add-note" id="add-saving" hidden>Saving this expense.</p>
+      <div class="add-panel add-panel--saved" id="add-saved" hidden>
+        <p class="add-panel-text">Saved <span id="add-saved-amount"></span><span id="add-saved-description"></span></p>
+        <a class="add-action" href="#/feed">See it in the feed</a>
+      </div>
+    </div>
+
+    <!-- Two refusals this screen makes itself, and one that carries the server's own
+         words verbatim. At most one of the three is ever visible. -->
+    <div class="add-errors" id="add-error" role="alert" hidden>
+      <p class="add-error-text" id="add-error-amount" hidden>Type an amount before
+        saving.</p>
+      <p class="add-error-text" id="add-error-roster" hidden>The people in this group
+        have not arrived yet, so this cannot be saved.</p>
+      <p class="add-error-text" id="add-error-server" hidden></p>
     </div>
   </section>
 

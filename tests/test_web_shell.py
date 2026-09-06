@@ -565,11 +565,6 @@ def test_a_noscript_block_explains_that_the_app_needs_javascript() -> None:
     assert "JavaScript" in document().text
 
 
-def test_every_screen_names_the_task_that_fills_it() -> None:
-    text = document().text
-    assert "Placeholder. Task 10 fills this with expense entry." in text
-
-
 def test_no_screen_shows_invented_data() -> None:
     # On a money app, plausible fake numbers are indistinguishable from wrong real
     # ones, and the spec names "looks authoritative while being wrong" as the

@@ -596,6 +596,549 @@
   });
 
 
+  /* --- The expense entry form ------------------------------------------- */
+
+  /* Fills #screen-add and records one expense. "Log a spend in under ten seconds" is
+     the requirement this block exists to pay for, not a nice to have: the spec names
+     adoption rather than arithmetic as the risk that kills the product, and a
+     half-filled ledger looks authoritative while being wrong.
+
+     Three things buy those ten seconds, and each is separately checkable. The amount
+     field is focused the moment the screen opens, before the roster has even been
+     asked for, so the keypad is up while the request is still in the air. Equal
+     across everyone is the default, and it is the default in the committed markup, so
+     nothing has to load or resolve for the common case to be right. With the roster
+     in, a complete expense is an amount plus one tap on Save.
+
+     No money arithmetic, anywhere. The amount is the characters that were typed with
+     surrounding whitespace removed and nothing else changed: no comma stripped, no
+     symbol removed, no digit padded and no decimal point added. Nothing here parses,
+     adds, divides, rounds, compares or reformats a cent value, so there is no running
+     total of the uneven shares, no remaining figure and no "you are out by" line.
+     parse_amount at the input edge is the only judge of an amount in this system, and
+     a second one here would be a rule that drifts.
+
+     Every refusal the server can make is shown in the server's own words. A screen
+     that substitutes its own copy per error code is a second error contract that
+     drifts from the first the day either changes.
+
+     Every name in this block is prefixed, because two sibling branches are editing
+     this same file and this same scope. */
+
+  /* The one route literal outside ROUTES, and the accepted cost of not editing
+     render(), which both sibling branches also need. */
+  var ADD_ROUTE = '#/add';
+  /* This block's own literal, matching the balances screen's suffix. No helper is
+     shared across regions: a shared helper is a shared edit to a file three branches
+     are changing at once. */
+  var ADD_ACTING_SUFFIX = ' (you)';
+  /* The one JavaScript literal on the failure path, for a refusal that carried no
+     message at all. It mirrors the gate's existing 'That did not work.' */
+  var ADD_SAVE_FAILED = 'That did not save.';
+
+  var addCurrency = document.getElementById('add-currency');
+  var addCurrencyCode = document.getElementById('add-currency-code');
+  var addForm = document.getElementById('add-form');
+  var addAmount = document.getElementById('add-amount');
+  var addDescription = document.getElementById('add-description');
+  var addPayer = document.getElementById('add-payer');
+  var addModeEqual = document.getElementById('add-mode-equal');
+  var addModeSome = document.getElementById('add-mode-some');
+  var addModeExact = document.getElementById('add-mode-exact');
+  var addHintSome = document.getElementById('add-hint-some');
+  var addHintExact = document.getElementById('add-hint-exact');
+  var addPeople = document.getElementById('add-people');
+  var addRosterBusy = document.getElementById('add-roster-busy');
+  var addRosterFailed = document.getElementById('add-roster-error');
+  var addRosterRetry = document.getElementById('add-roster-retry');
+  var addEmptyRoster = document.getElementById('add-empty-roster');
+  var addSubmit = document.getElementById('add-submit');
+  var addSavingLine = document.getElementById('add-saving');
+  var addSavedPanel = document.getElementById('add-saved');
+  var addSavedAmount = document.getElementById('add-saved-amount');
+  var addSavedDescription = document.getElementById('add-saved-description');
+  var addErrorRegion = document.getElementById('add-error');
+  var addErrorAmount = document.getElementById('add-error-amount');
+  var addErrorRoster = document.getElementById('add-error-roster');
+  var addErrorServer = document.getElementById('add-error-server');
+
+  /* The roster for the life of one visit, because switching split modes rebuilds the
+     people list from it and a second read would be a second request for data the
+     screen already has. Re-read on every entry to the route, and it reaches no
+     browser storage: a copy of server state kept in the browser is how a signed-out
+     page keeps showing a ledger. */
+  var addRoster = null;
+  /* One row per member while a mode that needs them is chosen, paired with the member
+     it belongs to, so reading the ticks and the typed shares back never depends on
+     walking the DOM or on matching a name. */
+  var addRows = [];
+  /* The chosen mode, held in one variable and written by each radio's own listener.
+     The three radios are never scanned to discover which is checked. */
+  var addMode = 'equal';
+  var addRosterInFlight = false;
+  var addSaveInFlight = false;
+
+  function addShowError(which) {
+    /* One of 'amount', 'roster', 'server' or ''. Every change comes through here,
+       which is what makes "at most one is ever visible" structural rather than a rule
+       four call sites have to remember. The alert region itself goes down with its
+       children: an empty alert is still a landmark a screen reader lands in. */
+    addErrorAmount.hidden = which !== 'amount';
+    addErrorRoster.hidden = which !== 'roster';
+    addErrorServer.hidden = which !== 'server';
+    addErrorRegion.hidden = which === '';
+  }
+
+  function addRosterArrived() {
+    /* "The people in this group have not arrived yet" stops being true the moment they
+       do, so the refusal that said so comes down with it rather than waiting for the
+       next tap to withdraw it. Typing while the roster loads is the whole point of this
+       screen, so saving during that window is a normal thing to do and a stale refusal
+       left behind it is a false sentence on the fast path.
+
+       Scoped to the one child this path owns, and deliberately not a blanket clear: a
+       message the server sent about a refused save is still true and is not this
+       screen's to take back. addShowError keeps at most one of the three visible, so
+       reading the one child answers "is this mine to clear" without guessing at the
+       others. */
+    if (!addErrorRoster.hidden) {
+      addShowError('');
+    }
+  }
+
+  function addRosterState(which) {
+    /* One of 'busy', 'error', 'empty' or ''. A blank area while a request is in the
+       air is indistinguishable from a group that has nobody in it, and that confusion
+       is the product's largest stated risk in miniature. No skeleton and no spinner:
+       a skeleton reads as broken. */
+    addRosterBusy.hidden = which !== 'busy';
+    addRosterFailed.hidden = which !== 'error';
+    addEmptyRoster.hidden = which !== 'empty';
+  }
+
+  function addIsText(value) {
+    return typeof value === 'string';
+  }
+
+  function addValidRoster(payload) {
+    if (!payload || typeof payload !== 'object') {
+      return false;
+    }
+    if (!Array.isArray(payload.members)) {
+      return false;
+    }
+    for (var index = 0; index < payload.members.length; index += 1) {
+      var member = payload.members[index];
+      if (!member || typeof member !== 'object') {
+        return false;
+      }
+      if (!addIsText(member.id) || !addIsText(member.display_name)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function addHasMember(members, memberId) {
+    for (var index = 0; index < members.length; index += 1) {
+      if (members[index].id === memberId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function addActingId() {
+    /* Whoever is entering, taken from the session view the client already holds, so
+       defaulting the payer costs no extra round trip. A missing view, or one whose
+       member is null because nobody has linked the account, defaults nothing and
+       breaks nothing else on the screen. */
+    var view = api.cachedSession();
+    if (view && view.member && view.member.id) {
+      return view.member.id;
+    }
+    return null;
+  }
+
+  function addNameFor(member, actingId) {
+    if (actingId !== null && member.id === actingId) {
+      return member.display_name + ADD_ACTING_SUFFIX;
+    }
+    return member.display_name;
+  }
+
+  function addShowCurrency() {
+    /* The roster read carries no currency, so the code comes from the session view
+       the client already holds. If it holds none the line stays down rather than
+       guessing, and it is never turned into a symbol: web.py formats amounts without
+       one on purpose and the front end does not overrule that. */
+    var view = api.cachedSession();
+    var code = view && view.group ? view.group.currency : null;
+    if (addIsText(code) && code !== '') {
+      addCurrencyCode.textContent = code;
+      addCurrency.hidden = false;
+      return;
+    }
+    addCurrencyCode.textContent = '';
+    addCurrency.hidden = true;
+  }
+
+  function addDefaultPayer() {
+    /* Assigned to the picker's value, never left to a browser to select the first
+       option and never written as a `selected` attribute on one: which member pays by
+       default is a decision this screen makes and should be able to change in one
+       place. */
+    if (addRoster === null || addRoster.length === 0) {
+      return;
+    }
+    var actingId = addActingId();
+    if (actingId !== null && addHasMember(addRoster, actingId)) {
+      addPayer.value = actingId;
+      return;
+    }
+    addPayer.value = addRoster[0].id;
+  }
+
+  function addFillPayer() {
+    var actingId = addActingId();
+    /* One option per member, in the order the payload returned. Nothing is sorted,
+       reversed, filtered or deduplicated: the roster's order is the group's order and
+       there is no second one here to drift from it. */
+    for (var index = 0; index < addRoster.length; index += 1) {
+      var option = document.createElement('option');
+      option.value = addRoster[index].id;
+      /* textContent, so a member called <img src=x onerror=alert(1)> renders as those
+         literal characters and is never markup. */
+      option.textContent = addNameFor(addRoster[index], actingId);
+      addPayer.appendChild(option);
+    }
+    addDefaultPayer();
+  }
+
+  function addPersonRow(member) {
+    var row = document.createElement('label');
+    row.className = 'add-person';
+    var field = document.createElement('input');
+    if (addMode === 'some') {
+      field.type = 'checkbox';
+      field.className = 'add-person-tick';
+      /* Everyone ticked, so the usual case of "everyone except one" is one untick. */
+      field.checked = true;
+    } else {
+      field.type = 'text';
+      field.className = 'add-person-share';
+      field.setAttribute('inputmode', 'decimal');
+      /* Left empty, and an empty field means "not sharing this one": that member is
+         left out of the request entirely. Somebody sharing nothing types a zero. */
+    }
+    row.appendChild(field);
+    var name = document.createElement('span');
+    name.className = 'add-person-name';
+    name.textContent = member.display_name;
+    row.appendChild(name);
+    return { member: member, field: field, row: row };
+  }
+
+  function addBuildPeople() {
+    /* Rebuilt from the held roster on every mode switch. Ticks and typed shares do
+       not survive a switch, which is accepted: keeping them would be state, and this
+       screen keeps none. */
+    addPeople.replaceChildren();
+    addRows = [];
+    addHintSome.hidden = addMode !== 'some';
+    addHintExact.hidden = addMode !== 'exact';
+    if (addRoster === null || addMode === 'equal') {
+      return;
+    }
+    for (var index = 0; index < addRoster.length; index += 1) {
+      var built = addPersonRow(addRoster[index]);
+      addRows.push(built);
+      addPeople.appendChild(built.row);
+    }
+  }
+
+  function addSetMode(mode) {
+    addMode = mode;
+    /* All three written explicitly rather than left to the browser's own radio group
+       behaviour, so clearing the form after a save really does return the choice to
+       Equally rather than only looking as if it had. */
+    addModeEqual.checked = mode === 'equal';
+    addModeSome.checked = mode === 'some';
+    addModeExact.checked = mode === 'exact';
+    addBuildPeople();
+  }
+
+  function addSplit() {
+    var index;
+    if (addMode === 'exact') {
+      /* Object.create(null), so a member id the payload spelled '__proto__' cannot
+         reach through to Object.prototype. Each share is the characters that were
+         typed with surrounding whitespace removed and nothing else changed. */
+      var amounts = Object.create(null);
+      for (index = 0; index < addRows.length; index += 1) {
+        var typed = String(addRows[index].field.value).trim();
+        if (typed !== '') {
+          amounts[addRows[index].member.id] = typed;
+        }
+      }
+      return { mode: 'exact', amounts: amounts };
+    }
+    /* One API shape covers two of the three modes on screen, and split.py says so in
+       its own docstring: equal across everyone and equal across a subset are both
+       split_equally over the member list the caller assembles. */
+    var memberIds = [];
+    if (addMode === 'some') {
+      for (index = 0; index < addRows.length; index += 1) {
+        if (addRows[index].field.checked) {
+          memberIds.push(addRows[index].member.id);
+        }
+      }
+    } else {
+      for (index = 0; index < addRoster.length; index += 1) {
+        memberIds.push(addRoster[index].id);
+      }
+    }
+    return { mode: 'equal', member_ids: memberIds };
+  }
+
+  function addCurtained(error) {
+    /* Whether api.js has already put a whole screen in front of this failure: the
+       sign-in gate, the not-linked notice, or one of the two paragraphs on the notice
+       curtain. This block registers none of those handlers and writes no message of
+       its own for any of them, because a second message underneath a curtain nobody
+       can see past is a second error contract.
+
+       refused is the one kind that raises no curtain, because it names something
+       about this one request rather than about the whole session, and neither request
+       this screen makes is one of the two api.js escalates. So it is the only kind
+       this screen speaks for.
+
+       Asked of kind rather than of a status. This function used to reconstruct the
+       answer from 401, 403 and 500, which is api.js's classification spelled a second
+       time in a second file, and two spellings of one decision drift the moment
+       either is edited. kind states it outright. It also fixes a case the status
+       version got wrong: an answer whose status this client cannot read at all
+       returned false here and wrote underneath a curtain. */
+    return !error || error.kind !== 'refused';
+  }
+
+  function addConfirm(payload) {
+    /* The confirmation carries what the server echoed in the 201 body and never what
+       was typed, so it says the ledger holds this rather than that the screen tried.
+       A body that is not the documented shape is still a success, because the status
+       said the expense was recorded: the figure is left empty rather than an error
+       claiming a recorded expense did not save. */
+    var recorded = payload && typeof payload === 'object' ? payload.expense : null;
+    if (!recorded || typeof recorded !== 'object') {
+      recorded = null;
+    }
+    addSavedAmount.textContent =
+      recorded !== null && addIsText(recorded.amount) ? recorded.amount : '';
+    if (recorded !== null && addIsText(recorded.description) &&
+        recorded.description !== '') {
+      addSavedDescription.textContent = ' for ' + recorded.description;
+    } else {
+      /* No description is invented for an expense that has none. */
+      addSavedDescription.textContent = '';
+    }
+    addSavedPanel.hidden = false;
+  }
+
+  function addSaved(payload) {
+    addConfirm(payload);
+    /* Nothing re-hides the errors here: every submit hides all three before it sends,
+       and the in-flight flag means nothing can show one while this save is in the air.
+       A second clear here would be a line no test could ever falsify. */
+    /* Cleared back to its defaults, and the screen deliberately stays on this route.
+       Entering three receipts in a row is a real flow, and bouncing to the feed after
+       each one costs a tab tap and a re-request every time; this app also navigates
+       itself nowhere, by task 8's design. The anchor in the confirmation is how
+       somebody who wants stronger proof gets it. */
+    addAmount.value = '';
+    addDescription.value = '';
+    addSetMode('equal');
+    addDefaultPayer();
+    addAmount.focus();
+  }
+
+  function addRefused(error) {
+    if (addCurtained(error)) {
+      /* Nothing typed is touched either, which is what makes the offline notice's
+         standing promise, "nothing you have recorded is lost", true on this screen. */
+      return;
+    }
+    /* The server's own words, verbatim: no rewording, no truncation, no added
+       punctuation and no per-code substitution. web.py's messages were written in
+       this repo for a person to read. That includes split_exact's refusal, whose
+       figures are raw cents against the dollars somebody typed; it is shown as it
+       arrived, because the alternatives are inventing replacement copy for one code
+       or dividing by a hundred here, and the second is the one thing this codebase
+       exists to prevent. Raised as its own issue against split.py. */
+    addErrorServer.textContent = (error && error.message) || ADD_SAVE_FAILED;
+    addShowError('server');
+  }
+
+  function addSubmitted(event) {
+    event.preventDefault();
+    if (addSaveInFlight) {
+      /* This flag is the guard, and the disabled attribute below is an affordance: a
+         dispatched submit reaches this handler whatever the control looks like. */
+      return;
+    }
+    /* The confirmation is cleared at the start of every save, and every error with
+       it, so nothing on screen belongs to the previous attempt. Never on a timer. */
+    addSavedPanel.hidden = true;
+    addShowError('');
+
+    var typed = String(addAmount.value).trim();
+    if (typed === '') {
+      /* Both of this screen's own refusals are checks on whether there is anything to
+         send at all, never judgements of an amount. A split with nobody in it, a zero
+         total, three decimals and a comma used as a decimal point all go to the
+         server as typed and are refused there, because a rule implemented twice is a
+         rule that drifts. */
+      addShowError('amount');
+      addAmount.focus();
+      return;
+    }
+    if (addRoster === null || addRoster.length === 0) {
+      addShowError('roster');
+      return;
+    }
+
+    addSaveInFlight = true;
+    addSubmit.disabled = true;
+    addSavingLine.hidden = false;
+
+    function settled() {
+      addSaveInFlight = false;
+      addSubmit.disabled = false;
+      addSavingLine.hidden = true;
+    }
+
+    /* Exactly four keys, in this order. It never names currency, id, created_at,
+       created_by or now: web.py refuses an unrecognised key by name, and all five are
+       the server's to decide, which is also why no control here offers a date. */
+    api.addExpense({
+      description: String(addDescription.value).trim(),
+      amount: typed,
+      payer_id: addPayer.value,
+      split: addSplit()
+    }).then(
+      function (payload) {
+        settled();
+        addSaved(payload);
+      },
+      function (error) {
+        settled();
+        addRefused(error);
+      }
+    );
+  }
+
+  function addLoadRoster() {
+    /* Three guards before anything is read: the client has loaded, this screen's
+       route is the current one, and no read is already running. app.js loads the
+       client asynchronously, so a hashchange can arrive before it is assigned. */
+    if (!api || window.location.hash !== ADD_ROUTE || addRosterInFlight) {
+      return;
+    }
+    addRosterInFlight = true;
+    addRoster = null;
+    addPayer.replaceChildren();
+    addPeople.replaceChildren();
+    addRows = [];
+    addRosterState('busy');
+    /* The amount and the description are deliberately untouched here and stay usable
+       throughout: typing while the roster loads is the whole point. */
+    api.members().then(
+      function (payload) {
+        addRosterInFlight = false;
+        if (!addValidRoster(payload)) {
+          /* A 200 carrying something other than the documented shape is a failure,
+             not an empty group. */
+          addRosterState('error');
+          return;
+        }
+        addRoster = payload.members;
+        if (addRoster.length === 0) {
+          /* Reachable through a half-finished setup_group.py run, which is why the
+             balances screen has this state too. */
+          addRosterState('empty');
+          return;
+        }
+        addRosterState('');
+        addRosterArrived();
+        addFillPayer();
+        addBuildPeople();
+      },
+      function () {
+        addRosterInFlight = false;
+        /* The status code is deliberately not read: a 401, a 403 member_not_linked, a
+           network failure and any 5xx are already claimed by the client, which raises
+           the gate or one of the two notices over the whole frame. This notice sits
+           behind that curtain, where nobody sees it, and it never reads as an empty
+           group or as a form that has been thrown away. */
+        addRosterState('error');
+      }
+    );
+  }
+
+  function addEntered() {
+    /* Called on every entry to this route, and once more from showApp so that the
+       manifest's home screen shortcut straight to this screen lands on a filled form.
+       Every visit starts a fresh entry: the roster is re-read, the picker and the
+       people list are rebuilt, the mode returns to Equally and both fields are
+       cleared. Nothing is kept between visits, so a person who taps Feed halfway
+       through loses what they had typed; the alternative is a draft, which is state,
+       which this app keeps nowhere. */
+    if (!api || window.location.hash !== ADD_ROUTE) {
+      return;
+    }
+    addAmount.value = '';
+    addDescription.value = '';
+    addSetMode('equal');
+    addSavedPanel.hidden = true;
+    addShowError('');
+    addShowCurrency();
+    /* Focus moves on to the field, deliberately overriding the heading focus render()
+       just made: this is the one screen that does, because the keypad has to be up
+       before the roster has even been asked for. The section keeps its
+       aria-labelledby, so what is announced is the amount field inside the Add region
+       rather than an orphan input. Focus is touched here and nowhere else, and never
+       while this is not the current screen. */
+    addAmount.focus();
+    addLoadRoster();
+  }
+
+  addForm.addEventListener('submit', addSubmitted);
+
+  /* Re-issues the read and returns to the in-flight state while it runs, and leaves
+     the typed amount and description exactly where they are: a retry is not a fresh
+     entry. */
+  addRosterRetry.addEventListener('click', function () {
+    addLoadRoster();
+  });
+
+  /* One listener per radio, each naming its own mode, so nothing here scans the three
+     to discover which is checked and nothing relies on an event bubbling out of a
+     container. */
+  addModeEqual.addEventListener('change', function () {
+    addSetMode('equal');
+  });
+  addModeSome.addEventListener('change', function () {
+    addSetMode('some');
+  });
+  addModeExact.addEventListener('change', function () {
+    addSetMode('exact');
+  });
+
+  /* This block listens for its own route rather than editing render(), which both
+     sibling branches also need. Registered after the router's listener, so the router
+     renders the screen first and this moves focus on afterwards. */
+  window.addEventListener('hashchange', addEntered);
+
+
   /* --- The gate ---------------------------------------------------------- */
 
   var gate = document.getElementById('gate');
@@ -664,6 +1207,7 @@
     show('app');
     loadFeed();
     balancesEntered();
+    addEntered();
   }
 
   function setMode(toCreating) {
