@@ -13,7 +13,7 @@
    old files however carefully the new ones were written. To clear a worker that is
    stuck: DevTools, Application, Service Workers, Unregister. */
 
-var VERSION = 'v3';
+var VERSION = 'v4';
 var CACHE = 'splitwise-lite-shell-' + VERSION;
 
 /* Exactly the shell. Relative, like every other URL in app/, so the directory can
