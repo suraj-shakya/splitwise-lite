@@ -1148,6 +1148,8 @@ BALANCES_IDS = {
     "balances-currency-code",
     "balances-net",
     "balances-transfers",
+    # Task 13's one added sentence, hidden until a payment can actually be opened.
+    "balances-drill-hint",
 }
 
 # Every fixed sentence the screen can show lives in the markup, so a Python test can
@@ -1475,3 +1477,32 @@ def test_the_balances_block_adds_no_animation() -> None:
     block = without_comments(balances_styles())
     for forbidden in ("animation", "transition", "@keyframes"):
         assert forbidden not in block, forbidden
+
+
+# --- Task 13: the transfer drill-down --------------------------------------
+
+DRILL_HINT = "Open a payment to see the debts behind it."
+
+
+def test_the_drill_down_hint_ships_hidden_between_the_heading_and_the_list() -> None:
+    # The one sentence task 13 adds to the markup. It is shown at most once on the
+    # screen, so it lives here rather than in app.js, where a Python test can pin it
+    # exactly and a reviewer can read it in a diff. It ships hidden and is revealed
+    # only once at least one rendered transfer row is a control that really opens.
+    section = balances_section()
+    assert inner(section, "balances-drill-hint", "p") == DRILL_HINT
+    opening = re.search(r'<p\b[^>]*\bid="balances-drill-hint"[^>]*>', section)
+    assert opening is not None
+    assert " hidden" in opening.group(0)
+    # Between the heading it belongs to and the list it talks about, so a screen
+    # reader meets it before the rows rather than after them.
+    heading = section.index("Suggested payments")
+    hint = section.index('id="balances-drill-hint"')
+    transfers = section.index('id="balances-transfers"')
+    assert heading < hint < transfers
+    # Outside #balances-status: that region holds exactly the four fixed messages
+    # task 12 wrote, of which at most one is ever visible, and this hint is shown
+    # alongside a list rather than instead of one.
+    status = re.search(r'<div\b[^>]*\bid="balances-status".*?</div>', section, re.S)
+    assert status is not None
+    assert "balances-drill-hint" not in status.group(0)
