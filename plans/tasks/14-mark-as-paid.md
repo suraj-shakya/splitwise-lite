@@ -162,9 +162,28 @@ The refusals, all before anything is written, all `MalformedRequest` (400,
 | `amount` not parseable | 400 `invalid_amount`, from `money.parse_amount` |
 | `to_member_id` not in this group's roster | 400 `malformed_request`, naming the id |
 | `to_member_id` equal to the acting member | 400 `malformed_request` |
-| a zero or negative amount | 400 `malformed_request` |
-| an amount above `store.MAX_CENTS` | 400 `amount_too_large`, from the store |
+| a zero amount | 400 `malformed_request` |
+| a negative amount | 400 `invalid_amount`, from `money.parse_amount` |
+| an amount above `MAX_CENTS` | 400 `invalid_amount`, from `money.parse_amount` |
 | a second pending settlement to the same receiver | 409 `settlement_already_pending` |
+
+> **Correction, 2026-09-07.** Two rows of that table were wrong about which refusal a
+> client actually gets, and both were checked against the shipped code before being
+> changed. The file used to hold one row reading "a zero or negative amount | 400
+> `malformed_request`" and one reading "an amount above `store.MAX_CENTS` | 400
+> `amount_too_large`, from the store". Neither describes what happens.
+>
+> `money.parse_amount`'s grammar takes no sign at all, so a negative amount never
+> reaches the view's own `cents <= 0` check: it is refused one step earlier, at the one
+> input edge, as `InvalidAmount`, which is 400 `invalid_amount`. And `store.MAX_CENTS`
+> **is** `money.MAX_CENTS` — `store.py` imports it from `money.py` — and `parse_amount`
+> already refuses anything above it, so `store.AmountTooLarge` is unreachable from this
+> endpoint and is an unreachable backstop rather than an answer a client can provoke.
+>
+> The status is 400 in every one of these cases either way, and the substance of
+> criterion 8, that a zero and a self-pair are 400 and never the 500 an escaped
+> `InvalidEvent` would produce, is unchanged and is tested. Only the codes are
+> corrected, to the codes the endpoint really returns.
 
 **Two of those rows are traps, and both are why the view checks rather than letting the
 constructor do it.** `SettlementEvent.__post_init__` raises `InvalidEvent` for a non-positive
@@ -592,8 +611,19 @@ named is checkable by reading a file or running the suite.
    `store.list_settlements(group_id)` is unchanged.
 10. `POST /api/settlements` is gated by its `_Access.MEMBER` row: no session is `401`
     `not_authenticated`; a signed-in account with no member row is `403` `member_not_linked`;
-    a request with no `X-CSRF-Token` header is `403` `csrf_failed`; and a `GET`, `PUT`,
-    `PATCH` or `DELETE` on the same path is `405` `method_not_allowed`.
+    a request with no `X-CSRF-Token` header is `403` `csrf_failed`; and a `PUT`,
+    `PATCH` or `DELETE` on the same path is `405` `method_not_allowed`, while a `GET` is
+    the shell catch-all's `404` `not_found`.
+
+    > **Correction, 2026-09-07.** This criterion used to read "and a `GET`, `PUT`,
+    > `PATCH` or `DELETE` on the same path is `405` `method_not_allowed`". A `GET` is
+    > not a 405 and cannot be made one without changing a route this task may not
+    > touch. `_SHELL_ROUTES` registers `/<path:filename>` for `GET`, so a `GET` that no
+    > API row claims matches the shell catch-all, which finds no such file and answers
+    > `404` `not_found` — exactly what `GET /api/nope` already answers, and what
+    > `_before_request`'s own comment records the catch-all doing to paths under
+    > `/api`. `PUT`, `PATCH` and `DELETE` match no rule at all and are the `405` the
+    > criterion describes. Both halves are tested.
 11. A second `POST` to a receiver who already has a pending settlement from the acting member
     is `409` with code `settlement_already_pending`, and `store.list_settlements` holds one
     settlement, not two.
