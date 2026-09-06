@@ -3,9 +3,16 @@
 Task 9a of plans/backlog.md, sharpened in
 plans/tasks/09a-application-server-and-http-api.md.
 
-Everything here drives the app through ``app.test_client()``. **No test binds a
-socket, starts a thread or opens a port**, so nothing in this file can hang the suite
-or collide with a port already in use.
+Everything here drives the app through ``app.test_client()``. **No test binds a socket
+or opens a port**, so nothing in this file can collide with a port already in use.
+
+One test starts one thread, and only one:
+``test_two_marks_at_once_record_one_settlement_and_refuse_the_other``, because the rule
+it checks is about two requests at once and no single-threaded test can be about that.
+It forces the interleaving rather than racing for it, every wait it makes carries a
+timeout, and it joins the thread it started, so it cannot hang the suite either. That
+sentence used to read "no test binds a socket, starts a thread or opens a port"; the
+half of it that still holds is the half above.
 
 Every account is made with cheap scrypt parameters, injected into ``create_app`` the
 same way tasks 7 and 9 inject them into ``sign_up``: no test runs the memory-hard KDF
@@ -5264,3 +5271,108 @@ def test_no_drill_down_changes_when_a_payment_is_marked_as_paid(
             as_text=True
         )
         assert after == before[pair], pair
+
+
+# --- The one-pending-per-pair rule under two requests at once ---------------
+#
+# The one test in this file that starts a thread, and the file docstring records it.
+# It binds no socket and opens no port, every wait it makes is bounded by
+# ``INTERLEAVE_GRACE``, and the request it holds open is held open by an event with a
+# timeout rather than by a lock the test itself takes, so it cannot hang the suite
+# whatever the endpoint does.
+
+
+INTERLEAVE_GRACE = 2.0
+"""Seconds the first request waits inside the rule for the second one to finish.
+
+It elapses only when the endpoint is doing its job: the second request is then behind
+the lock and can never signal, so the first waits out the grace, appends and releases.
+With no lock the second request runs straight through in milliseconds and the wait
+ends early, which is the failure this test is here to catch.
+"""
+
+
+def two_clients_for_one_member(app, path: Path):
+    """Two signed-in clients for the same account, as two devices would be."""
+    first = linked_client(app, path)
+    second = app.test_client()
+    assert log_in(second).status_code == 200
+    return first, second
+
+
+def test_two_marks_at_once_record_one_settlement_and_refuse_the_other(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The rule reads the ledger and then appends, and ``scripts/serve.py`` runs
+    # ``threaded=True``, so without a lock across both halves two requests that
+    # interleave in that window each see no pending claim and each append. Two pending
+    # claims for one payment are two confirmations in issue #16 and the debt clears
+    # twice, which is the whole reason the 409 exists.
+    #
+    # The interleaving is forced rather than raced for: the first request is stopped
+    # inside the rule, at the moment it has read the ledger, and the second is sent
+    # while it is stopped there. Nothing here depends on the scheduler.
+    import threading
+
+    from splitwise_lite import balances as balances_module
+
+    first, second = two_clients_for_one_member(app, seeded)
+    members = by_name(first)
+    inside = threading.Event()
+    finished = threading.Event()
+    reads = 0
+    counting = threading.Lock()
+    real_states = balances_module.settlement_states
+
+    def stop_the_first_read_inside_the_rule(ledger):
+        nonlocal reads
+        states = real_states(ledger)
+        with counting:
+            reads += 1
+            stop = reads == 1
+        if stop:
+            inside.set()
+            finished.wait(timeout=INTERLEAVE_GRACE)
+        return states
+
+    monkeypatch.setattr(
+        balances_module, "settlement_states", stop_the_first_read_inside_the_rule
+    )
+    answers: dict[str, int] = {}
+
+    def mark(name, client, amount):
+        answers[name] = mark_paid(
+            client, to_member_id=members["Ali"], amount=amount
+        ).status_code
+
+    def second_mark():
+        # If the rule never reaches the read this test is about, say so rather than
+        # passing on a premise that has gone.
+        assert inside.wait(timeout=INTERLEAVE_GRACE * 5), "the rule never read"
+        mark("second", second, "2.00")
+        finished.set()
+
+    runner = threading.Thread(target=second_mark, name="second-mark")
+    runner.start()
+    try:
+        mark("first", first, "1.00")
+    finally:
+        finished.set()
+        runner.join(timeout=INTERLEAVE_GRACE * 5)
+    assert not runner.is_alive()
+    assert sorted(answers.values()) == [201, 409], answers
+    stored = stored_settlements(seeded)
+    assert len(stored) == 1, [settlement.amount_cents for settlement in stored]
+
+
+def test_the_rule_is_held_by_one_lock_the_whole_module_shares() -> None:
+    # Module level, and not per app, per request or per store: two requests racing are
+    # two threads of one process, and a lock either of them could take alone guards
+    # nothing. ``RateLimiter``'s lock is built per limiter because a limiter is one
+    # object the app owns; this one has no such object to live on.
+    import threading
+
+    assert isinstance(web._SETTLEMENT_LOCK, type(threading.Lock()))
+    source = web_source()
+    assert source.count("_SETTLEMENT_LOCK: Final = threading.Lock()") == 1
+    assert "with _SETTLEMENT_LOCK:" in source

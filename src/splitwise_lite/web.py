@@ -75,7 +75,10 @@ from the body, and at most one settlement per ordered pair may be pending at a t
 Payer-creates plus receiver-confirms is what makes a settlement need two people: if
 either end could create one, the receiver could create and confirm it and a debt would
 clear with the payer never having touched the app. A pending settlement moves no
-balance, so recording one changes no figure this API reports.
+balance, so recording one changes no figure this API reports. The one-pending rule is
+check-then-act, so it is decided under a module-level lock, and the recorded gap is the
+limiter's: one process is exact, two processes hold two locks and the rule goes back to
+being best effort. :data:`_SETTLEMENT_LOCK` states the whole of it.
 
 Money crosses the wire only as a ``format_amount`` string, never as a number and never
 as cents, so the front end is handed nothing it could do arithmetic on. ``parse_amount``
@@ -175,6 +178,12 @@ class SettlementAlreadyPending(WebError):
     At most one settlement per ordered pair may be pending, because two pending
     claims for one payment become two confirmations in task 15 and clear the debt
     twice, which reads as settled and is the worse of the two failures.
+
+    The refusal is only as reliable as the lock it is decided under. Within this
+    process :data:`_SETTLEMENT_LOCK` makes it exact; across two processes there is no
+    lock and no constraint, so a second worker could accept what this one refuses.
+    :data:`_SETTLEMENT_LOCK` records what that costs and what issue #16 should do
+    about it.
     """
 
 
@@ -1519,6 +1528,38 @@ def _read_balances() -> flask.Response:
     )
 
 
+_SETTLEMENT_LOCK: Final = threading.Lock()
+"""Held across the one-pending-per-pair check and the append that follows it.
+
+The rule is check-then-act: it reads the ledger, decides no claim is pending, and only
+then appends. The run command serves with ``threaded=True``, so two requests can
+interleave inside that window, each see no pending claim and each append. The store
+cannot catch the second, because pending is derived from the decisions a settlement
+does *not* have and is no column anything could be unique on. Two pending claims for
+one payment are two confirmations in issue #16, and the debt clears twice.
+
+**What this lock is worth, exactly.** It serialises the check and the append within one
+process, which is the deployment this repository has: ``scripts/serve.py`` runs one
+threaded process bound to ``127.0.0.1``. It is worth nothing across two processes or
+two hosts, where two workers hold two different locks and the window is open again. So
+the invariant is a property of how this is run, not of the ledger: no lock can make it
+a property of the ledger while pending is derived rather than stored. A second process
+is not a supported deployment today; if it ever is, this is the sentence that has to be
+paid for, with a uniqueness constraint or a transaction the store does not have yet.
+
+It guards the ledger read as well as the append, not the append alone: a lock taken
+after the read would let both requests read first and change nothing.
+
+**For issue #16.** Do not read "at most one pending claim per pair" as given. Confirming
+is the same check-then-act shape, so #16 should take *this* lock across its own read
+and its own append, and count the pair's pending claims inside it rather than trusting
+this endpoint to have kept it to one. Under one process that count is a cheap
+restatement of what is already true; under two it is the only thing standing between a
+duplicated claim and a debt cleared twice. Sharing the lock is deliberate: two locks
+for one invariant is one lock too many.
+"""
+
+
 def _create_settlement() -> flask.Response:
     """``POST /api/settlements``: record that the acting member transferred money.
 
@@ -1555,7 +1596,10 @@ def _create_settlement() -> flask.Response:
     receiver who has not answered the first is ``SettlementAlreadyPending``. The pair
     is ordered, because a claim each way is two claims about two different transfers
     and both may be true, and the amount is no part of the rule, because two claims
-    for different amounts in one direction is still the ambiguity this refuses.
+    for different amounts in one direction is still the ambiguity this refuses. The
+    check and the append are held under :data:`_SETTLEMENT_LOCK`, which is what makes
+    that a rule rather than a hope, and its docstring records the one thing the lock
+    cannot do: hold across two processes.
     """
     payload = _json_object()
     what = "a settlement body"
@@ -1583,32 +1627,37 @@ def _create_settlement() -> flask.Response:
         )
 
     # Read before writing, from one snapshot of the ledger, so the pending state this
-    # refusal is scoped to is the same one ``_read_balances`` renders.
-    ledger = _store().list_events(group.id)
-    states = balances.settlement_states(ledger)
-    for existing in ledger:
-        if (
-            isinstance(existing, events.SettlementEvent)
-            and existing.from_member_id == acting.id
-            and existing.to_member_id == to_member_id
-            and states[existing.id] is events.SettlementState.PENDING
-        ):
-            raise SettlementAlreadyPending(
-                "a payment to that person is already marked as paid and is waiting "
-                "for them to confirm it; there can be only one at a time"
-            )
+    # refusal is scoped to is the same one ``_read_balances`` renders. Both halves are
+    # under :data:`_SETTLEMENT_LOCK`, because a check in one transaction and an append
+    # in another is a rule two threaded requests walk straight through. Everything
+    # above validates the request alone and needs no lock; everything the rule depends
+    # on is inside it. Nothing in here can block on anything but the store.
+    with _SETTLEMENT_LOCK:
+        ledger = _store().list_events(group.id)
+        states = balances.settlement_states(ledger)
+        for existing in ledger:
+            if (
+                isinstance(existing, events.SettlementEvent)
+                and existing.from_member_id == acting.id
+                and existing.to_member_id == to_member_id
+                and states[existing.id] is events.SettlementState.PENDING
+            ):
+                raise SettlementAlreadyPending(
+                    "a payment to that person is already marked as paid and is "
+                    "waiting for them to confirm it; there can be only one at a time"
+                )
 
-    settlement = events.SettlementEvent(
-        id=events.SettlementId(events.new_id()),
-        group_id=events.GroupId(group.id),
-        currency=group.currency,
-        from_member_id=events.MemberId(acting.id),
-        to_member_id=events.MemberId(to_member_id),
-        amount_cents=amount.cents,
-        created_at=_now(),
-        created_by=events.MemberId(acting.id),
-    )
-    _store().append_settlement(settlement)
+        settlement = events.SettlementEvent(
+            id=events.SettlementId(events.new_id()),
+            group_id=events.GroupId(group.id),
+            currency=group.currency,
+            from_member_id=events.MemberId(acting.id),
+            to_member_id=events.MemberId(to_member_id),
+            amount_cents=amount.cents,
+            created_at=_now(),
+            created_by=events.MemberId(acting.id),
+        )
+        _store().append_settlement(settlement)
     # Born pending, because no decision references it and none is written here.
     return _json_response(
         {
