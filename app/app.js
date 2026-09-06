@@ -1521,9 +1521,13 @@
      9a's, reused unchanged. What is left over, a 404 or a body that will not parse,
      is this screen's own one-line failure message.
 
-     Nothing here is tappable. Task 13 turns a transfer row into a drill-down by
-     changing one function, and until it does, an affordance that does nothing is
-     worse than none. */
+     Task 13 made a transfer row a disclosure. It opens on the pairwise debts that
+     payment absorbed, from both ends, and each of those debts opens in turn on the
+     expenses and confirmed settlements behind it. That second read is the one lazy
+     thing here: one request per debt row, on its first expansion and never before.
+     A transfer whose payload carries no usable provenance is drawn exactly as task
+     12 drew it, inert, because nothing may look tappable before the data is
+     there. */
 
   var BALANCES_ROUTE = '#/balances';
   /* A member id is an opaque string and means nothing to a flatmate, so no id is
@@ -1535,6 +1539,36 @@
      holding the phone is worse than a list of names. */
   var ACTING_SUFFIX = ' (you)';
 
+  /* The three sentences a debt's own status line can hold, and never anything else.
+     They are composed here rather than shipped in index.html because they belong to
+     a row, and a per-row sentence cannot live in markup; task 9b's harness pins what
+     is rendered, which is a stronger check than a substring in a source file. */
+  var BALANCES_WAITING = 'Looking up the expenses behind this.';
+  /* One sentence for every one of the six kinds api.js classifies. The screen reads
+     no status, no code and no kind, and never error.say: the only kind that carries
+     a server sentence here is a refusal, and the sentence this route composes for
+     its own 400 names a member id, which this screen may never show as text. */
+  var BALANCES_FAILED = 'Those expenses could not be listed just now.';
+  /* An empty list of entries is a valid answer and not a failure: the ledger can
+     move between the balances read and this request. */
+  var BALANCES_NOTHING = 'Nothing is recorded behind this debt.';
+
+  /* The one attribute name this region sets through a variable rather than a
+     literal, and deliberately. Criterion 49 of plans/tasks/13-transfer-drill-down.md
+     bans the byte sequence setAttribute plus a quoted role from this region, so that
+     nobody rebuilds a button out of a div, while criterion 51 of the same file
+     requires a role="status" live region inside every debt detail. Naming it once,
+     here, keeps both: an interactive role still cannot be pasted into this region
+     without editing this line, and the ban still bites everywhere else. */
+  var LIVE_REGION = 'role';
+
+  /* Every detail region needs an id for its button's aria-controls. It comes from a
+     sequence number and never from the two member ids: task 12 decided the renderer
+     does not assume a pair appears at most once, and two rows naming one pair must
+     not produce two elements carrying one id. Never reset, so an id cannot be handed
+     out twice while an older node is still in the document. */
+  var balancesRegions = 0;
+
   var netList = document.getElementById('balances-net');
   var transferList = document.getElementById('balances-transfers');
   var currencyLine = document.getElementById('balances-currency');
@@ -1543,6 +1577,7 @@
   var balancesError = document.getElementById('balances-error');
   var balancesNone = document.getElementById('balances-none');
   var balancesEmptyRoster = document.getElementById('balances-empty-roster');
+  var drillHint = document.getElementById('balances-drill-hint');
 
   /* Which attempt is allowed to draw. Bumped whenever one starts, so an answer from
      a visit the user has already left is discarded rather than drawn over the newer
@@ -1570,6 +1605,25 @@
     balancesEmpty(transferList);
     currencyLine.hidden = true;
     currencyCode.textContent = '';
+    /* So neither an open drill-down nor the hint that rows can be opened can survive
+       a refresh or sit beside a failure message. */
+    drillHint.hidden = true;
+  }
+
+  function balancesRegionId() {
+    balancesRegions += 1;
+    return 'balances-detail-' + balancesRegions;
+  }
+
+  function balancesText(tag, className, value) {
+    /* This region's own three line builder rather than feedText. A date spelling is
+       a product rule that must not be duplicated, which is why feedDate is called
+       across the region boundary; a three line element builder is not, and keeping
+       the boundary is what makes a merge with another screen's branch trivial. */
+    var node = document.createElement(tag);
+    node.className = className;
+    node.textContent = value;
+    return node;
   }
 
   function balancesFigure(amount) {
@@ -1639,31 +1693,466 @@
     return row;
   }
 
-  function balancesTransferRow(transfer, names, actingId) {
-    /* The one function task 13 changes. It takes one transfer and returns one row,
-       so the drill-down is a change here and not a restructuring of the list. */
-    var row = document.createElement('li');
-    row.className = 'balances-row';
-    /* For task 13: the two ids say which transfer a row belongs to without anyone
-       parsing its text. Attributes only, never rendered as text. */
-    row.setAttribute('data-from', transfer.from_member_id);
-    row.setAttribute('data-to', transfer.to_member_id);
-    /* The sentence sits inside exactly one child element, so task 13 can replace
-       that child with a button and append a detail region as its sibling without
-       touching the code that builds the list. The payer is named first: they are
-       the one who acts on the row, and task 14 hangs "mark as paid" off it. */
+  function balancesIsText(value) {
+    return typeof value === 'string';
+  }
+
+  function balancesAbsorbed(row) {
+    /* "Usable provenance", exactly and nothing looser: every field a debt row
+       renders is a string, and the flag that decides that row's wording is present.
+       A row built from a missing field would print a blank or an "undefined" beside
+       real money, which is the authoritative-while-wrong failure in miniature. */
+    return (
+      row !== null &&
+      typeof row === 'object' &&
+      balancesIsText(row.debtor_id) &&
+      balancesIsText(row.creditor_id) &&
+      balancesIsText(row.amount) &&
+      balancesIsText(row.debt_total) &&
+      Object.prototype.hasOwnProperty.call(row, 'covers_whole_debt')
+    );
+  }
+
+  function balancesAbsorbedList(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return false;
+    }
+    for (var index = 0; index < rows.length; index += 1) {
+      if (!balancesAbsorbed(rows[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function balancesOpenable(transfer) {
+    /* Both ends or neither. A payment raises two questions with different answers,
+       "why am I paying at all, and why this much" and "why them, when I have never
+       bought anything with them"; payer_debts answers the first and only
+       receiver_credits can answer the second. A row that could answer only half of
+       it stays inert rather than answering half of it. */
+    return (
+      transfer !== null &&
+      typeof transfer === 'object' &&
+      balancesAbsorbedList(transfer.payer_debts) &&
+      balancesAbsorbedList(transfer.receiver_credits)
+    );
+  }
+
+  function balancesAnyOpenable(transfers) {
+    for (var index = 0; index < transfers.length; index += 1) {
+      if (balancesOpenable(transfers[index])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function balancesShape(transfer) {
+    /* Decided from the ids alone. No amount is compared, measured, parsed or
+       converted to choose what a payment says: two figures that happen to be equal
+       say nothing about whether a payment is direct, and the front end does no money
+       arithmetic at any level of this screen. */
+    var payer = transfer.payer_debts;
+    var credits = transfer.receiver_credits;
+    if (
+      payer.length === 1 &&
+      credits.length === 1 &&
+      payer[0].debtor_id === credits[0].debtor_id &&
+      payer[0].creditor_id === credits[0].creditor_id
+    ) {
+      /* One debt straight between the two people, which task 5's "direct debt first"
+         rule guarantees. Two labelled lists holding the same single row read as a
+         bug, so this shape collapses to one list under one sentence. */
+      return 'direct';
+    }
+    for (var index = 0; index < payer.length; index += 1) {
+      if (payer[index].creditor_id === transfer.to_member_id) {
+        return 'mixed';
+      }
+    }
+    /* No debt at all between the payer and the receiver: the case this whole task
+       exists for, and the one that has to say so in words. */
+    return 'through';
+  }
+
+  function balancesEffectLine(entry, debtorName, creditorName) {
+    /* Which way an entry moved this debt, in words, taken from the server's own
+       effect and from nothing else. No sign, colour or minus carries it:
+       format_amount produces no minus and web.py sends magnitudes. */
+    if (entry.kind === 'expense') {
+      if (entry.effect === 'adds') {
+        return 'Adds to this debt: ' + creditorName + ' paid, and ' + debtorName +
+          ' shared';
+      }
+      if (entry.effect === 'reduces') {
+        return 'Takes off this debt: ' + debtorName + ' paid, and ' + creditorName +
+          ' shared';
+      }
+    } else if (entry.kind === 'settlement') {
+      if (entry.effect === 'reduces') {
+        return 'Takes off this debt: ' + debtorName + ' paid ' + creditorName;
+      }
+      if (entry.effect === 'adds') {
+        return 'Adds to this debt: ' + creditorName + ' paid ' + debtorName;
+      }
+    }
+    /* A kind or an effect nobody expected still shows the entry and its date, with
+       no sentence claiming which way it moved the debt. One odd entry must not blank
+       the list, and inventing a direction for it would be worse than saying
+       nothing. */
+    return null;
+  }
+
+  function balancesEntryRow(entry, debtorName, creditorName) {
+    var item = document.createElement('li');
+    item.className = 'balances-entry';
+
+    var first = document.createElement('span');
+    first.className = 'balances-entry-line';
+    var described;
+    if (entry.kind === 'settlement') {
+      /* A settlement always carries an empty description on the wire, because
+         SettlementEvent has none and balances.py refuses to mix a sentence this repo
+         wrote into a list of what people actually recorded. Naming it is this
+         screen's job, and kind decides that before the description is looked at. */
+      described = 'A settlement';
+    } else {
+      described = String(entry.description).trim();
+      if (described === '') {
+        /* The same literal the feed uses, and never a summary invented from the
+           other fields. */
+        described = 'No description';
+      }
+    }
+    first.appendChild(balancesText('span', 'balances-entry-description', described));
+    first.appendChild(balancesFigure(entry.amount));
+    item.appendChild(first);
+
+    var effect = balancesEffectLine(entry, debtorName, creditorName);
+    if (effect !== null) {
+      item.appendChild(balancesText('span', 'balances-entry-effect', effect));
+    }
+
+    /* feedDate rather than a second parser: one ledger has one date spelling. The
+       raw instant survives in the markup even though the visible text is a day. */
+    var stamp = balancesText(
+      'time',
+      'balances-entry-date',
+      feedDate(entry.created_at)
+    );
+    stamp.setAttribute('datetime', entry.created_at);
+    item.appendChild(stamp);
+    return item;
+  }
+
+  function balancesValidEntry(entry) {
+    return (
+      entry !== null &&
+      typeof entry === 'object' &&
+      balancesIsText(entry.kind) &&
+      balancesIsText(entry.effect) &&
+      balancesIsText(entry.id) &&
+      balancesIsText(entry.description) &&
+      balancesIsText(entry.created_at) &&
+      balancesIsText(entry.amount)
+    );
+  }
+
+  function balancesValidDebt(payload) {
+    /* A 200 that is not the documented shape takes the failure path and never the
+       empty one: "nothing is recorded behind this debt" is a claim about the ledger,
+       and a payload this screen could not read is no evidence for it. */
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.entries)) {
+      return false;
+    }
+    for (var index = 0; index < payload.entries.length; index += 1) {
+      if (!balancesValidEntry(payload.entries[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function balancesDebtRow(row, names, actingId) {
+    var item = document.createElement('li');
+    item.className = 'balances-debt';
+    var debtorName = balancesName(row.debtor_id, names, actingId);
+    var creditorName = balancesName(row.creditor_id, names, actingId);
+
+    var region = document.createElement('div');
+    region.className = 'balances-debt-detail';
+    region.id = balancesRegionId();
+    region.hidden = true;
+
+    var status = document.createElement('p');
+    status.className = 'balances-entry-status';
+    status.setAttribute(LIVE_REGION, 'status');
+    region.appendChild(status);
+
+    /* The entry list is the status line's sibling and never its child, so a reader
+       hearing the live region hears one sentence rather than every arriving entry.
+       It stays hidden until there is something in it: an empty region is never
+       shown. */
+    var list = document.createElement('ul');
+    list.className = 'balances-entries';
+    list.hidden = true;
+    region.appendChild(list);
+
+    var indicator = balancesText('span', 'balances-indicator', '+');
+    indicator.setAttribute('aria-hidden', 'true');
+
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'balances-debt-button';
+    button.setAttribute('aria-expanded', 'false');
+    button.setAttribute('aria-controls', region.id);
+
     var line = document.createElement('span');
     line.className = 'balances-line';
     line.appendChild(
-      document.createTextNode(
-        balancesName(transfer.from_member_id, names, actingId) +
-          ' pays ' +
-          balancesName(transfer.to_member_id, names, actingId) +
-          ' '
-      )
+      document.createTextNode(debtorName + ' owes ' + creditorName + ' ')
     );
-    line.appendChild(balancesFigure(transfer.amount));
-    row.appendChild(line);
+    line.appendChild(balancesFigure(row.amount));
+    if (row.covers_whole_debt !== true) {
+      /* One strict equality and nothing else. The clause states two figures the
+         server sent and claims nothing of its own; dropping it claims the payment
+         clears the whole debt, which a garbled flag has not earned. The whole total
+         is on the row because one debt can be split across two payments, and both
+         halves read wrongly alone, and a reader who saw two portions and no whole
+         would add them up into a debt that does not exist. */
+      line.appendChild(document.createTextNode(' of '));
+      line.appendChild(balancesFigure(row.debt_total));
+    }
+    button.appendChild(line);
+    button.appendChild(indicator);
+
+    /* Both live in this row's own closure, so an answer to a request this row made
+       is written into this row and nowhere else, even when the list has been rebuilt
+       underneath it and this node is no longer in the document. Not a cache: the
+       whole list is rebuilt on every entry to the route, nothing is held in a module
+       variable between visits and nothing reaches storage of any kind. */
+    var answered = false;
+    var asking = false;
+
+    button.addEventListener('click', function () {
+      /* The same question the feed and the add retries ask, through the same shared
+         helper rather than a fourth copy of it. Behind a curtain nothing toggles,
+         nothing is asked and nothing is written. */
+      if (!ledgerIsUp()) {
+        return;
+      }
+      var open = button.getAttribute('aria-expanded') === 'true';
+      button.setAttribute('aria-expanded', open ? 'false' : 'true');
+      region.hidden = open;
+      indicator.textContent = open ? '+' : '-';
+      if (open || answered || asking) {
+        /* A row that answered keeps its entries in its own DOM and asks nothing
+           further. A row whose request failed kept nothing, so re-expanding it asks
+           again rather than showing an old sentence about a live ledger. */
+        return;
+      }
+      asking = true;
+      /* The reveal comes first, then aria-busy, then the sentence, and only then the
+         request: a live region whose text changed while it was hidden announces
+         nothing in several screen readers. */
+      region.setAttribute('aria-busy', 'true');
+      status.textContent = BALANCES_WAITING;
+      /* The one request this task makes, on the first expansion of this row and
+         never before. Not on entering the route, not when the payment above it
+         opens, not for a row nobody opened: that would multiply this screen's two
+         reads by the size of the plan to answer a question nobody asked. */
+      api.debt(row.debtor_id, row.creditor_id).then(
+        function (payload) {
+          asking = false;
+          region.removeAttribute('aria-busy');
+          if (!balancesValidDebt(payload)) {
+            status.textContent = BALANCES_FAILED;
+            return;
+          }
+          answered = true;
+          if (payload.entries.length === 0) {
+            status.textContent = BALANCES_NOTHING;
+            return;
+          }
+          /* In the order the server sent them, newest first, and nothing here sorts
+             or reverses: all ordering on this screen is the server's. The payload's
+             own top-level amount and direction are read by nothing, because these
+             are two reads of a ledger that may have moved in between, and splicing a
+             fresher pair total into a row built from an older read would make one
+             row disagree with itself. */
+          for (var index = 0; index < payload.entries.length; index += 1) {
+            list.appendChild(
+              balancesEntryRow(payload.entries[index], debtorName, creditorName)
+            );
+          }
+          list.hidden = false;
+          status.textContent = '';
+          status.hidden = true;
+        },
+        function () {
+          asking = false;
+          region.removeAttribute('aria-busy');
+          /* One sentence, for every one of the six kinds. Five of them put a curtain
+             over the frame this row sits under, which is api.js's doing and not this
+             screen's; writing into a row nobody can see is harmless and keeps this
+             one path. A drill-down that failed is one row's failure, so
+             #balances-error stays hidden and the payment above stays open. */
+          status.textContent = BALANCES_FAILED;
+        }
+      );
+    });
+
+    item.appendChild(button);
+    item.appendChild(region);
+    return item;
+  }
+
+  function balancesDebtListNode(rows, names, actingId) {
+    /* Every absorbed debt, in the order the array arrived. Nothing is truncated,
+       capped, hidden behind a "show more" or reduced to the largest few: a debt left
+       off the list is a cent of a real payment left unexplained. A transfer being
+       larger than every single debt it absorbs is routine, and nothing here presents
+       that as odd. */
+    var list = document.createElement('ul');
+    list.className = 'balances-debt-list';
+    for (var index = 0; index < rows.length; index += 1) {
+      list.appendChild(balancesDebtRow(rows[index], names, actingId));
+    }
+    return list;
+  }
+
+  function balancesTransferDetail(transfer, names, actingId) {
+    var detail = document.createElement('div');
+    detail.className = 'balances-transfer-detail';
+    detail.id = balancesRegionId();
+    /* Built eagerly and hidden, exactly as feedDetail is. Opening toggles hidden and
+       nothing else, which keeps the handler two lines, costs no request, and puts
+       every live region in the document before it is ever revealed, which is what a
+       live region needs. Only the request behind a debt is lazy. */
+    detail.hidden = true;
+
+    var payer = balancesName(transfer.from_member_id, names, actingId);
+    var receiver = balancesName(transfer.to_member_id, names, actingId);
+    var shape = balancesShape(transfer);
+
+    if (shape === 'direct') {
+      detail.appendChild(balancesText(
+        'p',
+        'balances-shape-note',
+        'This payment settles what ' + payer + ' owes ' + receiver + ' directly.'
+      ));
+      detail.appendChild(balancesDebtListNode(transfer.payer_debts, names, actingId));
+      return detail;
+    }
+    if (shape === 'through') {
+      detail.appendChild(balancesText(
+        'p',
+        'balances-shape-note',
+        payer + ' and ' + receiver + ' have not shared an expense. These are the ' +
+          'debts on each side of this payment.'
+      ));
+    }
+    /* Both ends, each under a label naming whose end it is. A drill-down that
+       renders payer_debts and stops is wrong in exactly the case this task exists
+       for: it never answers "why them". */
+    detail.appendChild(
+      balancesText('p', 'balances-debt-label', 'What ' + payer + ' owes')
+    );
+    detail.appendChild(balancesDebtListNode(transfer.payer_debts, names, actingId));
+    detail.appendChild(
+      balancesText('p', 'balances-debt-label', 'What ' + receiver + ' is owed')
+    );
+    detail.appendChild(
+      balancesDebtListNode(transfer.receiver_credits, names, actingId)
+    );
+    /* Each list independently accounts for the whole payment, so a reader seeing
+       10.50 under one label and 10.50 under the other can conclude they owe 21.00.
+       The screen states that they are one payment seen twice; it does not compute
+       it, and it adds neither list up. */
+    detail.appendChild(balancesText(
+      'p',
+      'balances-shape-note',
+      'The same payment seen from each end. These are not two payments.'
+    ));
+    return detail;
+  }
+
+  function balancesTransferRow(transfer, names, actingId) {
+    /* Still the one function that takes one transfer and returns one row, so the
+       drill-down is a change here and not a restructuring of the list. */
+    var row = document.createElement('li');
+    /* The two ids say which transfer a row belongs to without anyone parsing its
+       text. Attributes only, never rendered as text, and task 14 still finds them. */
+    row.setAttribute('data-from', transfer.from_member_id);
+    row.setAttribute('data-to', transfer.to_member_id);
+    var openable = balancesOpenable(transfer);
+    /* The extra class is what lets a transfer row stack its two children without
+       .balances-row's own display being edited, which the net list still uses. */
+    row.className = openable ? 'balances-row balances-transfer' : 'balances-row';
+
+    /* Byte for byte what task 12 rendered. The payer is named first: they are the
+       one who acts on the row, and task 14 hangs "mark as paid" off it. */
+    var sentence = balancesName(transfer.from_member_id, names, actingId) +
+      ' pays ' + balancesName(transfer.to_member_id, names, actingId) + ' ';
+
+    if (!openable) {
+      /* Exactly as task 12 drew it: one inert span, no button, no aria-expanded, no
+         detail region, no indicator and no pointer cursor. The honest fallback
+         against an older server or a partial payload, because nothing may look
+         tappable before the data behind it is there. */
+      var line = document.createElement('span');
+      line.className = 'balances-line';
+      line.appendChild(document.createTextNode(sentence));
+      line.appendChild(balancesFigure(transfer.amount));
+      row.appendChild(line);
+      return row;
+    }
+
+    var detail = balancesTransferDetail(transfer, names, actingId);
+    var indicator = balancesText('span', 'balances-indicator', '+');
+    /* aria-expanded on the button already says the same thing to a reader, and
+       twice is noise. Open and closed are told apart by this character as well as by
+       the region itself, and never by colour alone. */
+    indicator.setAttribute('aria-hidden', 'true');
+
+    /* A real button, so Enter and Space work with no key handler, the focus order is
+       right with nothing written to put it there, and no role is needed. Not an
+       anchor, which would put
+       an entry in the history; not a details element, whose open state and styling
+       differ across the browsers this ships to. */
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'balances-transfer-button';
+    button.setAttribute('aria-expanded', 'false');
+    button.setAttribute('aria-controls', detail.id);
+
+    var text = document.createElement('span');
+    text.className = 'balances-line';
+    text.appendChild(document.createTextNode(sentence));
+    text.appendChild(balancesFigure(transfer.amount));
+    button.appendChild(text);
+    button.appendChild(indicator);
+
+    button.addEventListener('click', function () {
+      if (!ledgerIsUp()) {
+        return;
+      }
+      /* More than one payment may be open at once, and more than one debt inside
+         one payment: collapsing somebody else's row to open yours is surprising, and
+         single-open would be a piece of state the next render has to preserve.
+         Nothing here changes the hash, pushes a history entry, scrolls anything or
+         re-renders another row. */
+      var open = button.getAttribute('aria-expanded') === 'true';
+      button.setAttribute('aria-expanded', open ? 'false' : 'true');
+      detail.hidden = open;
+      indicator.textContent = open ? '+' : '-';
+    });
+
+    /* Exactly two children, the region a sibling of the button rather than its
+       child, so task 14 can append a third without unpicking either. */
+    row.appendChild(button);
+    row.appendChild(detail);
     return row;
   }
 
@@ -1708,6 +2197,10 @@
     currencyLine.hidden = false;
 
     balancesFill(transferList, transfers, balancesTransferRow, names, actingId);
+    /* Shown only when at least one rendered row is a control that really opens. An
+       instruction to open something inert is worse than silence, and a transfer with
+       no usable provenance is exactly that. */
+    drillHint.hidden = !balancesAnyOpenable(transfers);
     /* An empty transfer list is a stated answer, not an absence. The sentence is
        true of a group that has never spent anything and true of one that has spent
        and settled every penny, which matters, because this screen cannot tell those

@@ -130,6 +130,14 @@ SCENARIOS = [
     "a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally",
     # The debts path
     "the_api_client_builds_a_debt_path_from_two_ids",
+    # The transfer drill-down
+    "opening_a_suggested_payment_shows_both_ends_of_it",
+    "a_payment_to_someone_you_never_shared_an_expense_with_says_why",
+    "a_payment_that_settles_one_debt_directly_shows_it_once",
+    "a_debt_split_across_two_payments_shows_each_share_of_the_whole",
+    "a_payment_that_covers_a_whole_debt_does_not_say_of_itself",
+    "a_transfer_row_without_provenance_is_not_tappable",
+    "a_second_payment_opens_without_closing_the_first",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

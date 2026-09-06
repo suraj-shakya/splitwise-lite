@@ -827,3 +827,140 @@ body {
   font-size: 17px;
   color: var(--muted);
 }
+
+
+/* Task 13: the transfer drill-down. Appended as one block on task 12's own terms,
+   every selector prefixed `.balances-`, no rule above modified, and nothing here
+   moves, so the reduced-motion block still has nothing on this screen to switch
+   off. */
+
+/* A transfer row is a disclosure now, so its button and its region stack rather
+   than sitting on one line. Overridden through a class on the <li> and a rule of
+   its own, never by editing `.balances-row`, which the net list still uses exactly
+   as task 12 wrote it. The padding moves on to the button, so the whole width of
+   the row is the tap target with no dead strip down either side. */
+.balances-transfer {
+  display: block;
+  padding: 0;
+}
+
+/* Both levels of control clear the 44px floor on their own, and both carry the
+   row's full-width padding rather than sitting in the middle of it. */
+.balances-transfer-button,
+.balances-debt-button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 17px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Two levels of control, both reachable by Tab, so both say where the keyboard
+   is. */
+.balances-transfer-button:focus-visible,
+.balances-debt-button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+
+/* Open and closed are told apart by this character as well as by the region
+   itself, and never by colour alone. It is aria-hidden in the markup, because
+   aria-expanded already says the same thing to a reader. */
+.balances-indicator {
+  flex: 0 0 auto;
+  width: 24px;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* One step of padding per level of nesting and no more: at 320px the third level
+   still has to fit, and the rule between debt rows carries the structure instead
+   of a deeper indent. */
+.balances-transfer-detail,
+.balances-debt-detail {
+  padding: 0 14px 12px;
+}
+
+.balances-shape-note {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.balances-debt-label {
+  margin: 12px 0 6px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.balances-debt-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.balances-debt + .balances-debt {
+  border-top: 1px solid var(--line);
+}
+
+/* The one line a debt's region says while it waits, when it fails, or when there
+   is nothing recorded behind the debt. Not small print: which way this went is the
+   whole point of opening the row. */
+.balances-entry-status {
+  margin: 0;
+  padding: 8px 0;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.balances-entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.balances-entry {
+  padding: 8px 0;
+}
+
+.balances-entry + .balances-entry {
+  border-top: 1px solid var(--line);
+}
+
+/* The description gives way and the amount is kept whole, exactly as the rows
+   above do it, and the amount is never read before the description it belongs
+   to. */
+.balances-entry-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.balances-entry-description {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* The effect sentence and the date are 16px like everything else on this screen:
+   there is no small print here. */
+.balances-entry-effect,
+.balances-entry-date {
+  display: block;
+  font-size: 16px;
+  color: var(--muted);
+}

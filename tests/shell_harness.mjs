@@ -3733,6 +3733,604 @@ const SCENARIOS = [
         'GET /api/debts/a%20b/c%25d%23e'
       ]);
     }
+  },
+
+  {
+    /* Task 13, the mixed shape, which is task 5's own worked fixture: one payment
+       made of more than one debt, with a direct debt among them appearing in both
+       lists. One debt here is only partly covered, so both readings of a debt row
+       are on screen at once. Sam is the acting member, so every mention of Sam
+       carries ` (you)` inside the drill-down as it does in the two outer lists. */
+    name: 'opening_a_suggested_payment_shows_both_ends_of_it',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '600.00', direction: 'owed' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-1',
+            to_member_id: 'mem-2',
+            amount: '600.00',
+            payer_debts: [
+              absorbed('mem-1', 'mem-2', '300.00', '300.00', true),
+              absorbed('mem-1', 'mem-3', '300.00', '500.00', false)
+            ],
+            receiver_credits: [
+              absorbed('mem-1', 'mem-2', '300.00', '300.00', true),
+              absorbed('mem-3', 'mem-2', '300.00', '300.00', true)
+            ]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const rows = transferRows(page);
+      page.is(rows.length, 1, 'transfer rows');
+      const row = rows[0];
+      /* Task 14 finds the transfer a row belongs to through these two, and neither
+         is ever rendered as text. */
+      page.is(row.getAttribute('data-from'), 'mem-1', 'data-from');
+      page.is(row.getAttribute('data-to'), 'mem-2', 'data-to');
+      /* Exactly two, so task 14 can append a third without unpicking either. */
+      page.is(row.childNodes.length, 2, 'children of the transfer row');
+
+      const button = row.childNodes[0];
+      const detail = row.childNodes[1];
+      page.is(button.tagName, 'BUTTON', 'the control');
+      page.is(button.type, 'button', 'the control type');
+      page.is(button.getAttribute('aria-expanded'), 'false', 'aria-expanded closed');
+      page.is(button.getAttribute('aria-controls'), detail.id, 'aria-controls');
+      page.is(detail.hidden, true, 'the region while closed');
+      page.is(regionFor(page, button), detail, 'the region the button names');
+
+      /* Byte for byte what task 12 rendered, payer first, the amount inserted
+         exactly as received and inside its own figure. */
+      page.is(lineOf(button).textContent, 'Sam (you) pays Ali 600.00', 'the row');
+      page.same(figuresIn(button), ['600.00'], 'the figures on the row');
+      const indicators = button.querySelectorAll('.balances-indicator');
+      page.is(indicators.length, 1, 'the indicator');
+      page.is(
+        indicators[0].getAttribute('aria-hidden'),
+        'true',
+        'the indicator to a reader'
+      );
+      page.is(indicators[0].textContent, '+', 'the closed indicator');
+      /* Shown, because at least one rendered row really opens. */
+      page.is(page.el('balances-drill-hint').hidden, false, 'the drill-down hint');
+
+      await page.dispatch(button, 'click');
+      page.is(button.getAttribute('aria-expanded'), 'true', 'aria-expanded open');
+      page.is(detail.hidden, false, 'the region while open');
+      page.is(indicators[0].textContent, '-', 'the open indicator');
+
+      /* Both ends, each under a label naming whose end it is, every row in the order
+         its array arrived, nothing sorted, merged or deduplicated: (mem-1, mem-2) is
+         in both lists and renders in both, which is the two-ended view and not a
+         duplicate. The mixed shape says nothing about a shared expense, and closes
+         with the one sentence that stops 300 and 300 reading as 600 owed twice. */
+      page.same(
+        detailLines(detail),
+        [
+          'What Sam (you) owes',
+          'Sam (you) owes Ali 300.00',
+          'Sam (you) owes Cass 300.00 of 500.00',
+          'What Ali is owed',
+          'Sam (you) owes Ali 300.00',
+          'Cass owes Ali 300.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the open payment'
+      );
+      /* Every figure in its own span, inserted exactly as received. */
+      page.same(
+        debtRowsIn(detail).map((item) => figuresIn(item.childNodes[0])),
+        [['300.00'], ['300.00', '500.00'], ['300.00'], ['300.00']],
+        'the figures inside the payment'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* The case the whole task exists for: Jo has never bought anything with Kit, and
+       the row still has to explain itself. Ali is named because both lists name Ali,
+       and no chain, arrow or "via" clause is drawn between the three. Sam is in the
+       roster and in neither list, and is named nowhere inside the open payment. */
+    name: 'a_payment_to_someone_you_never_shared_an_expense_with_says_why',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '400.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-4', amount: '400.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-4',
+            amount: '400.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '400.00', '400.00', true)],
+            receiver_credits: [absorbed('mem-3', 'mem-4', '400.00', '400.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const button = transferRows(page)[0].childNodes[0];
+      const detail = regionFor(page, button);
+      await page.dispatch(button, 'click');
+      page.same(
+        detailLines(detail),
+        [
+          'Jo and Kit have not shared an expense. These are the debts on each side ' +
+            'of this payment.',
+          'What Jo owes',
+          'Jo owes Ali 400.00',
+          'What Kit is owed',
+          'Ali owes Kit 400.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the open payment'
+      );
+      /* No path is drawn. The open payment names only the members its two lists
+         name, and Sam, who is in the roster and in neither list, is not among
+         them. */
+      page.is(detail.textContent.indexOf('Sam'), -1, 'a member neither list names');
+      page.is(detail.textContent.indexOf('via'), -1, 'a via clause');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* The simple case task 5's "direct debt first" rule guarantees. Two labelled
+       lists holding the same single row would read as a bug, so this shows one list
+       under one sentence, and no "seen from each end" line: there is only one end
+       here to see it from. */
+    name: 'a_payment_that_settles_one_debt_directly_shows_it_once',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '50.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '50.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '50.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '50.00', '50.00', true)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '50.00', '50.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const button = transferRows(page)[0].childNodes[0];
+      const detail = regionFor(page, button);
+      await page.dispatch(button, 'click');
+      page.same(
+        detailLines(detail),
+        ['This payment settles what Jo owes Ali directly.', 'Jo owes Ali 50.00'],
+        'the open payment'
+      );
+      page.is(debtRowsIn(detail).length, 1, 'debt rows in a direct payment');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* Task 5's chain fixture: Bo owes Ali 10.00 and Ali owes Cass 4.00, which
+       simplifies to two payments, and the debt Bo owes Ali is split across both of
+       them. Open both and the same pair is on screen twice. What stops that reading
+       as 10.00 owed twice is the whole total on each row. */
+    name: 'a_debt_split_across_two_payments_shows_each_share_of_the_whole',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Bo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '10.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '6.00', direction: 'owed' },
+          { member_id: 'mem-4', amount: '4.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '6.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '6.00', '10.00', false)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '6.00', '10.00', false)]
+          },
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-4',
+            amount: '4.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '4.00', '10.00', false)],
+            receiver_credits: [absorbed('mem-3', 'mem-4', '4.00', '4.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const rows = transferRows(page);
+      page.is(rows.length, 2, 'transfer rows');
+      const first = rows[0].childNodes[0];
+      const second = rows[1].childNodes[0];
+      await page.dispatch(first, 'click');
+      await page.dispatch(second, 'click');
+
+      page.same(
+        detailLines(regionFor(page, first)),
+        [
+          'This payment settles what Bo owes Ali directly.',
+          'Bo owes Ali 6.00 of 10.00'
+        ],
+        'the first payment'
+      );
+      page.same(
+        detailLines(regionFor(page, second)),
+        [
+          'Bo and Cass have not shared an expense. These are the debts on each side ' +
+            'of this payment.',
+          'What Bo owes',
+          'Bo owes Ali 4.00 of 10.00',
+          'What Cass is owed',
+          'Ali owes Cass 4.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the second payment'
+      );
+
+      /* Every region id is this task's own sequence number, unique in the document
+         and derived from no member id: the pair (mem-2, mem-3) has a debt row in
+         both payments, and those two rows carry two different ids. */
+      const ids = regionIds(page);
+      page.is(ids.length, 5, 'regions in the document');
+      page.same(unique(ids), ids, 'every region id is its own');
+      page.ok(
+        ids.every((id) => /^balances-detail-[0-9]+$/.test(id)),
+        'every region id is balances-detail-N: ' + JSON.stringify(ids)
+      );
+      page.ok(
+        ids.every((id) => id.indexOf('mem-') === -1),
+        'no region id carries a member id: ' + JSON.stringify(ids)
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* The "of" clause is dropped on one strict equality with true and on nothing
+       else. false keeps it, and so does a value of the wrong type: the clause states
+       two figures the server sent and claims nothing, while dropping it claims the
+       payment clears the whole debt, which a garbled flag has not earned. */
+    name: 'a_payment_that_covers_a_whole_debt_does_not_say_of_itself',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' },
+          { id: 'mem-6', display_name: 'Ray' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '4.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '4.00',
+            payer_debts: [
+              absorbed('mem-2', 'mem-3', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-4', '1.00', '2.00', false),
+              /* The string 'true' and null: present, so the transfer still carries
+                 usable provenance, and not true, so the clause stays. */
+              absorbed('mem-2', 'mem-5', '1.00', '1.00', 'true'),
+              absorbed('mem-2', 'mem-6', '1.00', '1.00', null)
+            ],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '4.00', '4.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const button = transferRows(page)[0].childNodes[0];
+      const detail = regionFor(page, button);
+      await page.dispatch(button, 'click');
+      page.same(
+        detailLines(detail),
+        [
+          'What Jo owes',
+          'Jo owes Ali 1.00',
+          'Jo owes Kit 1.00 of 2.00',
+          'Jo owes Mo 1.00 of 1.00',
+          'Jo owes Ray 1.00 of 1.00',
+          'What Ali is owed',
+          'Jo owes Ali 4.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the open payment'
+      );
+      /* A row that says "of" carries two figures; a row that covers the whole debt
+         carries one. No amount string is compared to decide which. */
+      page.same(
+        debtRowsIn(detail).map((item) => figuresIn(item.childNodes[0]).length),
+        [1, 2, 2, 2, 1],
+        'figures per debt row'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* A payload with no usable provenance renders the row exactly as task 12 did: an
+       inert span, with nothing on it that looks tappable. Four different ways of
+       being unusable, beside one good row, and the good row is still a button, the
+       net list and the currency line are still there and nothing threw. */
+    name: 'a_transfer_row_without_provenance_is_not_tappable',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' }
+        ]
+      };
+      const good = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '9.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+        receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+      };
+      /* No payer_debts at all; an empty receiver_credits; an amount that is not a
+         string; and a row with no covers_whole_debt property. */
+      const noList = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '1.00',
+        receiver_credits: [absorbed('mem-2', 'mem-3', '1.00', '1.00', true)]
+      };
+      const emptyList = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '2.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '2.00', '2.00', true)],
+        receiver_credits: []
+      };
+      const numberAmount = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '3.00',
+        payer_debts: [
+          {
+            debtor_id: 'mem-2',
+            creditor_id: 'mem-3',
+            amount: 3,
+            debt_total: '3.00',
+            covers_whole_debt: true
+          }
+        ],
+        receiver_credits: [absorbed('mem-2', 'mem-3', '3.00', '3.00', true)]
+      };
+      const noFlag = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '4.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '4.00', '4.00', true)],
+        receiver_credits: [
+          { debtor_id: 'mem-2', creditor_id: 'mem-3', amount: '4.00', debt_total: '4.00' }
+        ]
+      };
+      const net = [
+        { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+        { member_id: 'mem-2', amount: '19.00', direction: 'owes' },
+        { member_id: 'mem-3', amount: '19.00', direction: 'owed' }
+      ];
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respondInOrder('GET', '/balances', [
+        ok({
+          currency: 'AUD',
+          net: net,
+          transfers: [noList, good, emptyList, numberAmount, noFlag]
+        }),
+        ok({ currency: 'AUD', net: net, transfers: [noList, emptyList] })
+      ]);
+      page.startAt('#/balances');
+      await page.boot();
+
+      const rows = transferRows(page);
+      page.is(rows.length, 5, 'transfer rows');
+      page.same(
+        rows.map((row) => row.childNodes[0].tagName),
+        ['SPAN', 'BUTTON', 'SPAN', 'SPAN', 'SPAN'],
+        'what each row leads with'
+      );
+      rows.forEach((row, index) => {
+        if (index === 1) {
+          return;
+        }
+        page.is(row.childNodes.length, 1, 'children of inert row ' + index);
+        page.is(row.childNodes[0].className, 'balances-line', 'inert row ' + index);
+        page.is(row.className, 'balances-row', 'the class on inert row ' + index);
+        page.is(
+          row.childNodes[0].getAttribute('aria-expanded'),
+          null,
+          'aria-expanded on inert row ' + index
+        );
+        page.is(
+          row.querySelectorAll('.balances-indicator').length,
+          0,
+          'the indicator on inert row ' + index
+        );
+      });
+      /* The inert rows still say exactly what task 12 had them say. */
+      page.is(rows[0].textContent, 'Jo pays Ali 1.00', 'the first inert row');
+      /* One malformed row affects nothing else: the good row still opens, and the
+         net list and the currency line are untouched. */
+      page.is(page.el('balances-net').childNodes.length, 3, 'the net list');
+      page.is(page.el('balances-currency').hidden, false, 'the currency line');
+      page.is(page.el('balances-currency-code').textContent, 'AUD', 'the currency');
+      page.is(
+        page.el('balances-drill-hint').hidden,
+        false,
+        'the hint beside one good row'
+      );
+      await page.dispatch(rows[1].childNodes[0], 'click');
+      page.is(
+        regionFor(page, rows[1].childNodes[0]).hidden,
+        false,
+        'the good row still opens'
+      );
+
+      /* A list in which nothing can be opened hides the hint again. */
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      page.same(
+        transferRows(page).map((row) => row.childNodes[0].tagName),
+        ['SPAN', 'SPAN'],
+        'a list of inert rows'
+      );
+      page.is(
+        page.el('balances-drill-hint').hidden,
+        true,
+        'the hint with nothing to open'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* Collapsing somebody else's row to open yours is surprising, so more than one
+       payment may be open at once, and more than one debt inside one payment. */
+    name: 'a_second_payment_opens_without_closing_the_first',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' },
+          { id: 'mem-6', display_name: 'Ray' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '5.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '5.00',
+            payer_debts: [
+              absorbed('mem-2', 'mem-3', '3.00', '3.00', true),
+              absorbed('mem-2', 'mem-4', '2.00', '2.00', true)
+            ],
+            receiver_credits: [
+              absorbed('mem-2', 'mem-3', '3.00', '3.00', true),
+              absorbed('mem-4', 'mem-3', '2.00', '2.00', true)
+            ]
+          },
+          {
+            from_member_id: 'mem-5',
+            to_member_id: 'mem-6',
+            amount: '1.00',
+            payer_debts: [absorbed('mem-5', 'mem-6', '1.00', '1.00', true)],
+            receiver_credits: [absorbed('mem-5', 'mem-6', '1.00', '1.00', true)]
+          }
+        ]
+      };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok(figures));
+      page.respond('GET', '/debts/mem-2/mem-3', ok(oneEntryDebt('mem-2', 'mem-3')));
+      page.respond('GET', '/debts/mem-2/mem-4', ok(oneEntryDebt('mem-2', 'mem-4')));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const rows = transferRows(page);
+      const first = rows[0].childNodes[0];
+      const second = rows[1].childNodes[0];
+      await page.dispatch(first, 'click');
+      const firstDetail = regionFor(page, first);
+      const debts = debtRowsIn(firstDetail);
+      await page.dispatch(debts[0].childNodes[0], 'click');
+      await page.dispatch(debts[1].childNodes[0], 'click');
+      await page.dispatch(second, 'click');
+
+      page.is(first.getAttribute('aria-expanded'), 'true', 'the first payment');
+      page.is(firstDetail.hidden, false, 'the first region');
+      page.is(second.getAttribute('aria-expanded'), 'true', 'the second payment');
+      page.is(regionFor(page, second).hidden, false, 'the second region');
+      page.same(
+        debts.slice(0, 2).map((item) => item.childNodes[0].getAttribute('aria-expanded')),
+        ['true', 'true'],
+        'two debts open inside one payment'
+      );
+      page.same(
+        debts.slice(0, 2).map((item) => item.childNodes[1].hidden),
+        [false, false],
+        'both debt regions'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/debts/mem-2/mem-4'
+        ])
+      );
+    }
   }
 ];
 
@@ -3756,6 +4354,116 @@ const A_SECOND_MEMBER = {
    SIGN_IN_BODY is: a body asserted against a copy of the code that built it asserts
    nothing. */
 const SECOND_SIGN_IN_BODY = '{"email":"ali@example.com","password":"opensesame"}';
+
+
+/* --- Task 13: the transfer drill-down -------------------------------------------
+
+   Below SCENARIOS for the reason task 43's block above is: this task appends to this
+   file and edits none of it, and module evaluation reaches these long before main()
+   runs, which is all a scenario body needs. What is shared here is the reaching, not
+   the data: every fixture stays local to its own scenario, following task 38's note
+   that one appended block conflicts with less on a file other branches are editing. */
+
+/* One absorbed pairwise debt, in the five keys _absorbed_view sends. */
+function absorbed(debtorId, creditorId, amount, total, covers) {
+  return {
+    debtor_id: debtorId,
+    creditor_id: creditorId,
+    amount: amount,
+    debt_total: total,
+    covers_whole_debt: covers
+  };
+}
+
+/* The six top-level keys _read_debt sends, with one expense behind the pair. */
+function oneEntryDebt(debtorId, creditorId) {
+  return {
+    currency: 'AUD',
+    debtor_id: debtorId,
+    creditor_id: creditorId,
+    amount: '3.00',
+    direction: 'owes',
+    entries: [
+      {
+        kind: 'expense',
+        effect: 'adds',
+        id: 'exp-1',
+        description: 'Milk run',
+        created_at: '2026-09-04T08:00:00.000000+00:00',
+        amount: '3.00'
+      }
+    ]
+  };
+}
+
+/* Boots straight onto the balances route, so the feed never reads and the recorded
+   request list is about this screen alone. */
+async function onBalances(page, roster, figures) {
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(roster));
+  page.respond('GET', '/balances', ok(figures));
+  page.startAt('#/balances');
+  await page.boot();
+}
+
+/* Entering the route costs exactly these three and no drill-down request, however
+   large the plan is. */
+const BALANCES_ENTRY = ['GET /api/session', 'GET /api/members', 'GET /api/balances'];
+
+function transferRows(page) {
+  return page.el('balances-transfers').childNodes;
+}
+
+/* page.el knows only the ids parsed out of app/index.html and throws for anything
+   else, so a region app.js built at run time is reached through the button that
+   names it in aria-controls. */
+function regionFor(page, button) {
+  const found = page.query('#' + button.getAttribute('aria-controls'));
+  return found.length === 1 ? found[0] : null;
+}
+
+/* The sentence-carrying child of a disclosure button, which is its first child; the
+   indicator is its second. */
+function lineOf(button) {
+  return button.childNodes[0];
+}
+
+function figuresIn(node) {
+  return node.querySelectorAll('.balances-figure').map((figure) => figure.textContent);
+}
+
+function debtRowsIn(detail) {
+  return detail.querySelectorAll('.balances-debt');
+}
+
+/* What an open payment reads as, top to bottom: every sentence and label it holds,
+   and the line on every debt row inside it, in document order. */
+function detailLines(detail) {
+  const lines = [];
+  detail.childNodes.forEach((child) => {
+    if (child.tagName === 'UL') {
+      child.childNodes.forEach((item) => {
+        lines.push(lineOf(item.childNodes[0]).textContent);
+      });
+    } else {
+      lines.push(child.textContent);
+    }
+  });
+  return lines;
+}
+
+/* Every detail region in the document, at both levels. */
+function regionIds(page) {
+  return page
+    .query('.balances-transfer-detail')
+    .concat(page.query('.balances-debt-detail'))
+    .map((region) => region.id);
+}
+
+function unique(values) {
+  return values.filter((value, at) => values.indexOf(value) === at);
+}
 
 /* --- Running ---------------------------------------------------------------- */
 

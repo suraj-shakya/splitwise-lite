@@ -1352,21 +1352,22 @@ def test_the_balances_screen_registers_none_of_the_three_global_handlers() -> No
         assert forbidden not in region, forbidden
 
 
-def test_no_transfer_row_pretends_to_be_tappable() -> None:
-    # Task 13 makes a transfer row expand into the pairwise debts it absorbed. Until
-    # then an affordance that does nothing is worse than none, so the row is not an
-    # anchor, a button or a disclosure, carries no interactive role or tab stop, and
-    # has no click, key or pointer handler.
+def test_the_transfer_row_is_a_disclosure_and_nothing_hand_rolled() -> None:
+    # Task 13 made a transfer row a real <button type="button"> that opens on the
+    # debts the payment absorbed, so `createElement('button')`, `aria-expanded` and a
+    # click listener are now the shape this screen is meant to have, and those three
+    # are exactly what the task 12 ban list loses. Everything else it forbade holds
+    # for a stronger reason than before: a native button gets Enter, Space, the tab
+    # order and the semantics for free, so an anchor, a <details>, a hand-set role, a
+    # tab stop or a key, pointer or touch listener appearing here would mean somebody
+    # had rebuilt a button badly.
     region = balances_region()
     for forbidden in (
         "createElement('a')",
-        "createElement('button')",
         "createElement('details')",
         "createElement('summary')",
-        "aria-expanded",
-        "tabindex",
         "setAttribute('role'",
-        "addEventListener('click'",
+        "tabindex",
         "addEventListener('keydown'",
         "addEventListener('keyup'",
         "addEventListener('keypress'",
@@ -1377,12 +1378,15 @@ def test_no_transfer_row_pretends_to_be_tappable() -> None:
         assert forbidden not in region, forbidden
 
 
-def test_nothing_asks_for_provenance_that_is_not_in_the_payload() -> None:
-    # `payer_debts` and `receiver_credits` are task 13's, along with the payload
-    # change that carries them.
-    source = (APP / "app.js").read_text(encoding="utf-8")
-    assert "payer_debts" not in source
-    assert "receiver_credits" not in source
+def test_the_drill_down_never_moves_focus() -> None:
+    # The button that was activated keeps focus when its region opens and keeps it
+    # when the region closes. The only control that closes a region sits outside it
+    # and takes focus when it is activated, so focus is never inside a region at the
+    # moment that region becomes hidden and the browser never has to move it to
+    # <body>. Issue #37 records that the harness counts focus() on a hidden element
+    # as a focus, so a scenario asserting a focus move here would report a pass it
+    # had not earned; this ban is what covers it instead.
+    assert ".focus(" not in balances_region()
 
 
 # --- Task 12: the balances screen, the layout ------------------------------
@@ -1423,13 +1427,50 @@ def test_the_balances_block_never_moves_a_row_out_of_document_order() -> None:
     assert re.search(r"(?<![-\w])order\s*:", block) is None
 
 
-def test_the_balances_block_offers_no_affordance_that_does_nothing() -> None:
-    # No pointer cursor and no generated chevron, arrow or currency symbol: the
-    # drill-down is task 13's, and until then the rows are inert and must look it.
+def test_only_the_two_disclosure_buttons_look_tappable() -> None:
+    # The pointer cursor is the one affordance this screen offers and exactly the two
+    # controls that really open something offer it. A transfer row whose payload
+    # carries no usable provenance is drawn inert and has to look inert, so a cursor
+    # on the row itself, on a debt row or on a list would be a promise the screen
+    # cannot keep. Still no generated glyph either: the open and closed indicators
+    # are text app.js writes, which a reader can be told to ignore and a copy carries.
     block = without_comments(balances_styles())
-    assert "cursor" not in block
     # `content`, and not the `content` inside `justify-content`.
     assert re.search(r"(?<![-\w])content\s*:", block) is None
+    carrying = 0
+    for rule in block.split("}"):
+        head, _, body = rule.partition("{")
+        if "cursor" not in body:
+            continue
+        carrying += 1
+        assert re.findall(r"cursor:\s*([a-z-]+)", body) == ["pointer"], head
+        selectors = [part.strip() for part in head.split(",")]
+        assert selectors
+        for selector in selectors:
+            assert selector in (
+                ".balances-transfer-button",
+                ".balances-debt-button",
+            ), selector
+    assert carrying == 1, carrying
+
+
+def test_both_disclosure_buttons_show_a_keyboard_user_where_they_are() -> None:
+    # Two levels of control, both in the tab order with no tabindex written for them,
+    # so both have to say which one the keyboard is on.
+    block = without_comments(balances_styles())
+    for name in (".balances-transfer-button", ".balances-debt-button"):
+        outlined = False
+        for rule in block.split("}"):
+            head, _, body = rule.partition("{")
+            if name + ":focus-visible" not in [
+                part.strip() for part in head.split(",")
+            ]:
+                continue
+            found = re.search(r"outline:\s*([^;]+);", body)
+            assert found is not None, name
+            assert "none" not in found.group(1), name
+            outlined = True
+        assert outlined, name
 
 
 def test_every_transfer_row_clears_the_hit_area_floor() -> None:
