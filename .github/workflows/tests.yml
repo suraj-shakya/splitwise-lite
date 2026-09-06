@@ -1,0 +1,99 @@
+# The suite, run by a machine instead of by whoever remembers to.
+#
+# Two legs, deliberately. Linux is the platform this code had never once executed on:
+# every commit in this repo's history ran on Windows. Windows is the platform every
+# cross-platform accommodation in this repo is about, and the shell digest recorded in
+# app/sw.js claims to be the same number under either line ending convention, which
+# needs two checkouts holding different bytes on disk to prove rather than assert.
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# This workflow reads no secret and writes nothing. Saying so beats inheriting whatever
+# the repository default happens to be, and it is what lets a fork pull request run on
+# the read-only token a fork gets. The trigger is pull_request, never the _target form.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Set explicitly so the two check contexts are test (ubuntu-latest) and
+    # test (windows-latest) and stay those names if a matrix key is ever added. A
+    # context that silently renames is a required check that never reports, and a
+    # required check that never reports blocks every pull request forever.
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # Both legs always finish. The interesting failures here are platform specific by
+      # construction, so cancelling one would hide the comparison the pair exists to make.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            autocrlf: "false"
+          - os: windows-latest
+            autocrlf: "true"
+    env:
+      # 3.12 is the floor pyproject.toml declares. A floor nothing ever runs is not a
+      # floor. Pinned here rather than in a .python-version file so this workflow does
+      # not change what any developer's uv does locally.
+      UV_PYTHON: "3.12"
+    steps:
+      # Before checkout, because this decides what checkout writes to disk. Stated per
+      # leg rather than inherited from a runner image default that can change silently.
+      - name: Set the line ending convention for this leg
+        run: git config --global core.autocrlf ${{ matrix.autocrlf }}
+
+      # Default fetch-depth. No test in this repo reads git history, so a shallow
+      # checkout is correct and a full fetch would only be slower.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # So the working tree's real line endings are readable in the log. w/lf here and
+      # w/crlf on the other leg is the evidence that the digest is being computed over
+      # two genuinely different checkouts and landing on one number.
+      - name: Show the working tree line endings
+        run: git ls-files --eol app/
+
+      # Pinned to an exact uv, so both legs run the same one and neither resolves a
+      # floating latest. No caching either; restoring a stored one costs about what fetching
+      # the wheels costs, and what it adds is an environment built from something other than
+      # this lockfile, which is the defect this whole workflow exists to prevent.
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.8"
+          enable-cache: "false"
+
+      - name: Show the uv version
+        run: uv --version
+
+      # Installed deliberately and pinned to the major the suite asserts. Relying on
+      # whatever the runner image preinstalls would be the same unpinned convention in
+      # a new place, and it would drift the day GitHub bumps an image.
+      - name: Install node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Show the node version
+        run: node --version
+
+      # --locked, and neither of the two alternatives. Installing from the lockfile
+      # without checking it still agrees with pyproject.toml would go green over a
+      # dependency nobody locked; letting uv re-resolve here would quietly rewrite
+      # uv.lock on the runner. Both are the failure this workflow is here to catch.
+      - name: Install the locked dependencies
+        run: uv sync --locked
+
+      # The literal command CLAUDE.md, README.md and .claude/rules/testing.md all name.
+      # CI exists to say the documented command is green, not that some other spelling
+      # is. Last step in the job; nothing above it discards an exit status.
+      - name: Run the suite
+        run: uv run python -m pytest

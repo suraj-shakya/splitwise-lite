@@ -85,3 +85,9 @@ That one command runs both halves. The JavaScript half needs `node` 20 or later 
 and asserts what a person would see on the screen. There is still no npm and no
 `node_modules`. Without `node` the suite fails and says so, rather than quietly
 skipping the half it cannot run.
+
+`.github/workflows/tests.yml` runs `uv sync --locked` and then that same command on
+`ubuntu-latest` and on `windows-latest` for every push to `master` and every pull
+request; both legs must be green before a merge, and a pull request whose base has
+moved must be brought up to date so the checks re-run against the new merge commit
+rather than reporting a result computed against an older one.

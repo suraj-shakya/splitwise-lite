@@ -30,6 +30,13 @@ so the service worker will not register there and the app will not offer to inst
 `uv run pytest` fails on this machine with an access-denied spawn error, so use
 `uv run python -m pytest`.
 
+`.github/workflows/tests.yml` runs `uv sync --locked` and then that same command on
+`ubuntu-latest` and on `windows-latest` for every push to `master` and every pull
+request. Both legs must be green before a merge. A pull request whose base has moved
+has to be brought up to date and re-run, because a result computed against an older
+`master` says nothing about the merge commit, and the merge commit is where a stale
+shell digest surfaces.
+
 The suite has a JavaScript half, so `node` 20 or later on `PATH` is a test-time
 requirement of this repo. `tests/shell_harness.mjs` runs the real `app/index.html`,
 `app/app.js` and `app/api.js` under Node's built-in `vm`, against a stubbed DOM and a
