@@ -10,6 +10,7 @@ the suite passes from anywhere.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -722,6 +723,142 @@ def test_the_worker_precaches_exactly_the_shell() -> None:
 def test_every_precache_entry_resolves_to_a_file() -> None:
     for entry in precache_entries():
         assert resolve_app_url(entry).is_file(), entry
+
+
+# --- The precache digest ---------------------------------------------------
+
+# The worker answers the shell from Cache Storage and never revalidates it, so a
+# changed shell file reaches nobody who already has the app until the cache *name*
+# changes. Until now the only thing that changed the name was a human remembering
+# to edit VERSION, and that convention has failed twice: tasks 11 and 12 shipped
+# two whole screens at v2, and task 32 rewrote three precached files at v3. Both
+# failures looked exactly like success. So the cache name now carries a digest of
+# the files it caches, and the test below fails when the two drift apart.
+
+# The extensions the digest knows how to read. Text is normalised so a checkout
+# under `core.autocrlf=true` and one under `core.autocrlf=false` agree; the PNGs
+# are hashed exactly as they sit on disk.
+DIGEST_TEXT_SUFFIXES = (".html", ".css", ".js", ".json")
+DIGEST_BINARY_SUFFIXES = (".png",)
+
+
+def shell_digest(
+    entries: list[str] | None = None,
+    contents: dict[str, bytes] | None = None,
+) -> str:
+    r"""Twelve hex characters over the precached files, and nothing else.
+
+    The whole rule, so it can be read here rather than reconstructed: the entries
+    are sorted with Python's default string ordering, and one sha256 is fed, for
+    each entry in that order, the entry's path as UTF-8, a NUL, the decimal length
+    of its content bytes as ASCII, a NUL, and then those content bytes. The length
+    is what keeps the framing unambiguous: without it two entries could shift bytes
+    across the boundary between them and leave the digest where it was.
+
+    Content bytes are the file's bytes with `\r\n` replaced by `\n` for the text
+    entries, and the raw bytes for the PNGs. That normalisation is not about churn.
+    This repo pins no `.gitattributes` rule for `.js`, `.html`, `.css` or `.json`,
+    so a checkout under `core.autocrlf=true` holds different bytes on disk from one
+    without, and a raw digest could never be green on Windows and on Linux at once.
+    It makes the digest a property of the committed content instead of the checkout.
+
+    Twelve characters is enough because this detects change, it does not resist
+    tampering. There is no adversary: anyone who can edit a file under `app/` can
+    edit `app/sw.js` in the same commit, and the mechanism is aimed at the engineer
+    who forgot, not one who is trying. Twelve hex characters is 48 bits, far more
+    than the handful of shell edits this repo will ever make, and short enough to
+    read out of a Cache Storage row in DevTools at a glance.
+
+    `entries` overrides the list and `contents` overrides individual entries' bytes,
+    so a test can hash a hypothetical `app/` without writing anything to disk.
+    """
+    if entries is None:
+        entries = precache_entries()
+    if contents is None:
+        contents = {}
+    running = hashlib.sha256()
+    for entry in sorted(entries):
+        raw = (
+            contents[entry]
+            if entry in contents
+            else resolve_app_url(entry).read_bytes()
+        )
+        if entry.endswith(DIGEST_TEXT_SUFFIXES):
+            content = raw.replace(b"\r\n", b"\n")
+        elif entry.endswith(DIGEST_BINARY_SUFFIXES):
+            content = raw
+        else:
+            raise AssertionError(
+                f"{entry} is precached, but the digest has no rule for that kind of "
+                f"file, and it will not guess one. Somebody has to decide whether "
+                f"{entry} is text, in which case its line endings are normalised and "
+                f"its extension belongs in DIGEST_TEXT_SUFFIXES, or binary, in which "
+                f"case it is hashed exactly as it sits on disk and its extension "
+                f"belongs in DIGEST_BINARY_SUFFIXES. Guessing either way is wrong for "
+                f"the other: a text file hashed raw makes the digest depend on the "
+                f"checkout, and a binary file with its CRLF pairs rewritten is corrupt."
+            )
+        running.update(entry.encode("utf-8"))
+        running.update(b"\0")
+        running.update(str(len(content)).encode("ascii"))
+        running.update(b"\0")
+        running.update(content)
+    return running.hexdigest()[:12]
+
+
+def test_the_digest_refuses_an_entry_it_cannot_classify() -> None:
+    # Nothing under app/ has an unknown extension today. When something does, the
+    # digest must not guess: a text file hashed raw is machine-dependent, and a
+    # binary file with its CRLF pairs rewritten is simply corrupt.
+    with pytest.raises(AssertionError) as raised:
+        shell_digest(entries=["notes.txt"], contents={"notes.txt": b"hello"})
+    message = str(raised.value)
+    assert "notes.txt" in message
+    assert "text" in message
+    assert "binary" in message
+
+
+def test_one_appended_byte_in_app_js_moves_the_digest() -> None:
+    # A whitespace-only edit retiring the cache is the accepted trade, not an
+    # oversight. Over-invalidating costs one shell download and corrects itself;
+    # under-invalidating is silent, permanent, and has already happened twice.
+    # Normalising past it would need a JavaScript parser, which is a dependency.
+    entries = precache_entries()
+    appended = (APP / "app.js").read_bytes() + b"\n"
+    assert shell_digest(entries=entries, contents={"app.js": appended}) != shell_digest(
+        entries=entries
+    )
+
+
+def test_one_changed_byte_in_an_icon_moves_the_digest() -> None:
+    # The icons are covered, not merely listed: they are precached like everything
+    # else, and a regenerated icon that never reaches an installed client is the
+    # same bug as a stale script.
+    entries = precache_entries()
+    flipped = bytearray((ICONS / "icon-192.png").read_bytes())
+    flipped[-1] ^= 0xFF
+    assert shell_digest(
+        entries=entries, contents={"icons/icon-192.png": bytes(flipped)}
+    ) != shell_digest(entries=entries)
+
+
+def test_line_endings_do_not_move_the_digest() -> None:
+    # `.gitattributes` pins no rule for .js, so the same commit is CRLF on one
+    # machine and LF on another. Without this the digest would be a property of
+    # the checkout rather than of the content, and could never be green on both.
+    entries = precache_entries()
+    unix = (APP / "app.js").read_bytes().replace(b"\r\n", b"\n")
+    windows = unix.replace(b"\n", b"\r\n")
+    assert shell_digest(entries=entries, contents={"app.js": unix}) == shell_digest(
+        entries=entries, contents={"app.js": windows}
+    )
+
+
+def test_reordering_the_entries_leaves_the_digest_alone() -> None:
+    # The entries are sorted before hashing, so shuffling SHELL never demands a
+    # cache retirement that no user would benefit from.
+    entries = precache_entries()
+    assert shell_digest(entries=list(reversed(entries))) == shell_digest(entries=entries)
 
 
 # --- Docs ------------------------------------------------------------------
