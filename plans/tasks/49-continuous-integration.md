@@ -463,3 +463,86 @@ Most of the effort is not writing the file. It is the six proof sequences in cri
 33 and 35 to 38, which are performed against the real repository and quoted in the QA note.
 If those are skipped, this task has produced a workflow that is believed to work, which is
 the same category of thing as a convention.
+
+## Scope cut by the repository owner
+
+Two parts of this file were cut by the owner before implementation began, on the grounds of
+how much churn this task may create on the real repository. They are recorded here rather
+than deleted, because a criterion that vanished from the file is indistinguishable from one
+that was quietly skipped.
+
+**Criterion 30 is cancelled.** The merge-commit demonstration required merging a throwaway
+branch into `master` and then reverting it, and the owner declined that. Nothing in this task
+touches `master`: no merge, no revert, no push. What criterion 30 was buying is not lost
+entirely. Criterion 32 verifies the property it depended on, that a `pull_request` check runs
+against the merge commit rather than the branch tip, and criteria 28 and 29 verify that the
+checks go red when the suite and the lockfile are wrong. What remains unproven by
+demonstration is only the two-branch sequence itself, and it is unproven because it was not
+run, not because it failed.
+
+**Criteria 34 to 38 are owner-applied, not implemented.** The token this task ran under is
+refused on the branch protection endpoints. Verified on 2026-09-06 with
+`gh api -X GET repos/suraj-shakya/splitwise-lite/branches/master/protection`:
+
+    {"message":"Resource not accessible by personal access token",
+     "documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection",
+     "status":"403"}
+
+Marking these blocked, which is neither passed nor failed. Criteria 1 to 33 and 39 to 45
+stand on their own: a workflow that runs and reports is most of the value, and the rule that
+refuses a merge is the rest. The settings are written out below so that rest takes two
+minutes.
+
+## Branch protection: the settings for the owner to apply
+
+Repository, Settings, Branches, **Add branch protection rule**. A repository ruleset does the
+same job; the settings are what matter, not the mechanism.
+
+1. Branch name pattern: `master`.
+2. Tick **Require status checks to pass before merging**.
+3. In the search box beneath it, add these two contexts, spelled exactly:
+   * `test (ubuntu-latest)`
+   * `test (windows-latest)`
+
+   They are offered by the search box once this task's pull request has run the workflow at
+   least once. The spelling is fixed by the `name:` key in `.github/workflows/tests.yml`, so
+   it will not drift if a matrix key is added later.
+4. Tick **Require branches to be up to date before merging**. This is the setting that closes
+   the hole issue #49 was filed about: without it, a green check computed against an older
+   `master` stays green after another branch lands, and the stale result is accepted at merge
+   time.
+5. Leave **Do not allow bypassing the above settings** (classic: "Include administrators")
+   **off**, deliberately. The sole admin must keep a way to unbreak `master` when CI itself
+   is broken, during a GitHub Actions incident or after a bad workflow edit. This is a
+   reversible choice, recorded here so nobody later has to guess whether it was an oversight.
+6. Leave everything else off: no required approvals, no required conversation resolution, no
+   signed commits, no linear history. Criteria 34 and 35 are the whole of what this task asks
+   for.
+
+Once that rule exists, criteria 37 and 38 follow from it and can be confirmed by looking: a
+red pull request shows a disabled merge button naming the failing required check, and a
+direct `git push` of a commit to `master` is rejected.
+
+## Deviations
+
+**Criterion 18, the `enable-cache` input.** The criterion asks for two things that the
+current `astral-sh/setup-uv` cannot both give: that the file contain no `enable-cache` input,
+and that nothing under `.venv/` or `~/.cache/uv` be saved or restored. Every release of that
+action from v5.0.0 onward defaults `enable-cache` to `auto`, which its own description
+defines as caching enabled on GitHub-hosted runners for every event this workflow uses.
+Omitting the input therefore turns caching **on**, which is the opposite of what the "No
+caching" decision above asks for, and the second sentence of the criterion is the one that
+states the actual requirement. The workflow passes `enable-cache: "false"` and nothing is
+cached.
+
+The alternatives were weighed and rejected. Pinning `setup-uv` to v3.1.7, the last release
+whose default was `false`, would satisfy the criterion's letter by depending on a 2024 action
+kept only for that reason. Setting `restore-cache: "false"` and `save-cache: "false"` would
+satisfy both sentences literally while being a less readable way to say the same thing, which
+is gaming the wording rather than meeting it. Installing `uv` from Astral's standalone
+installer would drop the `uses:` step but needs a different command and a different `PATH`
+fixup per leg, and the spec names that as the fallback for a repository that forbids
+third-party actions, which this one does not.
+
+This is flagged rather than decided quietly. If the owner prefers the letter of criterion 18,
+the v3.1.7 pin is the one-line change.
