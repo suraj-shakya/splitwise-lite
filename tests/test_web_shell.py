@@ -988,14 +988,24 @@ def unlisted_shell_file_message(missing: list[str], unknown: list[str]) -> str:
 def test_the_precache_list_covers_app_minus_the_named_omissions() -> None:
     for path in NOT_PRECACHED:
         assert path in APP_FILES, f"{path} is named as an omission but is not in app/"
-    expected = APP_FILES - set(NOT_PRECACHED)
     entries = set(precache_entries())
+    # Against app/ as it actually is, first. A file dropped into the directory has
+    # to fail here on its own, without waiting for anyone to add it to APP_FILES:
+    # the whole point is that no pair of literals can be kept agreeing with each
+    # other while the shell the browser installs is quietly short of a file.
+    on_disk = {
+        path.relative_to(APP).as_posix() for path in APP.rglob("*") if path.is_file()
+    }
+    expected = on_disk - set(NOT_PRECACHED)
     if entries != expected:
         pytest.fail(
             unlisted_shell_file_message(
                 missing=sorted(expected - entries), unknown=sorted(entries - expected)
             )
         )
+    # And against the promised set, so APP_FILES cannot drift out of the relation
+    # and leave the check above comparing the directory only with itself.
+    assert entries == APP_FILES - set(NOT_PRECACHED)
 
 
 # --- Docs ------------------------------------------------------------------
