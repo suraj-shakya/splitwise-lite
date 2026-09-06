@@ -500,14 +500,26 @@ rediscovered a third time.
    negative. Worth one line in that file saying the count was correct on the day, or
    worth leaving alone deliberately. Raised, not decided.
 
-## Notes for whoever lands backlog task 13, 14, 15, 16 or 17
+## Notes for whoever lands backlog task 14, 15, 16 or 17
 
-Part of your task is now three edits in one commit: move the entry from
+Part of your task is three edits in one commit: move the entry from
 `What does not exist yet` to `What works today` in **both** documents, and move it between
 the two literals in `tests/test_web_shell.py`, giving it evidence that must now be present
-rather than absent. The suite tells you when you have missed it, in every case except the
-incompleteness signal, which is written up honestly under "What the replacement does not
-catch" above.
+rather than absent.
+
+How hard the suite pushes you into those edits varies, and the entry's own `reason` in
+`NOT_YET` now says which you are getting, in the vocabulary defined above that literal.
+For task 16, nothing pushes at all. For 14, 15 and 17 you get a failure message and
+nothing more: the one string you add to `API_SURFACE` to clear that red also clears every
+trace that the documents are now wrong. Only backlog task 13 had a rule that could not be
+cleared without either moving the bullets or writing something false.
+
+Backlog task 13 is the worked example, because it is the case that actually fired. It
+shipped in #56 while both documents still called it missing;
+`test_nothing_the_documents_call_missing_is_in_the_shell` went red on this branch's
+rebase, naming the key, the file and the substring; and the fix was the three edits above
+plus a fourth nobody would have been reminded of, the `Balances` bullet, which claimed
+nothing on that screen was tappable and by then a suggested payment was a button.
 
 If your feature makes one of the ten keys the wrong name, rename it in both documents and
 in the literal. The keys are labels, not vocabulary anybody is defending; what the tests
@@ -515,9 +527,9 @@ are defending is that the label and the code agree.
 
 ## Size
 
-Two lists of five bullets in each of two documents, one line in `plans/spec.md`, one
-sentence in `plans/backlog.md`, one deleted test and five added ones, roughly ninety lines
-of Python counting the two literals and the failure messages. If it grows a helper module,
+Two capability lists in each of two documents, ten bullets between them, one line in
+`plans/spec.md`, one sentence in `plans/backlog.md`, one deleted test and five added
+ones, roughly ninety lines of Python counting the two literals and the failure messages. If it grows a helper module,
 a fixture, a second test file or a Markdown parser, it has gone wrong.
 
 The work that is not typing is criteria 29 to 34: six probes run against the real tree,
@@ -526,10 +538,11 @@ that is believed to work, which is the same category of thing as the test it rep
 
 ## Deviations
 
-The suite count is not one of them: `uv run python -m pytest` reports `2176 passed`,
-exactly the number criterion 35 predicts, with nothing skipped and nothing xfailed. What
-follows is four places where a criterion's wording and the observed result differ. None
-of the criteria were changed; this is the record of what running them produced.
+The suite count is one of them now, and deviation 5 says why. `uv run python -m pytest`
+reports `2227 passed`, with nothing skipped and nothing xfailed; criterion 35 predicts
+`2176`, a figure computed against a `master` that has since moved twice. What follows is
+five places where a criterion's wording and the observed result differ. None of the
+criteria were changed; this is the record of what running them produced.
 
 1. **Criterion 30 turns one test red, not two.** The probe adds a sixth bullet,
    `**Recurring expenses**`, to `CLAUDE.md`'s first list only, so only
@@ -554,8 +567,50 @@ of the criteria were changed; this is the record of what running them produced.
 
 4. **Criterion 22's "the word `placeholder` is asserted by nothing anywhere in the
    suite"** is satisfied for the documents, which is what the criterion is about: no test
-   asserts either document contains it. Two tests written earlier assert the word is
-   *absent* from a screen, `tests/test_add_screen.py::test_the_placeholder_is_gone_from_the_document`
-   and `tests/test_feed_screen.py::test_the_feed_screen_no_longer_carries_a_placeholder`,
-   and criterion 28 forbids touching any test outside `tests/test_web_shell.py`. They are
-   left alone.
+   asserts either document contains it. As literally worded it is unsatisfiable, and the
+   count first recorded here was wrong. There are **four** surviving sites, not two:
+
+   * `tests/test_add_screen.py::test_the_placeholder_is_gone_from_the_document`
+   * `tests/test_add_screen.py::test_the_committed_add_markup_invents_no_data`, which
+     bans a `placeholder` attribute on any element of the add screen, the amount field
+     being the one that would carry a plausible fake `0.00`
+   * `tests/test_feed_screen.py::test_the_feed_screen_no_longer_carries_a_placeholder`
+   * `tests/test_web_shell.py::test_the_balances_placeholder_is_gone`
+
+   All four assert the word is absent from a *screen*. That is a live and useful
+   assertion with nothing to do with what the documents claim, so criterion 22's
+   substance is unaffected and leaving them alone is right. The justification first
+   recorded here was not, though: "criterion 28 forbids touching any test outside
+   `tests/test_web_shell.py`" covers the first three and does **not** cover the fourth,
+   which lives in the one file criterion 28 permits editing. It is kept because deleting
+   a true assertion about markup would be a loss, not because a criterion protects it.
+   (`tests/test_balances.py:1648` uses the word in a comment and asserts nothing.)
+
+5. **Criteria 4, 6, 7, 8, 24 and 35 were overtaken by a merge, and the branch was rebased
+   onto it.** They were written against `8651b9d`, where `.debt(` was genuinely absent
+   from `app/app.js`. #56 landed backlog task 13 and put it there. Rebasing onto
+   `70f41d3` turned `test_nothing_the_documents_call_missing_is_in_the_shell` red, which
+   is this task's guard doing the exact thing this task exists to make it do, so the
+   capability was moved rather than the rule weakened or deleted. What that costs,
+   itemised:
+
+   * Criterion 4's five `What works today` keys are six, gaining `Transfer drill-down`,
+     and criterion 6's five are four. The ten keys across both lists are still ten.
+   * Criterion 6's `Transfer drill-down` sub-bullet and criterion 8 both require the
+     bullet to say that no screen asks the debts route. A screen asks it. Writing either
+     one now would be a document making a false claim about the app, which is the defect
+     this task was opened to remove.
+   * Criterion 7's citations are 14, 15, 16 and 17. Task 13's citation goes with its
+     bullet, because only the second list is citation-checked.
+   * Criterion 24's `Transfer drill-down` evidence inverts from `.debt(` absent from
+     `app/app.js` to `api.debt(` present in it, paired with `id="balances-drill-hint"` in
+     `app/index.html`, the hint #56 added. Nothing under `app/` was touched to make that
+     true; `SHELL_DIGEST` is still `3b8ac94014fc`, the value `70f41d3` records.
+   * Criterion 4's `Balances` sub-bullet requires "Nothing on that screen is tappable".
+     A suggested payment carrying usable provenance is a disclosure button now, so both
+     `Balances` bullets say the net figures are read only and the payments are not. The
+     net rows are still inert.
+   * Criterion 35's `2176 passed` is `2227 passed`: `70f41d3` reports `2223`, and this
+     branch deletes one test and adds five.
+
+   No criterion was edited to fit any of this.
