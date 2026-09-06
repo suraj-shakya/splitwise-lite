@@ -21,8 +21,8 @@ those nine files, and names its cache after `VERSION` and that digest together, 
 shipped edit that would have sat behind a cache nobody retired is a failing test
 rather than a silent regression, and the test prints the one line to paste back into
 `app/sw.js`. That pasted line is the whole fix; `VERSION` is left for a change to how
-the worker itself behaves.
-The worker never caches `/api`, so data is never stale behind it.
+the worker itself behaves. The worker never caches `/api`, so data is never stale
+behind it.
 
 Reach the app on `localhost` or `127.0.0.1` only. A LAN address is not a secure context,
 so the service worker will not register there and the app will not offer to install.
