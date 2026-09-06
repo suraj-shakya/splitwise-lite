@@ -9,6 +9,22 @@ all of them.
 Closes GitHub issue #42. `plans/backlog.md` has no entry for this and this task does not
 add one; the issue is the backlog entry and this file is the implementable version.
 
+## The rule this task learned the hard way
+
+**The guarantee is stated once, where the guard is implemented, and prose refers to it
+rather than repeating it.** For this task that one place is the vocabulary block and the
+two literals in `tests/test_web_shell.py`. Every sentence in this file that would describe
+what the guard catches points there instead of paraphrasing it, and where a paraphrase
+existed it has been deleted rather than corrected.
+
+Four review rounds established the need. Round one found a hard-coded count above the
+lists; round two amended six criteria; round three swept and found six more, two of them
+inside round two's own correction notes; round four found three more, one of which
+falsified round three's closing claim that no copy of the guarantee survived. Each round
+corrected the copies it was shown and left the others standing. A guarantee restated in
+four places is four things that can go stale, and prose has no digest to notice when one
+of them does.
+
 ## Why this task exists
 
 Two documents tell a new reader that the app shows nothing, and a committed test keeps
@@ -141,10 +157,9 @@ the shipped files:
 * a **does not exist yet** key carries substrings that must be **absent**, or an empty
   rule with a written reason naming the mechanism that does cover it;
 * the client's public surface, the keys of `window.SplitwiseApi` in `app/api.js`, is
-  pinned as a set. `app/api.js` is the only file under `app/` allowed to call the back
-  end, a rule `test_only_the_api_client_calls_the_back_end` already enforces, so any new
-  server-backed capability must add a name to that object. The failure message for that
-  test is what points the next person at the two lists.
+  pinned as a set, and its failure message points the next person at the two lists. What
+  that pin does and does not catch is stated above `NOT_YET` in `tests/test_web_shell.py`
+  and is deliberately not restated here.
 
 Three properties make this different from the test it replaces. Its subject is the
 relation between a claim and the code, not a word. It fails in both directions: a claim
@@ -700,12 +715,10 @@ Part of your task is three edits in one commit: move the entry from
 the two literals in `tests/test_web_shell.py`, giving it evidence that must now be present
 rather than absent.
 
-How hard the suite pushes you into those edits varies, and the entry's own `reason` in
-`NOT_YET` now says which you are getting, in the vocabulary defined above that literal.
-For task 16, nothing pushes at all. For 14, 15 and 17 you get a failure message and
-nothing more: the one string you add to `API_SURFACE` to clear that red also clears every
-trace that the documents are now wrong. Only backlog task 13 had a rule that could not be
-cleared without either moving the bullets or writing something false.
+How hard the suite pushes you into those edits varies by capability. Read your entry's
+own `reason` in `NOT_YET` before you start: it names which of the three strengths defined
+above that literal applies to you, and it is the only place that says so. Do not assume a
+red will arrive.
 
 Backlog task 13 is the worked example, because it is the case that actually fired. It
 shipped in #56 while both documents still called it missing;
@@ -808,82 +821,29 @@ each under an explicit instruction, and says so.
    Criteria 4, 6, 7, 8, 24 and 35 in the first amendment round; 15, 30 and 32 in the
    second, after a review and a QA pass each found more of the same. They were written
    against `8651b9d`, where `.debt(` was genuinely absent from `app/app.js`. #56 landed
-   backlog task 13 and put it there. Rebasing onto
-   `70f41d3` turned `test_nothing_the_documents_call_missing_is_in_the_shell` red, which
-   is this task's guard doing the exact thing this task exists to make it do, so the
-   capability was moved rather than the rule weakened or deleted. Six criteria went false
-   in the process, and each is now amended in place. What changed:
+   backlog task 13 and put it there. Rebasing onto `70f41d3` turned
+   `test_nothing_the_documents_call_missing_is_in_the_shell` red, which is this task's
+   guard doing the exact thing this task exists to make it do, so the capability was
+   moved rather than the rule weakened or deleted.
 
-   * Criterion 4 named five `What works today` keys and now names six, gaining
-     `Transfer drill-down` and a sub-bullet for it. Criterion 6 named five and now names
-     four. The ten keys across both lists are still ten.
-   * Criterion 6's `Transfer drill-down` sub-bullet and criterion 8 both required the
-     bullet to say that no screen asks the debts route. A screen asks it. The sub-bullet
-     is gone with its key, and criterion 8 is inverted: the bullet must now name the
-     route and say when it is called. Writing either of the old ones today would be a
-     document making a false claim about the app, which is the defect this task exists to
-     remove.
-   * Criterion 7 cited 13, 14, 15, 16 and 17 and now cites 14, 15, 16 and 17. Task 13's
-     citation went with its bullet, because only the second list is citation-checked.
-   * Criterion 24's `Transfer drill-down` evidence inverted from `.debt(` absent from
-     `app/app.js` to `api.debt(` present in it, paired with `id="balances-drill-hint"` in
-     `app/index.html`, the hint #56 added. Nothing under `app/` was touched to make that
-     true; `SHELL_DIGEST` is still `3b8ac94014fc`, the value `70f41d3` records.
-   * Criterion 4's `Balances` sub-bullet required "Nothing on that screen is tappable".
-     A suggested payment carrying usable provenance is a disclosure button now, so the
-     sub-bullet and both documents say the net figures are read only and the payments are
-     not. The net rows are still inert. Nothing in the suite would have prompted that
-     edit: it sits in a different bullet, under a capability the guard reads as working,
-     and it was found by reading the screen.
-   * Criterion 35 read `2176 passed` and now reads `2227 passed`: `70f41d3` reports
-     `2223`, and this branch deletes one test and adds five.
-
-   The second round added three. **Criterion 15** said `README.md` carries "the same
-   five backlog citations"; there are four, and both files were re-parsed to confirm it.
-   **Criterion 30** described its probe as adding a sixth bullet, which is a seventh once
-   criterion 4 gained one, and it also claimed two tests go red where deviation 1 has
-   recorded since the first run that only one does. **Criterion 32** described a probe
-   that can no longer produce its stated result: adding an `api.debt(` call now leaves
-   `test_nothing_the_documents_call_missing_is_in_the_shell` green, because criterion 24
-   requires that substring present. The rule survives inverted and criterion 32 now
-   describes the inverted probe, which was run here before the criterion was rewritten.
+   **What each amendment changed, and why, is in that criterion's own dated marker.** It
+   was itemised here as well, and the second copy drifted: this entry went on asserting
+   that backlog task 13's citation moved with its bullet for a full round after criterion
+   7's marker had been corrected to say it was dropped. Under the rule at the top of this
+   file the itemisation is deleted rather than corrected.
 
    Two markers written in the first round were themselves wrong and are corrected in
-   place. Criterion 7's said backlog task 13's citation "goes with its bullet into
-   `What works today`"; it was dropped, and that false account is what concealed
-   criterion 15's stale count. Criterion 4's said "the other five sub-bullets are
-   untouched"; four are, since one was added and one amended. A marker is not exempt from
-   the standard it enforces, and these two were the defect this task exists to fix
-   appearing inside this task's own audit trail.
+   place, criterion 7's and criterion 4's. A marker is not exempt from the standard it
+   enforces.
 
-   **All nine were amended in place, each with a dated marker quoting the wording it
-   replaced.** That was escalated first and not done unilaterally. The task
-   file for a branch is authored on that branch, so an engineer editing the criteria
-   their own work is judged against removes the only independence the process has, and
-   the right default is to flag a false criterion and stop. The amendment was made only
-   after an explicit instruction to make it, and the markers exist so a reviewer can see
-   every original wording without reading the branch history.
+   All nine were amended in place, each with a dated marker quoting the wording it
+   replaced. That was escalated first and not done unilaterally: the task file for a
+   branch is authored on that branch, so an engineer editing the criteria their own work
+   is judged against removes the only independence the process has, and the right default
+   is to flag a false criterion and stop. Each amendment was made only after an explicit
+   instruction to make it.
 
-   The reason recorded in each marker is the same one: #56 shipped the drill-down while
-   this branch was open, and this task's own guard is what caught the documents still
-   calling it missing. The criteria were accurate when written. The world moved
-   underneath them, which is exactly the condition the guard exists to detect, so this is
-   the mechanism working rather than a defect in the spec.
-
-   Criterion 24's marker carries one thing that is not bookkeeping, and it is recorded
-   there rather than only in the literal because a guard described as stronger than it is
-   would be this issue's own defect one level up: **nothing left in `NOT_YET` is an
-   interlock.** `Transfer drill-down` was the only one and it has been spent.
-
-   That conclusion was right and still too generous, which QA established by building the
-   capabilities rather than reasoning about them. The three entries called prompts rest
-   on `test_the_api_client_offers_exactly_the_named_calls`, and their reasons claimed a
-   capability "cannot arrive without" a new `API_SURFACE` name. It can. QA reached a void
-   route through the existing `addExpense` key and the surface test never fired; the same
-   probe was re-run here against this suite's own parse on 2026-09-07 and the key set
-   stayed at fourteen, unchanged. So the prompt is conditional on house style, not
-   guaranteed, and all four reasons plus the vocabulary above `NOT_YET` now say so. What
-   remains is an exact two-way pin between the two documents and the literal, asserted on
-   every push; a prompt for three capabilities that an implementer can route around
-   without noticing; and silence for a fourth. Nothing in this task now claims a
-   capability cannot arrive without a new name.
+   One result of these rounds is not bookkeeping, and it is recorded where the guard is
+   implemented rather than here: QA disproved the claim that a server-backed capability
+   must add a name to `API_SURFACE`, by building one that did not. The vocabulary block
+   above `NOT_YET` in `tests/test_web_shell.py` carries what that means, entry by entry.
