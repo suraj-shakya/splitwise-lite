@@ -64,6 +64,8 @@ SCENARIOS = [
     "a_successful_sign_in_keeps_the_screen_the_person_was_on",
     "a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate",
     "a_session_that_expires_mid_session_puts_the_server_sentence_on_the_gate",
+    "a_sign_in_the_network_interrupted_still_lets_the_gate_come_back",
+    "a_session_that_expires_after_a_real_sign_in_still_returns_to_the_gate",
     "a_401_answering_the_sign_in_itself_is_always_the_gate",
     "creating_an_account_signs_in_straight_after",
     "creating_an_account_that_already_exists_says_so_on_the_gate",
@@ -85,6 +87,7 @@ SCENARIOS = [
     "a_204_is_not_parsed_as_json",
     "a_refusal_a_screen_asked_for_leaves_the_app_frame_up",
     "the_whole_error_reaches_the_handler_that_registered_for_it",
+    "a_rejected_fetch_carries_no_message_of_its_own",
     "a_handler_that_throws_does_not_stop_the_rejection_reaching_the_caller",
     "an_unsupported_selector_is_a_loud_failure_not_a_null",
 ]
@@ -397,15 +400,45 @@ def test_a_run_that_will_not_quiesce_fails_and_names_the_scenario() -> None:
 
 # --- api.js is the only place a status is interpreted ----------------------
 
-# A status read in order to be compared, and a comparison against an HTTP status
-# number. `status: 503` in sw.js builds a Response and is neither of those.
-_STATUS_READ = re.compile(r"\.\s*status\s*(?:===|!==|==|!=|>=|<=|>|<)")
-_STATUS_NUMBER = re.compile(r"(?:===|!==|==|!=|>=|<=|>|<)\s*[1-5][0-9][0-9]\b")
+# A status read in order to be compared, either way round, and a comparison against
+# an HTTP status number. `status: 503` in sw.js builds a Response and is neither.
+_STATUS_READ = re.compile(
+    r"\.\s*status\s*(?:===|!==|==|!=|>=|<=|>|<)"
+    r"|(?:===|!==|==|!=|>=|<=|>|<)\s*[A-Za-z_$][\w$]*\.\s*status\b"
+    r"|\bswitch\s*\([^)]*\.\s*status\b"
+)
+_STATUS_NUMBER = re.compile(
+    r"(?:===|!==|==|!=|>=|<=|>|<)\s*[1-5][0-9][0-9]\b"
+    r"|\b[1-5][0-9][0-9]\s*(?:===|!==|==|!=|>=|<=|>|<)"
+)
 _JS_COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+# The six kinds classify() answers with. Every one of them is produced there, so a
+# classifier cut down to fewer answers is missing some of these.
+_KINDS = (
+    "offline",
+    "signed-out",
+    "sign-in-not-kept",
+    "not-linked",
+    "unavailable",
+    "refused",
+)
 
 
 def _without_comments(source: str) -> str:
     return _JS_COMMENTS.sub(" ", source)
+
+
+def _classifier(source: str) -> str:
+    """app/api.js from ``function classify(`` up to the next function after it.
+
+    Sliced rather than searched for whole-file, because the point of the companion
+    test below is that the classification is *in the classifier*: a status read in
+    `request()` to spot a 204, or in `noted()` to spot a 401, is not classification
+    and must not be able to stand in for it.
+    """
+    start = source.index("function classify(")
+    return source[start : source.index("\n  function ", start + 1)]
 
 
 def test_only_the_api_client_interprets_a_status() -> None:
@@ -420,8 +453,13 @@ def test_only_the_api_client_interprets_a_status() -> None:
     A screen genuinely does need to know whether api.js has already raised a curtain
     over it. That question is asked of ``kind``, which states it, rather than
     reconstructed from a status, which only implies it.
+
+    This is a lint, not a proof. It reads both orders of comparison and a ``switch``
+    on a status, and it would still miss a status copied into a local first. What
+    makes it worth having is that every plausible spelling of the mistake, and the one
+    #40 actually makes, is caught at the point somebody merges.
     """
-    for path in sorted(APP.glob("*.js")):
+    for path in sorted(APP.rglob("*.js")):
         if path.name == "api.js":
             continue
         source = _without_comments(path.read_text(encoding="utf-8"))
@@ -430,16 +468,39 @@ def test_only_the_api_client_interprets_a_status() -> None:
 
 
 def test_the_narrowed_status_rule_still_bites() -> None:
-    # The companion to the test above: proof that excusing one file left a rule that
-    # still refuses what it was written to refuse. Without this, api.js could stop
-    # classifying altogether and the rule above would go on passing.
+    """Proof that excusing one file left a rule that still refuses what it must.
+
+    The first version of this test asked only whether ``api.js`` compared against a
+    status *anywhere*, which ``response.status === 204`` in ``request()`` and
+    ``status !== 401`` in ``noted()`` both satisfy without classifying anything: it
+    stayed green with ``classify()`` deleted outright, which is the whole subject of
+    the task it was guarding. A guard that passes for a reason unrelated to its claim
+    is the defect this repo keeps finding, and this test was one.
+
+    So it asks about the classifier itself, by name and by slice.
+    """
     client = _without_comments((APP / "api.js").read_text(encoding="utf-8"))
+    assert "function classify(" in client, (
+        "app/api.js no longer defines classify(), which is the one place a response "
+        "becomes a kind. If it was renamed or moved, move this test with it; do not "
+        "delete it, because the rule above goes on passing without it."
+    )
+    body = _classifier(client)
+    # Every kind is answered here, so a classifier cut down to one answer fails.
+    for kind in _KINDS:
+        assert f"'{kind}'" in body, kind
+    # And the statuses it turns into those kinds are read here, in the classifier,
+    # rather than anywhere else in the file that happens to mention a number.
+    for status in ("401", "403", "500"):
+        assert re.search(rf"(?:===|!==|==|!=|>=|<=|>|<)\s*{status}\b", body), status
     assert _STATUS_READ.search(client)
-    assert _STATUS_NUMBER.search(client)
-    # And the patterns match the shape they claim to, so a green run above means the
-    # search ran rather than that the regex rotted.
+    # And the patterns match the shapes they claim to, so a green run above means the
+    # search ran rather than that a regex rotted.
     assert _STATUS_READ.search("if (error.status === 401) {")
+    assert _STATUS_READ.search("if (401 === error.status) {")
+    assert _STATUS_READ.search("switch (error.status) {")
     assert _STATUS_NUMBER.search("return error.status === 0 || error.status >= 500;")
+    assert _STATUS_NUMBER.search("if (401 === error.status) {")
     # A status being written, which is what sw.js does, is not a comparison.
     assert not _STATUS_READ.search("new Response(body, { status: 503 })")
     assert not _STATUS_NUMBER.search("new Response(body, { status: 503 })")

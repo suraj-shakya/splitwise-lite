@@ -639,7 +639,13 @@
 
   function showNotice(which, message) {
     /* The one function that hides all four paragraphs and shows one, so exactly one
-       of them is ever visible. #notice-problem is the only one whose text is written
+       of them is ever visible. It is also the only thing that ever calls
+       show('notice'), which is what makes that true: nothing resets these four flags
+       when the gate or the app frame replaces the curtain, so the paragraph that was
+       up stays flagged underneath a hidden #notice. That is invisible and harmless
+       only for as long as every route back to a raised #notice comes through here and
+       sets all four again. Raise the curtain from anywhere else and two paragraphs
+       show at once. #notice-problem is the only one whose text is written
        here, and it is cleared whenever it is not the paragraph being shown, so a
        sentence from an earlier failure is never left sitting behind a later one.
        The sentence goes in as text and no markup is ever parsed, so a message
@@ -719,9 +725,16 @@
           return;
         }
         /* Everything else is something the person can act on, a wrong password most
-           of all. The 401 handler has just re-shown the gate with a blank message,
-           so this runs after it and is what they actually read. */
-        gateError.textContent = error.message || 'That did not work.';
+           of all. The 401 handler has just re-shown the gate with whatever api.js
+           decided was worth reading, so this runs after it and is what they actually
+           read.
+
+           say and not message, which is what every other screen prints: they differ
+           only where api.js decided the server's sentence describes a situation the
+           person is not in, and printing it there anyway would be this screen
+           overruling the one place that gets to decide. The fallback is the gate's
+           own, for a refusal whose body carried nothing at all. */
+        gateError.textContent = error.say || 'That did not work.';
         gateError.hidden = false;
         show('gate');
       })

@@ -35,14 +35,24 @@
    carried no message or because the message describes a situation the person is not
    in.
 
-   The words are the client's in exactly two situations, both because the server has
-   no sentence to offer, and both of those sentences live in app/index.html with the
-   rest of the standing copy: nothing came back at all, and a sign-in the server
-   accepted whose very next request it then refused. not_authenticated is the only
-   401 code whose sentence is suppressed, because it means there was no cookie at all,
-   which is every first visit, and "this endpoint needs a signed-in session" is
-   written for a client rather than for a flatmate. The gate already says what it is
-   for. session_invalid and authentication_failed both say something the person needs.
+   error.message is the server's sentence character for character, and '' when no body
+   carried one, a rejected fetch included. This file composes no prose at all: not a
+   prefix, not a fallback, and not a rendering of whatever object fetch rejected with.
+   That is what makes say's two possibilities two rather than three.
+
+   The screens own three sentences between them, and none of them is here. Two are
+   standing copy on the notice curtain in app/index.html, for the two situations the
+   server has no sentence to offer: nothing came back at all, and a sign-in the server
+   accepted whose very next request it then refused. The third is app/app.js's last
+   resort on the gate, for a refusal whose body carried nothing to show; that is not a
+   situation with a sentence of its own, it is what the gate says when there is
+   nothing to say.
+
+   not_authenticated is the only 401 code whose sentence is suppressed, because it
+   means there was no cookie at all, which is every first visit, and "this endpoint
+   needs a signed-in session" is written for a client rather than for a flatmate. The
+   gate already says what it is for. session_invalid and authentication_failed both
+   say something the person needs.
 
    The classification, read top to bottom against web.py's error table. The last two
    rows are the default and are reached by anything the rows above did not claim,
@@ -212,10 +222,17 @@
             );
           });
       },
-      function (networkFailure) {
-        /* The request never got an answer. Never the sign-in gate. */
+      function () {
+        /* The request never got an answer, so no body carried a message and the
+           message is '' exactly as it is for any other empty body. Never the sign-in
+           gate.
+
+           The rejection fetch hands back says "TypeError: Failed to fetch", and this
+           used to be composed into message. It was diagnostics rather than anything a
+           person reads, say kept it off the screen, and it made this file the author
+           of the one message it promises never to write. */
         noted(0);
-        return Promise.reject(new ApiError(0, 'offline', String(networkFailure)));
+        return Promise.reject(new ApiError(0, 'offline', ''));
       }
     );
   }

@@ -861,6 +861,21 @@ function page(scripts, name, provokeRunawayTimer) {
     failures: failures,
     windowEvents: windowEvents,
     finish() {
+      /* The #notice invariant, checked on every scenario rather than only on the ones
+         that thought to look: while the curtain is up, exactly one of its four
+         paragraphs is showing. While it is down, nothing inside it is visible and the
+         flags underneath are not a state anybody can see. That distinction is
+         load-bearing, and it rests on showNotice() being the only thing that ever
+         raises #notice again, which is why it sets all four flags on every call. */
+      if (!byId('notice').hidden) {
+        const showing = NOTICES.filter((name) => !byId('notice-' + name).hidden);
+        if (showing.length !== 1) {
+          failures.push(
+            '#notice is up with ' + showing.length + ' of its paragraphs showing, ' +
+              'not exactly one: ' + JSON.stringify(showing)
+          );
+        }
+      }
       calls.forEach((call, index) => wellFormed(call, index, failures));
       if (declaredRequests === null) {
         failures.push(
@@ -1151,9 +1166,18 @@ function everyNoticeHidden(page, which, what) {
 
 function gateIsUp(page, what) {
   /* showGate() hides the sign out control, and every route to the gate goes through
-     it, so it is hidden whenever the gate is up. */
+     it, so it is hidden whenever the gate is up.
+
+     The four paragraph flags are deliberately not asserted here. Nothing resets them
+     when the gate replaces a notice, so after a curtain the paragraph that was up
+     stays flagged visible underneath a #notice that is itself hidden, where nobody
+     can see it. curtains() pins that #notice is hidden, which is the property that
+     matters and the one the two canaries rely on; the flags underneath only mean
+     something while the curtain is up, and finish() checks them there on every
+     scenario. Asserting them here as well would be asserting that the app does
+     housekeeping it does not do, and the first scenario to go notice-then-gate would
+     fail for a reason that is not a defect. */
   curtains(page, 'gate', what, false);
-  everyNoticeHidden(page, null, what);
   page.is(flatText(page.el('gate-lede')), GATE_LEDE, what + ': #gate-lede text');
 }
 
@@ -1565,9 +1589,14 @@ const SCENARIOS = [
   },
 
   {
-    /* The other half of the same rule. By the time a session expires mid session the
-       check has been disarmed by a successful read, so this is an ordinary 401: the
-       gate comes back, carrying the sentence the server sent rather than blank. */
+    /* An ordinary 401 with the check never armed at all, which is what a session that
+       expires under a client that booted straight into a live session looks like. The
+       gate comes back carrying the sentence the server sent rather than blank.
+
+       This scenario does NOT exercise the disarm: it boots into ok(A_MEMBER), so
+       armed is still false from initialisation and the 401 is ordinary for that
+       reason rather than because anything disarmed it. The scenario below is the one
+       that arms the check first and then relies on the disarm. */
     name: 'a_session_that_expires_mid_session_puts_the_server_sentence_on_the_gate',
     async run(page) {
       screensLoad(page);
@@ -1581,6 +1610,85 @@ const SCENARIOS = [
       page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
       page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
       page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* The other way the check is disarmed: not by a response, but by there being no
+       response at all. A rejected fetch is not a 401, and the safe reading of "not a
+       401" is the one that lets the gate come back: a person whose network dropped
+       after signing in, who then navigates and is told their session is gone, needs a
+       password box. Left armed, they would get the cookie notice instead, with no
+       gate behind it, which is the no-way-back curtain again.
+
+       The one further request is driven through the shipped client rather than by
+       navigating, and that is not a convenience. Navigating makes the balances screen
+       read the roster and the figures together, and whichever of those two answers is
+       processed first calls noted(): a 200 among them disarms the check on its own,
+       before the 401 beside it is ever classified. A scenario written that way passes
+       whether or not the rejected fetch disarmed anything, which is the whole failure
+       this round of review was about. One request in flight, and only the rule under
+       test can decide the outcome. app/app.js's own handlers are left in place, so
+       what is asserted is still what a person would see. */
+    name: 'a_sign_in_the_network_interrupted_still_lets_the_gate_come_back',
+    async run(page) {
+      page.respondInOrder('GET', '/session', [noSession(), networkFailure()]);
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', sessionDied(EXPIRED));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      /* The sign-in worked and the read behind it got no answer: the offline curtain,
+         and the check disarmed by the absence of an answer rather than by one. */
+      noticeIsUp(page, 'offline', 'a session read that got no answer', false);
+      page.global('window.SplitwiseApi.members().then(null, function () {});');
+      await page.settle();
+      gateIsUp(page, 'a 401 after the network came back');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The disarm, which is what makes the check one-shot, and the scenario above only
+       claims to cover. A real sign-in arms it, the session read behind that sign-in
+       succeeds and disarms it, and the 401 that arrives later is therefore ordinary:
+       the gate, with the server's sentence on it.
+
+       Without the disarm, armed stays true for the rest of the session and every
+       later 401 is read as a sign-in that did not stick. The person gets a curtain
+       telling them their browser is not keeping cookies, with no gate behind it and
+       no way to sign back in, which is a worse outcome than the blank gate #36 was
+       filed about: that at least had a password box on it. */
+    name: 'a_session_that_expires_after_a_real_sign_in_still_returns_to_the_gate',
+    async run(page) {
+      screensLoad(page);
+      page.respondInOrder('GET', '/session', [noSession(), ok(A_MEMBER)]);
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.respondInOrder('GET', '/members', [ok(EMPTY_ROSTER), sessionDied(EXPIRED)]);
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'signed in');
+      await page.goTo('#/balances');
+      gateIsUp(page, 'an expiry after a real sign-in');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(page.global('window.SplitwiseApi.cachedSession()'), null, 'cachedSession');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
         'GET /api/session',
         'GET /api/expenses',
         'GET /api/members',
@@ -2058,6 +2166,35 @@ const SCENARIOS = [
         true,
         'the rejection is an ApiError'
       );
+      page.expectRequests(['GET /api/session', 'GET /api/session']);
+    }
+  },
+
+  {
+    /* What a rejected fetch puts in message, which nothing constrained until this
+       scenario. It used to carry String(networkFailure), "TypeError: Failed to
+       fetch", composed by this client rather than sent by the server, and a reviewer
+       replaced it with a full user-facing sentence with the whole suite still green.
+       say kept it off the screen either way, but say is assigned from message, so the
+       invariant rested entirely on speaks() returning false for offline. It now rests
+       on message being what the header says it is. Registers its own handler, so no
+       screen state is asserted here. */
+    name: 'a_rejected_fetch_carries_no_message_of_its_own',
+    async run(page) {
+      page.respondInOrder('GET', '/session', [noSession(), networkFailure()]);
+      await page.boot();
+      page.global(
+        'window.seen = null;' +
+          'window.SplitwiseApi.onOffline(function (error) { window.seen = error; });' +
+          'window.SplitwiseApi.session().then(null, function () {});'
+      );
+      await page.settle();
+      page.is(page.global('window.seen.kind'), 'offline', 'kind');
+      /* A machine-readable sentinel, not prose, and the classifier reads the status
+         rather than this. */
+      page.is(page.global('window.seen.code'), 'offline', 'code');
+      page.is(page.global('window.seen.message'), '', 'message');
+      page.is(page.global('window.seen.say'), '', 'say');
       page.expectRequests(['GET /api/session', 'GET /api/session']);
     }
   },
