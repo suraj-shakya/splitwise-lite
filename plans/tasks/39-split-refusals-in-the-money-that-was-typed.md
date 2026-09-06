@@ -394,10 +394,37 @@ quoted exactly, including case and the absence of a trailing full stop.
     2223 plus the number of cases this task adds; the four rewritten tests are rewrites and
     add nothing. QA records the exact number. `node` 20 or later is on `PATH`, so the
     JavaScript half runs and is not skipped.
-27. The files changed by this task are exactly six: `src/splitwise_lite/split.py`,
+27. The files changed by this task are exactly seven: `src/splitwise_lite/split.py`,
     `src/splitwise_lite/web.py`, `tests/test_split.py`, `tests/test_web_api.py`,
-    `tests/shell_harness.mjs`, and this spec if it needs correcting. No file is created or
-    deleted anywhere in `src/`, `tests/`, `app/`, `scripts/` or `plans/`.
+    `tests/shell_harness.mjs`, `tests/test_shell_behaviour.py`, and this spec if it needs
+    correcting. No file is created or deleted anywhere in `src/`, `tests/`, `app/`,
+    `scripts/` or `plans/`.
+
+    > **Amended 2026-09-07, after the first review of PR #62.** This criterion opened "The
+    > files changed by this task are exactly six" and listed the five paths above plus this
+    > spec. `tests/test_shell_behaviour.py` is added to the list, for one line.
+    >
+    > The seventh path is structural, not sprawl, and sprawl is the only thing this
+    > criterion exists to stop. `tests/test_shell_behaviour.py` holds `SCENARIOS`, the
+    > hand-declared registry of every scenario the harness runs, in the order it runs them,
+    > and `test_the_harness_reports_exactly_the_declared_scenarios` asserts the harness
+    > reports back exactly that list. The declaration's own comment says why it is written
+    > by hand: a scenario deleted from the harness fails pytest, and one added to the
+    > harness without being declared here fails pytest too. So, by the repo's own design,
+    > **a harness scenario costs exactly two files, always.**
+    >
+    > A scenario was added in review. Criteria 2 and 16 assert the zero-total sentence in
+    > the domain and on the wire, criterion 18 renders only the mismatch sentence, and
+    > criterion 20's click-through, the one remaining thing that would ever cover it, has
+    > not been performed. This criterion therefore permitted the scenario that closes that
+    > gap while forbidding the second file the scenario structurally requires. That is a
+    > contradiction rather than a constraint, the same shape as criteria 49 and 51 on the
+    > drill-down branch.
+    >
+    > What the criterion means is unchanged, and nothing is loosened by it: no path outside
+    > this list, nothing created, nothing deleted, and nothing under `app/`, which
+    > criterion 25 holds separately. The seventh path is named so that the next person
+    > adding a scenario budgets for it rather than rediscovering the rule.
 28. `pyproject.toml` and `uv.lock` are byte-identical to `master`. No new dependency, in
     either language.
 
@@ -486,8 +513,9 @@ quoted exactly, including case and the absence of a trailing full stop.
 
 ## Constraints
 
-* **Files edited: exactly six**, as listed in criterion 27. Nothing else, in either
-  direction.
+* **Files edited: exactly seven**, as listed in criterion 27, which was amended on
+  2026-09-07 to name `tests/test_shell_behaviour.py`; see the marker there for why that
+  path is structural. Nothing else, in either direction.
 * **Money is integer cents everywhere.** No float, no `round`, no true division, anywhere in
   this diff. `Decimal` stays an implementation detail inside `money.py` and does not appear
   in `split.py`. The three AST tests in `tests/test_split.py` enforce the first three and
