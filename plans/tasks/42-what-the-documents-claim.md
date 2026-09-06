@@ -523,3 +523,39 @@ a fixture, a second test file or a Markdown parser, it has gone wrong.
 The work that is not typing is criteria 29 to 34: six probes run against the real tree,
 each reverted, each quoted in the QA note. Without them this task has produced a guard
 that is believed to work, which is the same category of thing as the test it replaced.
+
+## Deviations
+
+The suite count is not one of them: `uv run python -m pytest` reports `2176 passed`,
+exactly the number criterion 35 predicts, with nothing skipped and nothing xfailed. What
+follows is four places where a criterion's wording and the observed result differ. None
+of the criteria were changed; this is the record of what running them produced.
+
+1. **Criterion 30 turns one test red, not two.** The probe adds a sixth bullet,
+   `**Recurring expenses**`, to `CLAUDE.md`'s first list only, so only
+   `test_both_documents_agree_on_what_works_today` can see it; the second list is
+   untouched and its test stays green. Criterion 29 does turn both red, because moving a
+   bullet changes both lists. The point of criterion 30, that an invented capability
+   turns the suite red, holds.
+
+2. **Criterion 34's "each is green" holds for probes 29 and 30 only.** On `master`,
+   probes 31 and 32 turn `test_the_recorded_digest_matches_the_files_it_covers` red,
+   because it is task 46's guard and predates this task: any edit to a precached file
+   moves the digest. Neither of this task's guards exists there, so nothing on `master`
+   notices the new capability or the new call, which is the before state the criterion is
+   after. Probes 29 and 30 are green on `master` outright.
+
+3. **Criterion 4's "one or two lines of prose after the key" is not reachable** alongside
+   the content its own sub-bullets require. `Install and open offline` alone has to carry
+   the home screen, the offline shell, the `localhost` restriction, the uncached API, the
+   message that follows and the expense that cannot be recorded. Every bullet in both
+   documents is written as tightly as that content allows and runs to three or four
+   wrapped lines. Nothing in the suite pins bullet length.
+
+4. **Criterion 22's "the word `placeholder` is asserted by nothing anywhere in the
+   suite"** is satisfied for the documents, which is what the criterion is about: no test
+   asserts either document contains it. Two tests written earlier assert the word is
+   *absent* from a screen, `tests/test_add_screen.py::test_the_placeholder_is_gone_from_the_document`
+   and `tests/test_feed_screen.py::test_the_feed_screen_no_longer_carries_a_placeholder`,
+   and criterion 28 forbids touching any test outside `tests/test_web_shell.py`. They are
+   left alone.
