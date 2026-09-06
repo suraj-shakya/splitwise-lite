@@ -153,9 +153,9 @@ about the prose, are pinned in `tests/test_web_shell.py`, alongside evidence dra
 the shipped files:
 
 * a **works today** key carries substrings that must be **present** in named files under
-  `app/`, so a capability cannot be claimed while the machinery for it is absent;
+  `app/`;
 * a **does not exist yet** key carries substrings that must be **absent**, or an empty
-  rule with a written reason naming the mechanism that does cover it;
+  rule with a written reason;
 * the client's public surface, the keys of `window.SplitwiseApi` in `app/api.js`, is
   pinned as a set, and its failure message points the next person at the two lists. What
   that pin does and does not catch is stated above `NOT_YET` in `tests/test_web_shell.py`
@@ -183,11 +183,8 @@ lists are where a reader looks for capability claims, and the test refuses a bul
 either section that does not carry a bold key, so a claim cannot be smuggled in as an
 unkeyed bullet.
 
-One entry has no automatic tripwire at all. The incompleteness signal (backlog task 16)
-could be computed on the client from data already in the feed payload, adding no API
-method and needing no new client call. Other tests would go red (the section id sets are
-pinned by set equality) but none of them would point anybody at the documents. That is
-written into the entry's own reason rather than papered over.
+Which entries get a tripwire when the capability lands, and which get nothing, varies and
+is recorded per entry in `NOT_YET`. It is deliberately not summarised here.
 
 ## Goal
 
@@ -195,8 +192,7 @@ written into the entry's own reason rather than papered over.
 live ledger behind a sign-in gate, what still needs `setup_group.py` and a linked account
 before anything shows, and the backlog capabilities that genuinely do not exist yet.
 The test that required the word `placeholder` is gone, replaced by a guard whose subject
-is the relation between what the documents claim and what is in `app/`, so a claim
-without machinery and machinery without a claim are both red.
+is the relation between what the documents claim and what is in `app/`.
 
 ## Acceptance criteria
 
@@ -460,11 +456,9 @@ establish the replacement guard actually bites.
     * `Mark as paid`, `Receiver confirmation`, `Expense correction`: no substring rule,
       and a reason naming `test_the_api_client_offers_exactly_the_named_calls` as the
       mechanism that covers them, because a client call is the only way any of them can
-      reach the server. Each reason states plainly that this is a **prompt** and not an
-      **interlock**, and states both limits on it: one string added to `API_SURFACE`
-      clears the red with both documents left stale, and the red only comes at all if
-      the capability arrives as a new top-level key. A reason that says the capability
-      cannot arrive without a new name does not meet this criterion.
+      reach the server. Each reason names which of the strengths defined above
+      `NOT_YET` it has, and does not claim a capability cannot arrive without a new
+      name. Those definitions live there and are not repeated in this file.
     * `The incompleteness signal`: no substring rule, and a reason saying plainly that
       nothing in the suite would catch this one and why.
 
@@ -475,30 +469,21 @@ establish the replacement guard actually bites.
     > The reviewer's suggestion is followed: the `app/app.js` needle inverts cleanly, and
     > it is paired with the `app/index.html` id #56 added.
     >
-    > The interlock and prompt sentence in the `Mark as paid` line is new too, and it
-    > carries a conclusion that has to be recorded here and not only in the literal,
-    > because a guard described as stronger than it is would be this issue's own defect
-    > one level up. **Nothing left in `NOT_YET` is an interlock.** `Transfer drill-down`
-    > was the only entry this task ever had one for, and it has now been spent: the
-    > capability shipped, the rule caught it, and the entry moved. For `Mark as paid`,
-    > `Receiver confirmation` and `Expense correction` the red is a prompt, cleared by
-    > one string; for `The incompleteness signal` there is nothing at all, which its own
-    > line has always said. So the whole of this task's enforcement should be read as a
-    > two-way pin between the two documents and the literal, plus a prompt for three
-    > capabilities and silence for a fourth.
+    > The requirement on the three reasons is new too. It said what each reason had to
+    > claim; it now says each must name a strength from the definitions above `NOT_YET`
+    > and must not claim a capability cannot arrive without a new name.
     >
-    > **Amended again 2026-09-07, after the second review.** This paragraph ended
-    > "Restoring an interlock needs a substring a capability cannot arrive without, and
-    > for the four that remain no such substring is knowable in advance." That was an
-    > unchecked guarantee of the kind this whole task exists to remove, and the reasons
-    > it summarised carried the same one. QA disproved it by building the capability
-    > rather than arguing about it: a void route reached through the existing
-    > `addExpense` key left `test_the_api_client_offers_exactly_the_named_calls`
-    > silent. Re-run here against this suite's own parse, the key set stayed at
-    > fourteen, unchanged, so nothing fires. The prompt is therefore conditional on
-    > house style and not guaranteed, which the requirement above now demands each
-    > reason say. What an interlock would need in future is left unstated here, because
-    > it has not been worked out and asserting it was the error.
+    > **Amended again 2026-09-07, after the third review.** This marker also carried a
+    > summary of the whole interlock, prompt and silence taxonomy, ending "Restoring an
+    > interlock needs a substring a capability cannot arrive without, and for the four
+    > that remain no such substring is knowable in advance." QA disproved that by
+    > building the capability rather than arguing about it: a void route reached through
+    > the existing `addExpense` key left
+    > `test_the_api_client_offers_exactly_the_named_calls` silent, and re-run here
+    > against this suite's own parse the key set stayed at fourteen, unchanged. The
+    > summary is **deleted rather than corrected**, under the rule at the top of this
+    > file. The taxonomy, and what it means for each entry, is above `NOT_YET` in
+    > `tests/test_web_shell.py` and nowhere else.
 25. Each of the five tests fails with prose rather than a bare assertion. QA reads all
     five messages while performing criteria 29 to 32 and confirms each says which file is
     wrong, what was expected, and what to do next: if the capability landed, move its
@@ -651,8 +636,7 @@ QA runs `git status` after each and records that the tree is clean.
 
 ## Constraints
 
-* **Files edited: exactly six**, the ones in criterion 37, plus the deletion of
-  `ISSUE-42.md`.
+* **Files edited: the ones criterion 37 names**, plus the deletion of `ISSUE-42.md`.
 * **`tests/test_web_shell.py` keeps its own rules**: standard library only, nothing
   imports `splitwise_lite`, and every path is resolved from `REPO` rather than from the
   working directory. Reading `plans/backlog.md` from that file is new and is allowed; it
@@ -661,9 +645,9 @@ QA runs `git status` after each and records that the tree is clean.
   are already imported there.
 * **No parser.** The list format is read with one regex per list. If the implementer
   finds themselves writing a Markdown parser, the format is wrong, not the parser.
-* **The three forbidden lowercase strings in criterion 11**, plus `no product code yet`
-  in `README.md`. They are asserted absent by tests written before this one, and the
-  obvious heading wording collides with the first of them.
+* **The forbidden lowercase strings in criterion 11**, plus `no product code yet` in
+  `README.md`. They are asserted absent by tests written before this one, and the obvious
+  heading wording collides with one of them. Criterion 11 lists them; this line does not.
 * **The `no build step` paragraph is not duplicated** in either file. Criterion 26.
 * **No test is skipped or marked xfail**, per `.claude/rules/testing.md`.
 * Run the suite with `uv run python -m pytest`. Plain `uv run pytest` fails on this
@@ -720,24 +704,22 @@ own `reason` in `NOT_YET` before you start: it names which of the three strength
 above that literal applies to you, and it is the only place that says so. Do not assume a
 red will arrive.
 
-Backlog task 13 is the worked example, because it is the case that actually fired. It
-shipped in #56 while both documents still called it missing;
-`test_nothing_the_documents_call_missing_is_in_the_shell` went red on this branch's
-rebase, naming the key, the file and the substring; and the fix was the three edits above
-plus a fourth nobody would have been reminded of, the `Balances` bullet, which claimed
-nothing on that screen was tappable and by then a suggested payment was a button.
+Backlog task 13 is the worked example, because it is the case that actually fired; what
+happened is recorded in criterion 4's and criterion 24's markers. The part worth carrying
+into your own task: the guard named three edits, and a fourth was needed that nothing
+prompted, in a neighbouring bullet the guard reads as correct. Budget for it.
 
-If your feature makes one of the ten keys the wrong name, rename it in both documents and
+If your feature makes one of the keys the wrong name, rename it in both documents and
 in the literal. The keys are labels, not vocabulary anybody is defending; what the tests
 are defending is that the label and the code agree.
 
 ## Size
 
-Two capability lists in each of two documents, ten bullets between them, one line in
-`plans/spec.md`, one sentence in `plans/backlog.md`, one deleted test and five added
-ones, roughly ninety lines of Python counting the two literals and the failure
-messages. If it grows a helper module, a fixture, a second test file or a Markdown
-parser, it has gone wrong.
+Two capability lists in each of two documents, a line in `plans/spec.md`, a sentence in
+`plans/backlog.md`, one test deleted and a few added, roughly ninety lines of Python
+counting the two literals and the failure messages. The exact shape is criteria 4, 6 and
+23 and is not restated here. If it grows a helper module, a fixture, a second test file
+or a Markdown parser, it has gone wrong.
 
 The work that is not typing is criteria 29 to 34: six probes run against the real tree,
 each reverted, each quoted in the QA note. Without them this task has produced a guard

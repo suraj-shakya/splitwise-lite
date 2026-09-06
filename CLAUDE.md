@@ -37,11 +37,9 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
 These are planned in `plans/backlog.md` and absent from the app. Both lists here are
 pinned to a literal in `tests/test_web_shell.py`, so a capability claimed in one of them
 and not recorded there turns the suite red, and so does editing this file and leaving
-`README.md` alone. What happens when you *build* one is weaker, and it differs per
-capability, so the literal records it entry by entry: one of them would land with
-nothing in the suite noticing at all, and the others turn a test red only if they are
-built the way the house style suggests. None of it moves the bullet for you. Read an
-entry's reason there before trusting the suite to catch you.
+`README.md` alone. What the suite notices when one of these is actually *built* varies by
+capability and is recorded entry by entry in that literal. Read your entry's reason there
+before trusting the suite to catch you; none of it moves the bullet for you.
 
 - **Mark as paid** (backlog task 14): nothing records that a payment happened.
 - **Receiver confirmation** (backlog task 15): and so nothing confirms one, which means
