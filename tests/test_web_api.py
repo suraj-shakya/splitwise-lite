@@ -2833,7 +2833,7 @@ def test_an_amount_that_is_a_json_number_is_refused(
 @pytest.mark.parametrize(
     "amount, code, fragment",
     [
-        ("0.00", "invalid_split", "strictly positive"),
+        ("0.00", "invalid_split", "more than zero"),
         ("-5.00", "invalid_amount", "not a valid amount"),
         ("12.505", "invalid_amount", "fractional digits"),
         ("92233720368547758.08", "invalid_amount", "too large to store"),
@@ -2958,11 +2958,26 @@ def test_weights_summing_to_zero_are_refused_by_the_resolver(
     assert expense_count(seeded) == 0
 
 
+def group_money(cents: int) -> str:
+    """The seeded group's own currency rendered through the one display edge.
+
+    Every expected figure in the refusal tests below is built by calling this rather
+    than typed as a literal, so they assert that a message spells its figures the way
+    ``format_amount`` spells them, not that it matches a rendering frozen on the day
+    they were written.
+    """
+    from splitwise_lite import money
+
+    return money.format_amount(money.Money(cents, Currency(CURRENCY)))
+
+
 def test_exact_amounts_that_do_not_add_up_report_both_figures(
     app, seeded: Path
 ) -> None:
-    # The resolver's own message carries what was allocated and what the total was,
-    # which is what lets an entry screen say by how much the user is out.
+    # The resolver's own message carries what the shares came to and what the total
+    # was, which is what lets an entry screen say by how much the user is out. Both
+    # figures are in the money the user typed: the screen prints this sentence word
+    # for word, and 950 is not something anybody typed.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     response = add_expense(
@@ -2977,7 +2992,110 @@ def test_exact_amounts_that_do_not_add_up_report_both_figures(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "invalid_split"
-    assert body["error"]["message"] == "exact amounts sum to 950, not the total 1000"
+    message = body["error"]["message"]
+    assert message == (
+        f"the shares add up to {group_money(950)}, "
+        f"but the total is {group_money(1000)}"
+    )
+    # The raw cent spellings cannot occur inside 9.50 and 10.00, which is why these
+    # are the figures to test the defect's absence with.
+    assert "950" not in message
+    assert "1000" not in message
+    assert expense_count(seeded) == 0
+
+
+def test_a_zero_amount_is_refused_in_the_money_and_not_in_a_parameter_name(
+    app, seeded: Path
+) -> None:
+    # The other refusal the add screen can provoke out of the resolver. "Amount" is
+    # the label on the field; "total_cents" is a parameter in split.py.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="0.00",
+        split=equal_split(members["Sam"], members["Ali"]),
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "invalid_split"
+    message = body["error"]["message"]
+    assert group_money(0) in message
+    assert "total_cents" not in message
+    assert "cents" not in message
+    assert expense_count(seeded) == 0
+
+
+def test_the_shell_harness_refusal_fixture_is_the_sentence_the_api_sends(
+    app, seeded: Path
+) -> None:
+    """The JavaScript half's fixture cannot drift from the Python half's sentence.
+
+    ``tests/shell_harness.mjs`` shows ``ADD_SUM_REFUSED`` to a person through the
+    shipped ``app/api.js`` and ``app/app.js``, and asserts it lands in
+    ``#add-error-server`` character for character. Nothing over there knows whether
+    the server still says it. This reads the literal out of the fixture and compares
+    it against a live 400 with the harness scenario's own figures, so a reword of
+    ``split.py``'s refusal goes red here pointing at the fixture that has gone stale.
+    """
+    import re
+
+    source = (REPO / "tests" / "shell_harness.mjs").read_text(encoding="utf-8")
+    declared = re.search(
+        r"^const ADD_SUM_REFUSED = '([^']*)';$", source, re.MULTILINE
+    )
+    assert declared is not None, "shell_harness.mjs declares no ADD_SUM_REFUSED"
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={
+            "mode": "exact",
+            "amounts": {members["Sam"]: "8.00", members["Ali"]: "1.50"},
+        },
+    )
+    assert response.status_code == 400
+    assert declared.group(1) == response.get_json()["error"]["message"]
+
+
+def test_the_shell_harness_zero_amount_fixture_is_the_sentence_the_api_sends(
+    app, seeded: Path
+) -> None:
+    """The harness's other refusal fixture, held to the standard criterion 19 set.
+
+    ``ADD_ZERO_REFUSED`` is both the body the harness's stubbed ``fetch`` hands back
+    and the value its scenario expects in ``#add-error-server``, so the JavaScript
+    half is self-consistent by construction: set it to nonsense and the scenario
+    still passes. Rendering the sentence proves the shell shows what it is given; it
+    cannot prove the server still gives it. This reads the literal out of the fixture
+    and compares it against a live 400 with the characters that scenario types, so a
+    reword of ``_require_total``'s refusal reds here rather than going unnoticed.
+    """
+    import re
+
+    source = (REPO / "tests" / "shell_harness.mjs").read_text(encoding="utf-8")
+    declared = re.search(
+        r"^const ADD_ZERO_REFUSED = '([^']*)';$", source, re.MULTILINE
+    )
+    assert declared is not None, "shell_harness.mjs declares no ADD_ZERO_REFUSED"
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        # "0" and not "0.00": the screen sends the field's characters untouched, so
+        # the fixture and the live request have to agree about that as well.
+        amount="0",
+        split=equal_split(members["Sam"], members["Ali"]),
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "invalid_split"
+    assert declared.group(1) == response.get_json()["error"]["message"]
     assert expense_count(seeded) == 0
 
 

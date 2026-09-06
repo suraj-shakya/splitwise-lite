@@ -1308,14 +1308,25 @@ const ADD_CREATED = {
   }
 };
 
-/* split_exact's own refusal, pinned by
-   tests/test_web_api.py::test_exact_amounts_that_do_not_add_up_report_both_figures.
-   Its figures are raw cents against dollars the person typed, and it is still shown
-   word for word: the alternatives are inventing replacement copy for one code, which
-   drifts from web.py the day either changes, or dividing by a hundred in JavaScript,
-   which is the one thing this codebase exists to prevent. Raised as its own issue
-   against src/splitwise_lite/split.py. */
-const ADD_SUM_REFUSED = 'exact amounts sum to 950, not the total 1000';
+/* split_exact's own refusal, in the money the person typed rather than in cents.
+   split.py renders both figures through money.format_amount, so this is the sentence
+   the resolver writes and the screen shows word for word: no replacement copy per
+   error code on the client, which would drift from web.py the day either changes, and
+   no dividing by a hundred in JavaScript, which is the one thing this codebase exists
+   to prevent.
+
+   This literal is a fixture with a producer, and
+   tests/test_web_api.py::test_the_shell_harness_refusal_fixture_is_the_sentence_the_api_sends
+   reads it out of this file and compares it against a live 400 from the same figures.
+   Reword split.py's refusal and that test goes red pointing here. */
+const ADD_SUM_REFUSED = 'the shares add up to 9.50, but the total is 10.00';
+
+/* _require_total's own refusal, the other one the add screen can provoke out of the
+   resolver, and rendered by the same code as the sentence above. A zero is not a
+   blank, so addSubmitted() sends it: this screen judges no amount, it only checks
+   there is one to send. What comes back is the server's sentence in the money that
+   was typed, with money.format_amount deciding the 0.00. */
+const ADD_ZERO_REFUSED = 'the amount must be more than zero, but it is 0.00';
 
 /* Every body spelled out rather than rebuilt from the values a scenario typed in: a
    request whose payload is asserted against a copy of the code that built it asserts
@@ -1334,6 +1345,8 @@ const ADD_DESCRIBED = '{"description":"what was typed","amount":"9.99",' +
   '"member_ids":["mem-1","mem-2","mem-3"]}}';
 const ADD_ALONE = '{"description":"","amount":"12.50","payer_id":"mem-1",' +
   '"split":{"mode":"equal","member_ids":["mem-1"]}}';
+const ADD_ZERO = '{"description":"","amount":"0","payer_id":"mem-1",' +
+  '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
 const ADD_MILK = '{"description":"Milk","amount":"12.50","payer_id":"mem-1",' +
   '"split":{"mode":"equal","member_ids":["mem-1","mem-2","mem-3"]}}';
 /* The acting member is second in the roster this one goes with, so the payer and the
@@ -2629,8 +2642,8 @@ const SCENARIOS = [
   },
 
   {
-    /* The refusal that matters most, shown in the resolver's own words including its
-       raw cent figures, and nothing the person typed is thrown away by it. */
+    /* The refusal that matters most, shown in the resolver's own words and in the
+       money the person typed, and nothing they typed is thrown away by it. */
     name: 'shares_that_do_not_add_up_show_the_resolvers_own_message_and_keep_the_draft',
     async run(page) {
       await addBoot(page, ADD_ROSTER);
@@ -3247,6 +3260,47 @@ const SCENARIOS = [
         'GET /api/members',
         { method: 'POST', path: '/expenses', body: ADD_EQUALLY },
         'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The resolver's other refusal, in front of a person. Everything about this
+       sentence was asserted on the wire and in the domain and nothing rendered it,
+       so the only check it had left was a click-through nobody had performed.
+
+       Two things are pinned here that the mismatch scenario cannot pin. A zero
+       reaches the server at all: the screen's own amount error is for a field with
+       nothing in it, and a typed 0 is not that, so the request goes out and
+       #add-error-amount stays down while #add-error-server carries the answer. And
+       the equal mode renders it too, which is the mode the mismatch sentence can
+       never come back from. The draft survives, as it does after any refusal. */
+    name: 'a_zero_amount_is_refused_in_the_resolvers_own_words_and_keeps_the_draft',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond(
+        'POST',
+        '/expenses',
+        failure(400, CODES.invalidSplit, ADD_ZERO_REFUSED)
+      );
+      page.el('add-amount').value = '0';
+      await page.dispatch(page.el('add-form'), 'submit');
+      appIsUp(page, 'a refused save');
+      page.is(page.el('add-error').hidden, false, '#add-error');
+      page.is(
+        page.el('add-error-server').textContent,
+        ADD_ZERO_REFUSED,
+        '#add-error-server text'
+      );
+      page.same(addErrorsShown(page), [false, false, true], 'the three error children');
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-amount').value, '0', '#add-amount');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      page.is(page.el('add-submit').disabled, false, '#add-submit');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_ZERO }
       ]);
     }
   },

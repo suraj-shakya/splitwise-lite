@@ -35,6 +35,15 @@ readers two different answers), so the same expense resolves the same way foreve
 Every allocation is a real ``Allocation``, so the returned tuple drops straight into
 ``ExpenseEvent.allocations`` and satisfies its sum invariant by construction.
 
+**A refusal names the money, not the cents.** Every refusal this module makes about an
+amount is rendered by ``money.format_amount``, so somebody who typed ``10.00`` is told
+about ``10.00`` rather than about ``1000``. That is the only reason each resolver is
+handed a ``currency`` it never otherwise uses: ``format_amount`` takes ``Money``, and
+``Money`` cannot be built without one. The sentence is written here rather than in the
+HTTP layer so that every caller gets it, not only the one that speaks JSON. The
+argument is keyword-only and has no default, because a defaulted currency in the money
+path is a bug waiting for a second currency.
+
 Dependency direction: this module imports from ``money`` and ``events``; neither of them
 knows it exists.
 """
@@ -44,7 +53,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from .events import Allocation, MemberId
-from .money import MAX_CENTS, DomainError
+from .money import MAX_CENTS, Currency, DomainError, Money, format_amount
 
 __all__ = [
     "InvalidSplit",
@@ -64,7 +73,7 @@ class InvalidSplit(DomainError):
 
 
 def split_equally(
-    total_cents: int, member_ids: Iterable[MemberId]
+    total_cents: int, member_ids: Iterable[MemberId], *, currency: Currency
 ) -> tuple[Allocation, ...]:
     """Split ``total_cents`` evenly across ``member_ids``.
 
@@ -85,21 +94,27 @@ def split_equally(
     The extra cents are assigned by the rotation described in the module docstring, not
     to whoever sorts first.
 
+    ``currency`` is never allocated, compared or printed on its own: it is here only so
+    a refusal about the total can be written in money rather than in cents. See the
+    module docstring for why it has no default.
+
     Raises:
-        TypeError: if ``total_cents`` is not an ``int``, if ``member_ids`` is not an
-            iterable of ids (a bare ``str`` or a mapping is rejected rather than read as
-            one), or if a member id is not a ``str``.
+        TypeError: if ``currency`` is not a ``Currency``, if ``total_cents`` is not an
+            ``int``, if ``member_ids`` is not an iterable of ids (a bare ``str`` or a
+            mapping is rejected rather than read as one), or if a member id is not a
+            ``str``.
         InvalidSplit: if ``total_cents`` is not strictly positive or is above
             ``MAX_CENTS``, if the member list is empty, if a member id is empty, or if a
             member appears more than once.
     """
-    total = _require_total(total_cents)
+    _require_currency(currency)
+    total = _require_total(total_cents, currency)
     ordered = _ordered_from_iterable(member_ids)
     return _allocate(total, ordered, [1] * len(ordered))
 
 
 def split_by_weight(
-    total_cents: int, weights: Mapping[MemberId, int]
+    total_cents: int, weights: Mapping[MemberId, int], *, currency: Currency
 ) -> tuple[Allocation, ...]:
     """Split ``total_cents`` across members in proportion to integer ``weights``.
 
@@ -115,27 +130,38 @@ def split_by_weight(
     * a weight of zero is allocated zero cents and keeps that member on the expense
     * the result is ordered by ``member_id``
 
+    ``currency`` renders the refusals about the total and nothing else; weights are not
+    money and are never formatted.
+
     Raises:
-        TypeError: if ``total_cents`` is not an ``int``, if ``weights`` is not a
-            mapping, if a member id is not a ``str``, or if a weight is not an ``int``.
+        TypeError: if ``currency`` is not a ``Currency``, if ``total_cents`` is not an
+            ``int``, if ``weights`` is not a mapping, if a member id is not a ``str``,
+            or if a weight is not an ``int``.
         InvalidSplit: if ``total_cents`` is not strictly positive or is above
             ``MAX_CENTS``, if ``weights`` is empty, if a member id is empty, if a weight
             is negative, or if the weights sum to zero.
     """
-    total = _require_total(total_cents)
+    _require_currency(currency)
+    total = _require_total(total_cents, currency)
     ordered, values = _ordered_from_mapping(weights, "weight")
     return _allocate(total, ordered, values)
 
 
 def split_exact(
-    total_cents: int, amounts: Mapping[MemberId, int]
+    total_cents: int, amounts: Mapping[MemberId, int], *, currency: Currency
 ) -> tuple[Allocation, ...]:
     """Return the exact per-member ``amounts`` a caller has already decided.
 
     There is no remainder to assign here, so the only question is whether the amounts
     add up. They must, exactly: the resolver never absorbs a difference into somebody's
-    share and never adjusts the total to fit. A mismatch is a rejection carrying both
-    figures, so the entry screen can tell the user by how much they are out.
+    share and never adjusts the total to fit.
+
+    A mismatch is refused in ``currency``, naming what the shares came to and what the
+    total was ("the shares add up to 9.50, but the total is 10.00"), so the entry screen
+    can show that sentence as it stands and the person can see by how much they are out.
+    Both figures are named and the difference between them is not: that would be a third
+    figure, and a claim the shares' own sum does not make. ``shares`` and ``total`` are
+    the words the screen already uses.
 
     Invariants:
 
@@ -144,18 +170,21 @@ def split_exact(
     * an amount of zero is accepted
 
     Raises:
-        TypeError: if ``total_cents`` is not an ``int``, if ``amounts`` is not a
-            mapping, if a member id is not a ``str``, or if an amount is not an ``int``.
+        TypeError: if ``currency`` is not a ``Currency``, if ``total_cents`` is not an
+            ``int``, if ``amounts`` is not a mapping, if a member id is not a ``str``,
+            or if an amount is not an ``int``.
         InvalidSplit: if ``total_cents`` is not strictly positive or is above
             ``MAX_CENTS``, if ``amounts`` is empty, if a member id is empty, if an
             amount is negative, or if the amounts do not sum to the total.
     """
-    total = _require_total(total_cents)
+    _require_currency(currency)
+    total = _require_total(total_cents, currency)
     ordered, values = _ordered_from_mapping(amounts, "amount")
     allocated = sum(values)
     if allocated != total:
         raise InvalidSplit(
-            f"exact amounts sum to {allocated}, not the total {total}"
+            f"the shares add up to {_formatted(allocated, currency)}, "
+            f"but the total is {_formatted(total, currency)}"
         )
     return tuple(
         Allocation(member_id, cents)
@@ -204,13 +233,55 @@ def _allocate(
     )
 
 
-def _require_total(total_cents: object) -> int:
+def _formatted(cents: int, currency: Currency) -> str:
+    """Render ``cents`` as money, through ``money.py``'s one display edge.
+
+    ``format_amount`` is that edge, and there is deliberately no cents-only variant of
+    it to reach for instead. Every refusal this module makes about an amount comes
+    through here, so a person who typed ``10.00`` is refused in ``10.00``. It mirrors
+    ``web.py::_amount`` on purpose: the two cannot share code, because the domain layer
+    may not import the web layer, but they go through the same one function.
+    """
+    return format_amount(Money(cents, currency))
+
+
+def _require_currency(value: object) -> Currency:
+    """Return ``value`` if it is a ``Currency``, else raise ``TypeError``.
+
+    Called on the first line of all three resolvers, before the total is looked at, so a
+    wrong currency is a ``TypeError`` a programmer sees rather than an ``InvalidSplit``
+    dressed up as somebody's rejected entry. Ordering is the whole point of the call
+    site: ``_require_total`` reaches ``_formatted`` on a refusable total, and ``Money``
+    would reject the same currency a moment later with a message of its own, so without
+    this the resolver would refuse in the right family for the wrong reason.
+
+    Body and message are ``balances.py::_require_currency``'s, deliberately and to the
+    character. The two cannot share code: neither domain module may import the other,
+    which is what ``test_split_imports_only_money_and_events_from_the_package`` holds
+    ``split.py`` to. Same compulsion as ``_formatted`` and ``web.py::_amount``.
+    """
+    if not isinstance(value, Currency):
+        raise TypeError(
+            f"currency must be a Currency, got {type(value).__name__}: {value!r}"
+        )
+    return value
+
+
+def _require_total(total_cents: object, currency: Currency) -> int:
     """Return ``total_cents`` if it is a storable, strictly positive ``int``, else raise.
 
     Strictly positive matches ``ExpenseEvent.total_cents``, so the resolver cannot hand
     back allocations for an expense that would not construct. The upper bound is the one
     ``parse_amount`` enforces, which keeps every allocation inside a signed 64-bit
     column.
+
+    Both rejections name the amount in ``currency``, through ``_formatted``, because
+    both reach a person: "the amount must be more than zero, but it is 0.00" and "the
+    amount is too large to record: 92,233,720,368,547,758.08". ``amount`` is the word
+    the entry screen puts on the field. The two ``TypeError`` messages below keep the
+    parameter name on purpose: a wrong Python type is a programming error that becomes a
+    generic 500 with a logged traceback, and the reader of that traceback is a
+    programmer looking for the parameter.
     """
     if isinstance(total_cents, bool) or not isinstance(total_cents, int):
         raise TypeError(
@@ -219,10 +290,13 @@ def _require_total(total_cents: object) -> int:
         )
     if total_cents <= 0:
         raise InvalidSplit(
-            f"total_cents must be strictly positive, got {total_cents}"
+            "the amount must be more than zero, but it is "
+            f"{_formatted(total_cents, currency)}"
         )
     if total_cents > MAX_CENTS:
-        raise InvalidSplit(f"total_cents is too large to store: {total_cents}")
+        raise InvalidSplit(
+            f"the amount is too large to record: {_formatted(total_cents, currency)}"
+        )
     return total_cents
 
 
