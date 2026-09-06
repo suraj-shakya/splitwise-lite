@@ -1425,6 +1425,28 @@ def _read_balances() -> flask.Response:
     debt this transfer covers and the debt's whole total. ``covers_whole_debt`` on each
     row is computed from cents here rather than by comparing the two formatted strings,
     for the same reason ``direction`` exists on a net row.
+
+    ``pending`` carries every settlement in the group nobody has answered, oldest
+    first. It rides on this read rather than on a ``GET /api/settlements`` of its own
+    so that the transfers and the claims come from **one** ``list_events`` call at one
+    instant: two requests against a ledger that moved in between may legitimately
+    disagree, and a suggested payment disagreeing with the claim that answers it is
+    exactly the confusion this task exists to prevent. Oldest first, and not reversed
+    the way ``_list_expenses`` reverses, because the claim that has been waiting
+    longest is the one that needs chasing; it also lets the screen append a freshly
+    created settlement to the end of the list and be exactly right.
+
+    ``awaiting_confirmation`` on each transfer is computed here, from ids, for the
+    same reason ``covers_whole_debt`` and ``direction`` are: what counts as a match is
+    a product rule, task 15 refines it when rejected settlements join the list, and it
+    must live in one place. The amount is deliberately no part of the match, so a
+    claim of 5.00 marks a 9.00 row: the row says a payment is marked and unconfirmed
+    and never that this figure has been paid, and the claimed figure is in ``pending``
+    where it can be read against the suggestion.
+
+    None of this moves a figure. ``derive_balances`` folds confirmed settlements only,
+    so a pending claim changes ``net``, ``transfers`` and every ``payer_debts`` row not
+    at all, and a test over generated ledgers holds that to be true.
     """
     group = flask.g.group
     ledger = _store().list_events(group.id)
@@ -1432,6 +1454,23 @@ def _read_balances() -> flask.Response:
         ledger, group_id=events.GroupId(group.id), currency=group.currency
     )
     plan = simplify.simplify_debts(derived)
+    # The same function ``derive_balances`` reaches, over the same ledger, so a
+    # rendered state and a balance can never disagree about whether one counted.
+    states = balances.settlement_states(ledger)
+    # Filtered out of the list already read, never re-fetched with
+    # ``list_settlements``: one snapshot, so the rows below and the claims here cannot
+    # be two different instants. ``list_events`` is ``ordering_key`` ascending, so
+    # this is ascending ``(created_at, id)`` with nothing sorted here.
+    pending = [
+        event
+        for event in ledger
+        if isinstance(event, events.SettlementEvent)
+        and states[event.id] is events.SettlementState.PENDING
+    ]
+    awaiting = {
+        (settlement.from_member_id, settlement.to_member_id)
+        for settlement in pending
+    }
     net = []
     for member in _store().list_members(group.id):
         position = derived.net_for(events.MemberId(member.id))
@@ -1461,8 +1500,19 @@ def _read_balances() -> flask.Response:
                     "receiver_credits": [
                         _absorbed_view(row) for row in transfer.receiver_credits
                     ],
+                    # From the ids alone, and the amounts are never compared: see the
+                    # docstring for why the claimed figure is no part of this match.
+                    "awaiting_confirmation": (
+                        transfer.from_member_id,
+                        transfer.to_member_id,
+                    )
+                    in awaiting,
                 }
                 for transfer in plan.transfers
+            ],
+            "pending": [
+                _settlement_view(settlement, events.SettlementState.PENDING)
+                for settlement in pending
             ],
         },
         200,

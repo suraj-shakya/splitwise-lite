@@ -3217,6 +3217,8 @@ def test_a_settled_group_is_every_member_at_zero_and_no_transfers(
             for member in members
         ],
         "transfers": [],
+        # Task 14. Nobody has claimed a payment, so nothing is awaiting anybody.
+        "pending": [],
     }
 
 
@@ -3277,6 +3279,8 @@ def test_balances_report_the_exact_figures_and_the_exact_transfer_list(
                     },
                 ]
             ),
+            # Task 14. Nobody has marked this payment as paid.
+            "awaiting_confirmation": False,
         }
     ]
 
@@ -3327,6 +3331,9 @@ def test_a_transfer_carries_both_ends_of_its_provenance(
             "amount",
             "payer_debts",
             "receiver_credits",
+            # Task 14, computed on the server from ids, so the screen compares no
+            # amounts to decide whether a payment is already claimed.
+            "awaiting_confirmation",
         }
         # Task 5 guarantees both lists are non-empty for a strictly positive
         # transfer, so this server never sends the empty ones task 13 falls back on.
@@ -4786,3 +4793,464 @@ def test_the_settlements_row_is_the_only_place_the_endpoint_is_registered() -> N
     assert rows[0].methods == ("POST",)
     assert rows[0].access is web._Access.MEMBER
     assert web._API_ACCESS["create_settlement"] is web._Access.MEMBER
+
+
+# --- Task 14: what the balances payload gained ------------------------------
+
+
+def balances_of(client) -> dict:
+    return client.get("/api/balances").get_json()
+
+
+def test_the_balances_payload_gains_pending_and_nothing_else_at_the_top_level(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    body = balances_of(signed)
+    assert set(body) == {"currency", "net", "transfers", "pending"}
+    assert body["pending"] == []
+
+
+def test_a_settled_group_reports_an_empty_pending_list(app, seeded: Path) -> None:
+    # The empty-ledger payload, pinned exactly, with the new key at its exact value.
+    signed = linked_client(app, seeded)
+    members = roster(signed)
+    assert balances_of(signed) == {
+        "currency": CURRENCY,
+        "net": [
+            {"member_id": member["id"], "amount": "0.00", "direction": "settled"}
+            for member in members
+        ],
+        "transfers": [],
+        "pending": [],
+    }
+
+
+def test_a_pending_settlement_appears_in_the_pending_block(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    created = mark_paid(signed, to_member_id=members["Ali"], amount="6.00").get_json()[
+        "settlement"
+    ]
+    body = balances_of(signed)
+    assert body["pending"] == [created]
+    assert set(body["pending"][0]) == SETTLEMENT_KEYS
+    assert body["pending"][0]["state"] == "pending"
+
+
+def test_pending_holds_no_confirmed_and_no_rejected_settlement(
+    app, seeded: Path
+) -> None:
+    from splitwise_lite.events import (
+        SettlementDecisionEvent,
+        SettlementId,
+        SettlementState,
+    )
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    kept = mark_paid(signed, to_member_id=members["Ali"], amount="1.00").get_json()[
+        "settlement"
+    ]
+    answered = mark_paid(signed, to_member_id=members["Jo"], amount="2.00").get_json()[
+        "settlement"
+    ]
+    assert {row["id"] for row in balances_of(signed)["pending"]} == {
+        kept["id"],
+        answered["id"],
+    }
+    with open_store(seeded) as store:
+        store.append_settlement_decision(
+            SettlementDecisionEvent(
+                id="decision-1",
+                settlement_id=SettlementId(answered["id"]),
+                decision=SettlementState.CONFIRMED,
+                decided_by=members["Jo"],
+                created_at=at(13),
+            )
+        )
+    # Appending a decision through the store removes it from pending on the next read.
+    assert [row["id"] for row in balances_of(signed)["pending"]] == [kept["id"]]
+
+
+def test_pending_ascends_by_created_at_then_id_oldest_first(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Oldest first, and not reversed the way the feed is: the claim that has been
+    # waiting longest is the one that needs chasing.
+    sam = linked_client(app, seeded)
+    jo = linked_client(app, seeded, display_name="Jo")
+    members = by_name(sam)
+    monkeypatch.setattr(web, "_now", lambda: at(11))
+    first = mark_paid(sam, to_member_id=members["Ali"], amount="1.00").get_json()[
+        "settlement"
+    ]
+    monkeypatch.setattr(web, "_now", lambda: at(12))
+    second = mark_paid(jo, to_member_id=members["Ali"], amount="2.00").get_json()[
+        "settlement"
+    ]
+    monkeypatch.setattr(web, "_now", lambda: at(13))
+    third = mark_paid(sam, to_member_id=members["Jo"], amount="3.00").get_json()[
+        "settlement"
+    ]
+    rows = balances_of(sam)["pending"]
+    assert [row["id"] for row in rows] == [first["id"], second["id"], third["id"]]
+    assert [row["created_at"] for row in rows] == sorted(
+        row["created_at"] for row in rows
+    )
+
+
+def test_the_pending_list_rides_on_the_ledger_the_balances_read_already_took() -> None:
+    # One request, one read of one ledger, so the transfers and the pending claims
+    # come from the same instant and cannot disagree the way two requests against a
+    # moving ledger legitimately can.
+    import ast
+
+    tree = ast.parse(web_source())
+    reader = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_read_balances"
+    )
+    called = {
+        node.func.attr
+        for node in ast.walk(reader)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "list_events" in called
+    assert "list_settlements" not in called
+    assert (
+        len(
+            [
+                node
+                for node in ast.walk(reader)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "list_events"
+            ]
+        )
+        == 1
+    )
+
+
+def test_every_transfer_carries_whether_it_is_awaiting_confirmation(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    body = balances_of(signed)
+    assert len(body["transfers"]) == 1
+    transfer = body["transfers"][0]
+    assert set(transfer) == {
+        "from_member_id",
+        "to_member_id",
+        "amount",
+        "payer_debts",
+        "receiver_credits",
+        "awaiting_confirmation",
+    }
+    assert transfer["awaiting_confirmation"] is False
+    # Jo pays Sam, so Jo is the one who can mark it.
+    assert transfer["from_member_id"] == members["Jo"]
+    jo = linked_client(app, seeded, display_name="Jo")
+    assert mark_paid(jo, to_member_id=members["Sam"], amount="1.00").status_code == 201
+    marked = balances_of(signed)["transfers"][0]
+    assert marked["awaiting_confirmation"] is True
+    # Everything else about the row is untouched: the suggestion stays exactly where
+    # it was, with the same amount and the same provenance.
+    assert {key: marked[key] for key in transfer if key != "awaiting_confirmation"} == {
+        key: value for key, value in transfer.items() if key != "awaiting_confirmation"
+    }
+
+
+def test_the_amount_is_no_part_of_the_awaiting_match(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A claim of 5.00 marks a 10.50 row as awaiting. The row's wording says a payment
+    # is marked and unconfirmed, never that this figure has been paid, and the exact
+    # claimed figure is in the pending block where it can be read against it.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    jo = linked_client(app, seeded, display_name="Jo")
+    assert mark_paid(jo, to_member_id=members["Sam"], amount="0.01").status_code == 201
+    body = balances_of(signed)
+    assert body["transfers"][0]["amount"] == "10.50"
+    assert body["transfers"][0]["awaiting_confirmation"] is True
+    assert body["pending"][0]["amount"] == "0.01"
+
+
+def test_a_claim_running_the_other_way_marks_nothing(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Jo pays Sam is the suggestion; Sam claiming a payment to Jo is a different claim
+    # about different money, and it marks no transfer.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    assert mark_paid(signed, to_member_id=members["Jo"], amount="1.00").status_code == 201
+    body = balances_of(signed)
+    assert body["transfers"][0]["awaiting_confirmation"] is False
+    assert len(body["pending"]) == 1
+
+
+def test_a_claim_naming_a_pair_no_transfer_names_marks_nothing(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    assert mark_paid(signed, to_member_id=members["Ali"], amount="1.00").status_code == 201
+    body = balances_of(signed)
+    assert [transfer["awaiting_confirmation"] for transfer in body["transfers"]] == [
+        False
+    ]
+    assert len(body["pending"]) == 1
+
+
+# --- Criterion 20: a pending settlement moves no balance --------------------
+
+LEDGER_SEED = 20260907
+"""Fixed, so the generated ledgers below are the same on every machine and on every
+run: a money invariant checked against a different sample each time is a test that
+cannot be bisected."""
+
+GENERATED_LEDGERS = 60
+"""More than the fifty the task asks for, and cheap: each one is a fresh store, a
+signup at the cheap KDF cost and a handful of appended events."""
+
+
+def generate_ledger(store, group_id: str, member_ids: list[str], rng, size: int):
+    """Append ``size`` entries mixing expenses with settlements in every state.
+
+    In the style ``tests/test_balances.py``'s ``random_ledger`` uses, and written
+    through the store rather than through an endpoint, because a confirmed and a
+    rejected settlement have no endpoint to come from until task 15. Ids are unique by
+    construction, timestamps ascend, and every amount is a whole number of cents, so
+    the only thing that varies is the shape of the ledger.
+    """
+    from splitwise_lite.events import (
+        Allocation,
+        ExpenseEvent,
+        ExpenseId,
+        GroupId,
+        MemberId,
+        SettlementDecisionEvent,
+        SettlementEvent,
+        SettlementId,
+        SettlementState,
+    )
+    from splitwise_lite.money import Currency
+
+    currency = Currency(CURRENCY)
+    for index in range(size):
+        when = at(9, index + 1)
+        if rng.choice((True, True, False)):
+            participants = rng.sample(member_ids, rng.randint(1, len(member_ids)))
+            shares = {member_id: rng.randint(0, 500) for member_id in participants}
+            if sum(shares.values()) == 0:
+                shares[participants[0]] = 1
+            store.append_expense(
+                ExpenseEvent(
+                    id=ExpenseId(f"e{index}"),
+                    group_id=GroupId(group_id),
+                    currency=currency,
+                    payer_id=MemberId(rng.choice(member_ids)),
+                    total_cents=sum(shares.values()),
+                    allocations=tuple(
+                        Allocation(MemberId(member_id), cents)
+                        for member_id, cents in shares.items()
+                    ),
+                    description="",
+                    created_at=when,
+                    created_by=MemberId(rng.choice(member_ids)),
+                )
+            )
+            continue
+
+        payer, receiver = rng.sample(member_ids, 2)
+        store.append_settlement(
+            SettlementEvent(
+                id=SettlementId(f"s{index}"),
+                group_id=GroupId(group_id),
+                currency=currency,
+                from_member_id=MemberId(payer),
+                to_member_id=MemberId(receiver),
+                amount_cents=rng.randint(1, 1000),
+                created_at=when,
+                created_by=MemberId(payer),
+            )
+        )
+        outcome = rng.choice(
+            (None, SettlementState.CONFIRMED, SettlementState.REJECTED)
+        )
+        if outcome is not None:
+            store.append_settlement_decision(
+                SettlementDecisionEvent(
+                    id=f"d{index}",
+                    settlement_id=SettlementId(f"s{index}"),
+                    decision=outcome,
+                    decided_by=MemberId(receiver),
+                    created_at=when,
+                )
+            )
+
+
+def derived_balances(path: Path, group_id: str):
+    from splitwise_lite.balances import derive_balances
+    from splitwise_lite.events import GroupId
+    from splitwise_lite.money import Currency
+
+    with open_store(path) as store:
+        return derive_balances(
+            store.list_events(group_id),
+            group_id=GroupId(group_id),
+            currency=Currency(CURRENCY),
+        )
+
+
+def without_awaiting(transfers: list[dict]) -> list[dict]:
+    return [
+        {key: value for key, value in transfer.items() if key != "awaiting_confirmation"}
+        for transfer in transfers
+    ]
+
+
+def test_a_pending_settlement_moves_no_balance_over_generated_ledgers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim this whole task rests on, over ledgers nobody hand-picked.
+
+    A pending settlement that reached ``derive_balances`` would clear a debt nobody
+    has agreed was paid, which is the failure the spec names as making two people see
+    two different versions of the truth.
+
+    This is falsifiable and the falsification has been run: deleting the line
+    ``if states[settlement.id] is not SettlementState.CONFIRMED: continue`` from
+    ``src/splitwise_lite/balances.py`` turns it red. A criterion that still passes with
+    that guard gone has not been met.
+    """
+    import random
+
+    from splitwise_lite.groups import resolve_sole_group
+
+    rng = random.Random(LEDGER_SEED)
+    checked = 0
+    for index in range(GENERATED_LEDGERS):
+        path = tmp_path / f"ledger-{index}.sqlite3"
+        seed_group(path, members=("Sam", "Ali", "Jo", "Kit", "Cass"))
+        app = web.create_app(
+            store_path=path, secure_cookies=False, scrypt_params=CHEAP
+        )
+        signed = linked_client(app, path)
+        with open_store(path) as store:
+            group = resolve_sole_group(store)
+            member_ids = [member.id for member in store.list_members(group.id)]
+            generate_ledger(store, group.id, member_ids, rng, rng.randint(0, 20))
+        acting = by_name(signed)["Sam"]
+
+        before = derived_balances(path, group.id)
+        payload_before = balances_of(signed)
+
+        # A receiver this payer has no unanswered claim to, so the 409 is not what is
+        # under test here.
+        blocked = {
+            row["to_member_id"]
+            for row in payload_before["pending"]
+            if row["from_member_id"] == acting
+        }
+        candidates = [
+            member_id
+            for member_id in member_ids
+            if member_id != acting and member_id not in blocked
+        ]
+        assert candidates, "every pair from the acting member was already pending"
+        monkeypatch.setattr(web, "_now", lambda: at(15, index % 60))
+        response = mark_paid(
+            signed, to_member_id=candidates[0], amount="7.25"
+        )
+        assert response.status_code == 201, response.get_json()
+
+        after = derived_balances(path, group.id)
+        # Balances has value equality over net and pairwise both, so one == is the
+        # whole claim; the two below say which half moved when it fails.
+        assert after == before, index
+        assert list(after.net.items()) == list(before.net.items()), index
+        assert list(after.pairwise.items()) == list(before.pairwise.items()), index
+
+        payload_after = balances_of(signed)
+        assert payload_after["currency"] == payload_before["currency"], index
+        assert payload_after["net"] == payload_before["net"], index
+        assert without_awaiting(payload_after["transfers"]) == without_awaiting(
+            payload_before["transfers"]
+        ), index
+        checked += 1
+    assert checked >= 50
+
+
+def test_the_pending_settlement_those_ledgers_recorded_is_real_and_not_discarded(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The companion to the criterion above: nothing moved, and that is because the
+    # fold ignores a pending settlement, not because the settlement was thrown away.
+    from splitwise_lite.balances import settlement_states
+    from splitwise_lite.events import SettlementState
+    from splitwise_lite.groups import resolve_sole_group
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    before = len(stored_settlements(seeded))
+    created = mark_paid(signed, to_member_id=members["Ali"], amount="4.00").get_json()[
+        "settlement"
+    ]
+    stored = stored_settlements(seeded)
+    assert len(stored) == before + 1
+    with open_store(seeded) as store:
+        group = resolve_sole_group(store)
+        states = settlement_states(store.list_events(group.id))
+    assert states[created["id"]] is SettlementState.PENDING
+    assert [row["id"] for row in balances_of(signed)["pending"]] == [created["id"]]
+
+
+def test_the_feed_says_nothing_at_all_about_a_settlement(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A settlement is not an expense.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    before = signed.get("/api/expenses").get_data(as_text=True)
+    created = mark_paid(signed, to_member_id=members["Ali"], amount="4.00").get_json()[
+        "settlement"
+    ]
+    after = signed.get("/api/expenses").get_data(as_text=True)
+    assert after == before
+    assert created["id"] not in after
+
+
+def test_no_drill_down_changes_when_a_payment_is_marked_as_paid(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``debt_sources`` lists confirmed settlements only, so a pending one is behind no
+    # debt and appears in no entry list, for the pair it names or any other.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    pairs = list(itertools.permutations(["Sam", "Ali", "Jo"], 2))
+    before = {
+        pair: read_debt(signed, members[pair[0]], members[pair[1]]).get_data(
+            as_text=True
+        )
+        for pair in pairs
+    }
+    assert mark_paid(signed, to_member_id=members["Ali"], amount="4.00").status_code == 201
+    for pair in pairs:
+        after = read_debt(signed, members[pair[0]], members[pair[1]]).get_data(
+            as_text=True
+        )
+        assert after == before[pair], pair
