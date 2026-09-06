@@ -61,10 +61,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-# Imported under another name deliberately. tests/test_balances.py proves this module
-# reads no clock by refusing the bare name ``datetime`` anywhere in it, and that proof
-# is worth keeping: the type is wanted here only to annotate an event's own timestamp
-# as it is carried through, and nothing here ever asks it what time it is.
+# Imported under another name deliberately, and the alias is not a hiding place:
+# tests/test_balances.py resolves every import in this file back to the module it
+# names, so ``_Instant.now()`` anywhere below fails
+# ``test_the_fold_is_a_pure_function_of_its_inputs`` exactly as a bare
+# ``datetime.now()`` would, whatever the import is bound to. What that test permits is
+# this name in an annotation and nowhere else, which is all it is wanted for here:
+# annotating an event's own timestamp as it is carried through. Nothing here ever asks
+# it what time it is.
+#
+# Scope, stated so the next reader does not have to guess: that is a static check over
+# this file. It says nothing about what a module this one calls does, and a clock
+# reached through ``__import__`` or ``getattr`` is outside it.
 from datetime import datetime as _Instant
 from enum import Enum
 from types import MappingProxyType

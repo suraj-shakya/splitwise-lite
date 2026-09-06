@@ -1066,16 +1066,101 @@ def _module_tree(module) -> ast.Module:
     return ast.parse(Path(inspect.getfile(module)).read_text(encoding="utf-8"))
 
 
-def _names(tree: ast.Module) -> set[str]:
-    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-    return names | {
-        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+def _annotation_nodes(tree: ast.Module) -> set[int]:
+    """Every node sitting inside an annotation, by ``id``.
+
+    ``from __future__ import annotations`` is in force in the module under test, so an
+    annotation is a string the interpreter never evaluates and nothing written in one
+    can read anything. That is the only reason the checks below may skip them, and
+    ``test_the_annotation_exemption_rests_on_annotations_never_being_evaluated`` is
+    what keeps the reason true.
+    """
+    inside: set[int] = set()
+    for node in ast.walk(tree):
+        roots = []
+        if isinstance(node, (ast.AnnAssign, ast.arg)) and node.annotation is not None:
+            roots.append(node.annotation)
+        elif (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.returns is not None
+        ):
+            roots.append(node.returns)
+        for root in roots:
+            inside.update(id(child) for child in ast.walk(root))
+    return inside
+
+
+def _runtime_names(tree: ast.Module) -> set[str]:
+    """Every name the module can reach when it runs, annotations excepted."""
+    skip = _annotation_nodes(tree)
+    names = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and id(node) not in skip
     }
+    return names | {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and id(node) not in skip
+    }
+
+
+def _imported_from(tree: ast.Module) -> dict[str, frozenset[str]]:
+    """Each name an import binds, mapped to the dotted parts of what it names.
+
+    ``import time as _t`` binds ``_t`` to ``{"time"}`` and
+    ``from datetime import datetime as anything`` binds ``anything`` to
+    ``{"datetime"}``. Reading what the import names rather than what it binds is what
+    makes an alias useless as a hiding place: rename it to whatever you like and it
+    still resolves back to the module it came from.
+    """
+    bound: dict[str, frozenset[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for entry in node.names:
+                local = entry.asname or entry.name.split(".")[0]
+                bound[local] = frozenset(entry.name.split("."))
+        elif isinstance(node, ast.ImportFrom):
+            source = (node.module or "").split(".")
+            for entry in node.names:
+                local = entry.asname or entry.name
+                bound[local] = frozenset(source + entry.name.split("."))
+    return bound
+
+
+def _forbidden_at_runtime(tree: ast.Module, forbidden: str) -> set[str]:
+    """Every spelling of ``forbidden`` the module can reach when it runs.
+
+    Two ways in, because there are two ways to write one: the bare name itself, and
+    any local name an import bound to it under a different spelling. Both are looked
+    for outside annotations only, and what comes back is the set of offending names,
+    so a failure says which spelling was found rather than only that one was.
+    """
+    reachable = _runtime_names(tree)
+    aliases = {
+        local for local, source in _imported_from(tree).items() if forbidden in source
+    }
+    return (aliases | {forbidden}) & reachable
+
+
+def _with_a_smuggled_line(extra_import: str, statement: str) -> ast.Module:
+    """The real balances.py, with one line smuggled into ``debt_sources``."""
+    tree = _module_tree(balances_module)
+    if extra_import:
+        tree.body.insert(0, ast.parse(extra_import).body[0])
+    targets = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "debt_sources"
+    ]
+    assert len(targets) == 1, "the mutation has to land in the money function"
+    targets[0].body.insert(0, ast.parse(statement).body[0])
+    return tree
 
 
 @pytest.mark.parametrize("forbidden", ["float", "round", "Decimal", "divmod"])
 def test_the_balance_module_never_names_a_rounding_tool(forbidden: str) -> None:
-    assert forbidden not in _names(_module_tree(balances_module))
+    assert _forbidden_at_runtime(_module_tree(balances_module), forbidden) == set()
 
 
 def test_the_balance_module_holds_no_float_literal() -> None:
@@ -1108,7 +1193,7 @@ def test_the_balance_module_never_divides(operator: type[ast.operator]) -> None:
 
 def test_the_fold_sorts_with_the_ordering_key_events_py_defines() -> None:
     """Not re-derived here: one tie-break rule, shared by every consumer of the log."""
-    assert "ordering_key" in _names(_module_tree(balances_module))
+    assert "ordering_key" in _runtime_names(_module_tree(balances_module))
     assert balances_module.ordering_key is events_module.ordering_key
 
 
@@ -1127,7 +1212,61 @@ def test_no_stored_amount_bound_is_applied_to_a_derived_balance() -> None:
 @pytest.mark.parametrize("forbidden", ["hash", "random", "time", "uuid", "datetime"])
 def test_the_fold_is_a_pure_function_of_its_inputs(forbidden: str) -> None:
     """No clock, no randomness, and nothing salted per process deciding an answer."""
-    assert forbidden not in _names(_module_tree(balances_module))
+    assert _forbidden_at_runtime(_module_tree(balances_module), forbidden) == set()
+
+
+@pytest.mark.parametrize(
+    ("extra_import", "statement", "forbidden"),
+    [
+        ("", "_Instant.now()", "datetime"),
+        ("import datetime as d", "d.datetime.now()", "datetime"),
+        ("from datetime import datetime as anything", "anything.now()", "datetime"),
+        ("import time as _t", "_t.monotonic()", "time"),
+        ("from time import monotonic as tick", "tick()", "time"),
+        ("import uuid as _u", "_u.uuid4()", "uuid"),
+        ("from random import random as roll", "roll()", "random"),
+        ("", "hash(currency)", "hash"),
+    ],
+    ids=[
+        "the alias already standing in the module",
+        "a whole module aliased",
+        "a name from the module aliased",
+        "a clock under a private name",
+        "a clock imported as a bare function",
+        "an id source aliased",
+        "randomness imported as a bare function",
+        "a builtin needing no import at all",
+    ],
+)
+def test_a_clock_read_smuggled_in_under_any_name_fails_the_purity_proof(
+    extra_import: str, statement: str, forbidden: str
+) -> None:
+    """The proof above is worth only what it catches, so this catches it catching.
+
+    Each case injects a real read into ``debt_sources`` and asserts the same check the
+    test above runs reports it. The first case is the one that mattered: the alias is
+    already in the module, so an evasion through it costs a single token and shows up
+    in a diff as an ordinary use of a name that is already there.
+    """
+    tree = _with_a_smuggled_line(extra_import, statement)
+    assert _forbidden_at_runtime(tree, forbidden) != set()
+
+
+def test_the_annotation_exemption_rests_on_annotations_never_being_evaluated() -> None:
+    """The one place the checks above let a forbidden name stand is an annotation.
+
+    That exemption is sound only while ``from __future__ import annotations`` is in
+    force, which leaves every annotation an unevaluated string. Drop the future import
+    and the annotations start running, so this asserts it is still there.
+    """
+    tree = _module_tree(balances_module)
+    future = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__"
+        for alias in node.names
+    }
+    assert "annotations" in future
 
 
 def test_the_module_keeps_no_mutable_state_to_memoise_into() -> None:
