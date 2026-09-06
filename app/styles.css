@@ -892,16 +892,23 @@ body {
   padding: 0 14px 12px;
 }
 
+/* Both of these interpolate a display name, so both give way where `.balances-line`
+   does. Their content box is 258px at 320px wide and a 40-character name with nothing
+   to break on runs past 300px, which would push this screen into a horizontal scroll
+   of its own. Nothing above measures that: `body` sets `overflow: hidden` and
+   `.content` is what scrolls, so the document's own scrollWidth never grows. */
 .balances-shape-note {
   margin: 0 0 12px;
   font-size: 16px;
   color: var(--muted);
+  overflow-wrap: break-word;
 }
 
 .balances-debt-label {
   margin: 12px 0 6px;
   font-size: 16px;
   font-weight: 700;
+  overflow-wrap: break-word;
 }
 
 .balances-debt-list {
@@ -963,4 +970,12 @@ body {
   display: block;
   font-size: 16px;
   color: var(--muted);
+}
+
+/* The one of those two that interpolates a name, in `<Creditor> paid, and <Debtor>
+   shared`. Three levels in, its content box is 228px, the narrowest box on this
+   screen, so an unbroken 40-character name overflows here first. The date beside it
+   is a fixed spelling with nothing to break, which is why the rule is not shared. */
+.balances-entry-effect {
+  overflow-wrap: break-word;
 }

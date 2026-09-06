@@ -888,9 +888,24 @@ reading a file or running the suite.
     visual order matches DOM order at every level, and an amount is never read before the name
     it belongs to.
 68. At 320, 360 and 390 CSS px, with a 40 character display name and a payment open with a
-    debt open inside it, `document.documentElement.scrollWidth` equals `clientWidth`. Nesting
-    is shown with indentation small enough that the third level still fits, or with a rule and
-    no indentation at all. (browser check)
+    debt open inside it, the `.content` element's `scrollWidth` equals its `clientWidth`, and
+    so does every element inside the balances region that a name is interpolated into.
+    Nesting is shown with indentation small enough that the third level still fits, or with a
+    rule and no indentation at all. (browser check)
+
+    > **Corrected 2026-09-06, after the first review of PR #56.** This criterion used to
+    > measure `document.documentElement.scrollWidth` against its `clientWidth`. On this shell
+    > that comparison is blind to the failure it was written to catch: `app/styles.css` sets
+    > `body { overflow: hidden; }` and the element that scrolls is `.content`, which has
+    > `overflow-y: auto` and therefore a computed `overflow-x: auto`. Overflow inside
+    > `.content` is contained there and clipped at `body`, so the document element's
+    > scrollWidth equals its clientWidth whether or not a name is running out of its box.
+    > Running the old check in a browser would have gone green and meant nothing, which is
+    > why three name-carrying classes shipped without `overflow-wrap: break-word` and no
+    > check on this branch could see it. The measurement moves to the element that actually
+    > scrolls, and to the boxes the text is in. The general case, that any future task
+    > inheriting this line inherits the blind spot, is filed as issue #58 and is not fixed
+    > here.
 
 ### Automated tests: Python
 

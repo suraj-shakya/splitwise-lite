@@ -1513,6 +1513,51 @@ def test_a_long_display_name_wraps_rather_than_being_cut_off() -> None:
     assert [head.strip() for head in refusing] == [".balances-figure"]
 
 
+def balances_declarations() -> dict[str, str]:
+    """Selector to declarations, over every rule in the balances block.
+
+    The block carries no @media and no nesting, which
+    `test_every_balances_selector_is_namespaced_to_this_screen` pins, so splitting on
+    the braces is the whole parse.
+    """
+    rules: dict[str, str] = {}
+    for rule in without_comments(balances_styles()).split("}"):
+        if "{" not in rule:
+            continue
+        head, body = rule.split("{", 1)
+        for selector in head.split(","):
+            name = selector.strip()
+            if name:
+                rules[name] = rules.get(name, "") + body
+    return rules
+
+
+# Every class on this screen that a display name is interpolated into. A name is the
+# one string here of unbounded length that the group chose rather than this repo, and
+# 40 unbroken characters at 16px runs 300 to 330px against a content box of 258px at
+# the narrowest supported width and 228px three levels in. Add to this list when a new
+# line carries a name.
+CARRIES_A_NAME = (
+    ".balances-line",
+    ".balances-shape-note",
+    ".balances-debt-label",
+    ".balances-entry-description",
+    ".balances-entry-effect",
+)
+
+
+def test_every_line_that_carries_a_name_can_break_a_long_one() -> None:
+    # The test above is satisfied by one `overflow-wrap` anywhere in the block, which
+    # is how three of these five shipped without it. This one names them, because the
+    # check criterion 68 states cannot see the difference: body sets `overflow:
+    # hidden` and the scroll container is `.content`, so `documentElement.scrollWidth`
+    # equals `clientWidth` whether or not a name is running out of its box.
+    rules = balances_declarations()
+    for selector in CARRIES_A_NAME:
+        assert selector in rules, selector
+        assert "overflow-wrap: break-word" in rules[selector], selector
+
+
 def test_no_row_carries_its_meaning_in_colour_alone() -> None:
     # "owes" and "is owed" are told apart by the words first, and rows are separated
     # by a rule rather than by a tint.
