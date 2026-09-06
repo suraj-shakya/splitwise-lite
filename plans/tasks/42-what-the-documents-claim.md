@@ -69,52 +69,18 @@ changes either").
 
 ## What is actually true today
 
-Verified against the shipped files on this branch, not from memory. This is the source
-material for the prose the criteria below ask for.
+**Deleted 2026-09-07, after the fifth review of PR #59.** This section held a
+forty-eight-line inventory of what each screen does, introduced as verified against the
+shipped files. It was a third copy of the two lists in `CLAUDE.md` and `README.md`, and
+by the end two of its sentences were the negation of what this file's own criteria
+require: it said nothing on the balances screen is tappable, and that `app/app.js`
+contains no `.debt(`, while criterion 4 requires the first to be contradicted and
+criterion 24 requires `api.debt(` present. Nothing depended on it.
 
-**The gate.** `app/index.html` ships `#gate` with an email field, a password field, a
-submit button and a "Create an account" toggle, plus `#notice` carrying four standing
-paragraphs: not linked to a member, cannot reach the server, the sign-in was not kept,
-and one empty paragraph that carries the server's own sentence. `app/app.js` wires them
-to `api.signUp`, `api.signIn`, `api.signOut` and `api.session`. Signing up on its own
-grants nothing: `refresh()` shows the unlinked notice for a session with no member row.
-
-**The feed.** `#feed-list` is filled from `GET /api/expenses` and `GET /api/members` on
-every entry to `#/feed`. Each row carries payer, amount, description and participants,
-and expands in place to a detail listing every share, the total, a note when the payer is
-not sharing, who recorded it, and the date and time. Four states, exactly one visible: in
-flight, empty, failed, list. Read only.
-
-**The add screen.** `#add-form` takes an amount (text with a decimal keypad, never a
-number input), an optional description of at most 500 characters, a payer picked from the
-roster, and one of three split modes: Equally, Some people, Uneven amounts. Those are the
-spec's three modes. The resolver's weight mode is reachable through the API and is
-deliberately not on the screen. Saving posts to `POST /api/expenses` and echoes the
-server's own 201 body. The amount field is focused on entry, before the roster is asked
-for. A draft survives a curtain and signing back in as the same person, and is cleared
-for a different one (task 43).
-
-**The balances screen.** `#balances-net` and `#balances-transfers` are filled from
-`GET /api/balances` on every entry, from strings the server has already formatted.
-Nothing is stored and nothing is tappable. A standing note says the figures come only
-from what was recorded.
-
-**Install and offline.** `app/manifest.json` plus `app/sw.js` precache the nine shell
-files, so the app installs to the home screen and the shell opens offline. `/api` is
-never cached, so offline the app opens and then says it cannot reach the server. Secure
-context only, so `localhost` or `127.0.0.1`.
-
-**What does not exist.** Backlog task 13 (transfer drill-down): `SplitwiseApi.debt` and
-`GET /api/debts/{debtor}/{creditor}` both exist, from task 12a, and no screen calls
-either; `app/app.js` contains no `.debt(`. Backlog tasks 14 and 15 (mark as paid,
-receiver confirmation): no route in `src/splitwise_lite/web.py`, no method on the client,
-no control. Backlog task 16 (the incompleteness signal): nothing reports staleness;
-`app/index.html` says so in a comment and names the task. Backlog task 17 (expense
-correction): expenses cannot be edited or voided from any screen.
-
-Note the numbering. GitHub issue numbers and `plans/backlog.md` task numbers are not the
-same in this range. The documents cite backlog task numbers only, and the criteria below
-pin them.
+What the app does is in those two lists. What the suite holds them to is
+`tests/test_web_shell.py`. What each bullet must state is criteria 4 and 6 below, and
+criterion 4 already has QA check every bullet against the running app. This is the rule
+at the top of this file applied to the one section that predates it.
 
 ## The decision: what replaces the inverted test
 
