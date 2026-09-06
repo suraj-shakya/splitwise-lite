@@ -116,6 +116,7 @@ SCENARIOS = [
     "a_roster_without_the_acting_member_defaults_to_the_first_one",
     "switching_modes_twice_still_names_every_member_once",
     "a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives",
+    "a_zero_amount_is_refused_in_the_resolvers_own_words_and_keeps_the_draft",
     # A screen that waits for a session, and a draft that survives signing back in
     "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone",
     "a_route_change_behind_the_not_linked_notice_asks_for_nothing",
