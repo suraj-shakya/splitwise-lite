@@ -902,23 +902,24 @@
   }
 
   function addCurtained(error) {
-    /* The three failures api.js has already put a whole screen in front of: a 401
-       raises the sign-in gate, a 403 member_not_linked raises the not-linked notice,
-       and a request that got no answer or a server that could not produce one raises
-       the offline notice. This block registers none of those handlers and writes no
-       message of its own for any of them: a second message underneath a curtain
-       nobody can see past is a second error contract. Everything else is this
-       screen's to show. */
-    if (!error) {
-      return true;
-    }
-    if (error.status === 401) {
-      return true;
-    }
-    if (error.status === 403 && error.code === 'member_not_linked') {
-      return true;
-    }
-    return error.status === 0 || error.status >= 500;
+    /* Whether api.js has already put a whole screen in front of this failure: the
+       sign-in gate, the not-linked notice, or one of the two paragraphs on the notice
+       curtain. This block registers none of those handlers and writes no message of
+       its own for any of them, because a second message underneath a curtain nobody
+       can see past is a second error contract.
+
+       refused is the one kind that raises no curtain, because it names something
+       about this one request rather than about the whole session, and neither request
+       this screen makes is one of the two api.js escalates. So it is the only kind
+       this screen speaks for.
+
+       Asked of kind rather than of a status. This function used to reconstruct the
+       answer from 401, 403 and 500, which is api.js's classification spelled a second
+       time in a second file, and two spellings of one decision drift the moment
+       either is edited. kind states it outright. It also fixes a case the status
+       version got wrong: an answer whose status this client cannot read at all
+       returned false here and wrote underneath a curtain. */
+    return !error || error.kind !== 'refused';
   }
 
   function addConfirm(payload) {
@@ -1154,6 +1155,8 @@
   var gateMode = document.getElementById('gate-mode');
   var noticeUnlinked = document.getElementById('notice-unlinked');
   var noticeOffline = document.getElementById('notice-offline');
+  var noticeNotKept = document.getElementById('notice-not-kept');
+  var noticeProblem = document.getElementById('notice-problem');
   var creating = false;
 
   function show(which) {
@@ -1177,9 +1180,24 @@
     gateTitle.focus();
   }
 
-  function showNotice(which) {
+  function showNotice(which, message) {
+    /* The one function that hides all four paragraphs and shows one, so exactly one
+       of them is ever visible. It is also the only thing that ever calls
+       show('notice'), which is what makes that true: nothing resets these four flags
+       when the gate or the app frame replaces the curtain, so the paragraph that was
+       up stays flagged underneath a hidden #notice. That is invisible and harmless
+       only for as long as every route back to a raised #notice comes through here and
+       sets all four again. Raise the curtain from anywhere else and two paragraphs
+       show at once. #notice-problem is the only one whose text is written
+       here, and it is cleared whenever it is not the paragraph being shown, so a
+       sentence from an earlier failure is never left sitting behind a later one.
+       The sentence goes in as text and no markup is ever parsed, so a message
+       holding < renders as that character rather than as the start of a tag. */
     noticeUnlinked.hidden = which !== 'unlinked';
     noticeOffline.hidden = which !== 'offline';
+    noticeNotKept.hidden = which !== 'not-kept';
+    noticeProblem.hidden = which !== 'problem';
+    noticeProblem.textContent = which === 'problem' ? message : '';
     show('notice');
     document.getElementById('notice-title').focus();
   }
@@ -1243,15 +1261,24 @@
         return refresh();
       })
       .catch(function (error) {
-        if (!error || error.status === 0 || error.status >= 500) {
-          /* No answer came back at all. The offline notice is already up and the
-             gate deliberately is not, so there is nothing to say here. */
+        if (!error || (error.kind !== 'signed-out' && error.kind !== 'refused')) {
+          /* Every other kind has already pulled a curtain over the whole frame, and
+             the gate deliberately is not up, so writing on it here would drag it back
+             over that notice. Which kind it is, is api.js's decision: this screen
+             reads the answer and never a status code. */
           return;
         }
         /* Everything else is something the person can act on, a wrong password most
-           of all. The 401 handler has just re-shown the gate with a blank message,
-           so this runs after it and is what they actually read. */
-        gateError.textContent = error.message || 'That did not work.';
+           of all. The 401 handler has just re-shown the gate with whatever api.js
+           decided was worth reading, so this runs after it and is what they actually
+           read.
+
+           say and not message, which is what every other screen prints: they differ
+           only where api.js decided the server's sentence describes a situation the
+           person is not in, and printing it there anyway would be this screen
+           overruling the one place that gets to decide. The fallback is the gate's
+           own, for a refusal whose body carried nothing at all. */
+        gateError.textContent = error.say || 'That did not work.';
         gateError.hidden = false;
         show('gate');
       })
@@ -1261,17 +1288,32 @@
   }
 
   function wire() {
-    api.onUnauthenticated(function () {
-      showGate('');
+    api.onUnauthenticated(function (error) {
+      /* Whatever api.js decided is worth reading, which is the server's own sentence
+         for a session that died and nothing at all for a first visit. This screen
+         prints what it is handed and writes no sentence of its own. */
+      showGate(error.say);
     });
     api.onNotLinked(function () {
       signOut.hidden = false;
       showNotice('unlinked');
     });
-    api.onOffline(function () {
+    api.onOffline(function (error) {
       /* Never the sign-in gate: prompting for a password on a page that cannot
-         send it is how a person types their password into nothing, repeatedly. */
-      showNotice('offline');
+         send it is how a person types their password into nothing, repeatedly.
+
+         Which of the three paragraphs goes up is read from kind, in this one place.
+         No status code is read here, and none may be: api.js is the only file that
+         classifies a response. */
+      if (error.kind === 'sign-in-not-kept') {
+        showNotice('not-kept');
+      } else if (error.kind !== 'offline' && error.say) {
+        showNotice('problem', error.say);
+      } else {
+        /* Nothing came back, or what came back carried nothing to read. The standing
+           sentence says more than a blank curtain would. */
+        showNotice('offline');
+      }
     });
     gateForm.addEventListener('submit', submitted);
     gateMode.addEventListener('click', function () {

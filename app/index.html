@@ -54,7 +54,9 @@
   </p>
 </div>
 
-<!-- The two states that are not a sign-in problem, so neither shows the gate. -->
+<!-- The four states that are not a sign-in problem, so none of them shows the gate.
+     Exactly one of the four paragraphs is ever visible, and showNotice() in app.js is
+     the one function that hides all four and shows one. -->
 <div class="curtain notice" id="notice" hidden>
   <p class="curtain-title" id="notice-title" tabindex="-1">Not ready yet</p>
   <p class="curtain-text" id="notice-unlinked" hidden>Nobody has linked you to a
@@ -62,6 +64,19 @@
     then this page will show the ledger.</p>
   <p class="curtain-text" id="notice-offline" hidden>The app cannot reach the server
     right now. Nothing you have recorded is lost; try again in a moment.</p>
+  <!-- The server accepted the sign-in and then did not recognise the very next
+       request. Signing in again cannot fix that, so the gate would only invite the
+       same password again, and again. This names the likely cause instead, and it
+       does not blame the network, which answered perfectly well. -->
+  <p class="curtain-text" id="notice-not-kept" hidden>You signed in, and the app was
+    not recognised on the very next request. That usually means this browser is not
+    keeping the session cookie: check that cookies are allowed for this site, then try
+    signing in again.</p>
+  <!-- Empty in the document, and the only paragraph whose text a screen writes: it
+       carries the sentence the server sent, put in as text with no markup parsed.
+       The server composes one sentence for every refusal, and a second one written
+       here for the same situation would drift the moment either was edited. -->
+  <p class="curtain-text" id="notice-problem" hidden></p>
 </div>
 
 <main class="content">

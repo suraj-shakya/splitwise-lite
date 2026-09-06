@@ -17,6 +17,7 @@ wearing a hat.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 HARNESS = REPO / "tests" / "shell_harness.mjs"
+APP = REPO / "app"
 
 NODE_MISSING = (
     "node is not on PATH. tests/shell_harness.mjs runs the shipped app/ files under "
@@ -38,30 +40,43 @@ NODE_MISSING = (
 # exactly this list back, so a scenario deleted from the harness fails pytest and one
 # added to the harness without being declared here fails pytest too.
 SCENARIOS = [
-    # Boot
+    # Boot, and what announce() makes of every answer the server can give
     "boot_with_no_session_shows_the_gate",
     "boot_with_a_linked_session_shows_the_app",
     "nothing_from_the_previous_scenario_survives_into_this_one",
     "boot_with_an_unlinked_session_shows_the_not_linked_message",
     "a_403_member_not_linked_shows_the_not_linked_message",
-    "a_403_that_is_not_member_not_linked_is_not_the_not_linked_screen",
+    "a_403_that_is_not_member_not_linked_prints_what_the_server_said",
     "a_network_failure_shows_the_offline_message_and_never_the_gate",
-    "a_server_error_is_the_same_screen_as_being_offline",
+    "a_server_error_prints_what_the_server_said_and_never_the_gate",
+    "a_503_naming_the_setup_command_prints_that_sentence",
+    "a_503_naming_both_group_ids_prints_both_of_them",
+    "a_status_above_five_hundred_nobody_anticipated_is_still_classified",
+    "a_status_below_five_hundred_nobody_anticipated_is_not_silently_dropped",
+    "a_response_the_client_may_not_read_is_the_same_as_no_answer",
+    "a_status_that_is_not_a_number_is_never_taken_for_a_refusal",
+    "a_later_failure_does_not_leave_the_earlier_sentence_behind",
     "the_api_client_failing_to_load_shows_the_offline_message",
     # Signing in
     "a_refused_sign_in_tells_the_person_why",
     "a_refused_sign_in_with_an_unreadable_body_still_says_something",
     "a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone",
     "a_successful_sign_in_keeps_the_screen_the_person_was_on",
-    "a_session_that_dies_between_sign_in_and_session_read_returns_to_a_blank_gate",
+    "a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate",
+    "a_session_that_expires_mid_session_puts_the_server_sentence_on_the_gate",
+    "a_sign_in_the_network_interrupted_still_lets_the_gate_come_back",
+    "a_session_that_expires_after_a_real_sign_in_still_returns_to_the_gate",
+    "a_401_answering_the_sign_in_itself_is_always_the_gate",
     "creating_an_account_signs_in_straight_after",
     "creating_an_account_that_already_exists_says_so_on_the_gate",
+    "a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it",
     "the_submit_control_is_disabled_while_the_sign_in_is_in_flight",
     "the_gate_says_whether_it_is_signing_in_or_creating_an_account",
     "the_gate_switches_the_password_autocomplete_with_the_mode",
     "the_form_never_lets_the_browser_navigate",
     "the_email_is_trimmed_and_the_password_is_not",
     "signing_out_returns_to_the_gate",
+    "a_sign_out_the_server_refuses_says_why_rather_than_doing_nothing",
     # Routing
     "routing_shows_one_screen_and_moves_focus",
     "going_back_to_a_screen_reads_it_again",
@@ -70,6 +85,10 @@ SCENARIOS = [
     "every_request_goes_to_the_api_with_credentials",
     "the_csrf_token_is_read_at_request_time_not_cached",
     "a_204_is_not_parsed_as_json",
+    "a_refusal_a_screen_asked_for_leaves_the_app_frame_up",
+    "the_whole_error_reaches_the_handler_that_registered_for_it",
+    "a_rejected_fetch_carries_no_message_of_its_own",
+    "a_handler_that_throws_does_not_stop_the_rejection_reaching_the_caller",
     "an_unsupported_selector_is_a_loud_failure_not_a_null",
     # The add screen
     "opening_add_focuses_the_amount_field_and_reads_the_roster",
@@ -99,10 +118,10 @@ SCENARIOS = [
     "a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives",
 ]
 
-# The two mutants the harness is measured against, as anchored substitutions applied
-# to the real source at run time. Neither is a committed copy of a shipped file, so
-# neither can rot into a false pass or be served to a browser by accident, and the
-# text lives here where a reviewer reads it rather than buried in the harness.
+# The three mutants the harness is measured against, as anchored substitutions applied
+# to the real source at run time. None is a committed copy of a shipped file, so none
+# can rot into a false pass or be served to a browser by accident, and the text lives
+# here where a reviewer reads it rather than buried in the harness.
 #
 # Mutant A: show() also hides the gate error. A one-line tidy of the kind a later
 # screen task makes, and it looks like an improvement, because every other
@@ -113,13 +132,38 @@ MUTANT_A = {
     "find": "gate.hidden = which !== 'gate';",
     "replace": "gate.hidden = which !== 'gate';\n    gateError.hidden = true;",
 }
-# Mutant B: the 401 handler is deferred to a macrotask, so submitted()'s catch writes
-# the message first and the deferred showGate('') blanks it afterwards. app/app.js is
-# untouched entirely, and this is only visible once the timer queue has drained.
+# Mutant B: the 401 handler is deferred to a macrotask and blanks the gate when it
+# finally runs, so submitted()'s catch writes the message first and the deferred
+# showGate() wipes it afterwards. app/app.js is untouched entirely, and this is only
+# visible once the timer queue has drained.
+#
+# Re-expressed by task 32, which changed what the handler is handed. Before it,
+# onUnauthenticated always called showGate('') and the bare deferral was enough to
+# blank a message the caller had just written. Now the handler is handed error.say and
+# prints the server's own sentence, which for a refused sign-in is the same sentence
+# submitted() writes, so the two agree and a bare deferral leaves the gate reading
+# correctly. Blanking say inside the deferred call restores the pre-task behaviour
+# exactly, and the defect it reintroduces is the same one: a message written by the
+# caller and wiped by a handler that ran late. The bare deferral is still caught, by
+# a_refused_sign_in_with_an_unreadable_body_still_says_something, where there is no
+# server sentence for the two writers to agree on.
 MUTANT_B = {
     "file": "app/api.js",
     "find": "handlers.unauthenticated(error);",
-    "replace": "setTimeout(function () { handlers.unauthenticated(error); }, 0);",
+    "replace": (
+        "setTimeout(function () { error.say = ''; "
+        "handlers.unauthenticated(error); }, 0);"
+    ),
+}
+# Mutant C: the default arm of the classifier stops classifying. Every status the
+# ladder above it did not name comes back as a kind that no handler speaks for, which
+# is the fall through task 32 removed: announce() was three ifs and no else, so a 429
+# on sign-in and a 409 on signup reached nobody and the screen did not change. This
+# mutant is why the default arm has to be a classification and not a shrug.
+MUTANT_C = {
+    "file": "app/api.js",
+    "find": "return 'refused';",
+    "replace": "return '';",
 }
 
 REFUSED = "a_refused_sign_in_tells_the_person_why"
@@ -250,7 +294,7 @@ def test_the_harness_reports_exactly_the_declared_scenarios(
     assert [entry["name"] for entry in report["scenarios"]] == SCENARIOS
 
 
-# --- The two mutants -------------------------------------------------------
+# --- The three mutants -----------------------------------------------------
 
 
 def mutated(mutant: dict[str, str]) -> str:
@@ -321,6 +365,25 @@ def test_mutant_b_deferring_the_401_handler_is_killed() -> None:
     assert submitted_body(loaded["app/app.js"]) == submitted_body(shipped)
 
 
+def test_mutant_c_a_classifier_that_drops_what_it_does_not_recognise_is_killed() -> None:
+    found = killed(MUTANT_C)
+    # The gate is where the fall through was doing its damage: a 429 the server
+    # explained reaches nobody, so the person is told nothing and can only try again.
+    dropped = "a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it"
+    assert not found[dropped]["passed"]
+    messages = " ".join(found[dropped]["failures"])
+    assert "gate-error" in messages, messages
+    # A working app with one behaviour broken, not a smoking crater: a 401 is claimed
+    # by a row above the default, so signing in still works and still says why when it
+    # is refused.
+    assert found[REFUSED]["passed"], found[REFUSED]["failures"]
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # One file, one line, and app/app.js untouched: the classification lives in the
+    # client and nowhere else, so that is the only place a mutation of it can land.
+    loaded = loaded_under(MUTANT_C)
+    assert loaded["app/app.js"] == (REPO / "app" / "app.js").read_text(encoding="utf-8")
+
+
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------
 
 
@@ -359,6 +422,114 @@ def test_a_run_that_will_not_quiesce_fails_and_names_the_scenario() -> None:
     assert completed.returncode == 2, completed.stderr
     assert scenario in completed.stderr
     assert "settle" in completed.stderr
+
+
+# --- api.js is the only place a status is interpreted ----------------------
+
+# A status read in order to be compared, either way round, and a comparison against
+# an HTTP status number. `status: 503` in sw.js builds a Response and is neither.
+_STATUS_READ = re.compile(
+    r"\.\s*status\s*(?:===|!==|==|!=|>=|<=|>|<)"
+    r"|(?:===|!==|==|!=|>=|<=|>|<)\s*[A-Za-z_$][\w$]*\.\s*status\b"
+    r"|\bswitch\s*\([^)]*\.\s*status\b"
+)
+_STATUS_NUMBER = re.compile(
+    r"(?:===|!==|==|!=|>=|<=|>|<)\s*[1-5][0-9][0-9]\b"
+    r"|\b[1-5][0-9][0-9]\s*(?:===|!==|==|!=|>=|<=|>|<)"
+)
+_JS_COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+# The six kinds classify() answers with. Every one of them is produced there, so a
+# classifier cut down to fewer answers is missing some of these.
+_KINDS = (
+    "offline",
+    "signed-out",
+    "sign-in-not-kept",
+    "not-linked",
+    "unavailable",
+    "refused",
+)
+
+
+def _without_comments(source: str) -> str:
+    return _JS_COMMENTS.sub(" ", source)
+
+
+def _classifier(source: str) -> str:
+    """app/api.js from ``function classify(`` up to the next function after it.
+
+    Sliced rather than searched for whole-file, because the point of the companion
+    test below is that the classification is *in the classifier*: a status read in
+    `request()` to spot a 204, or in `noted()` to spot a 401, is not classification
+    and must not be able to stand in for it.
+    """
+    start = source.index("function classify(")
+    return source[start : source.index("\n  function ", start + 1)]
+
+
+def test_only_the_api_client_interprets_a_status() -> None:
+    """The rule that keeps one error contract instead of two.
+
+    app/api.js classifies a response and puts its answer on the error as ``kind``.
+    Every other file under app/ reads that answer and never the status behind it. A
+    second file that branches on a status is a second opinion about what a 403 means,
+    and two opinions drift the moment either is edited: that is the defect task 32
+    removed, in the shape it would come back in.
+
+    A screen genuinely does need to know whether api.js has already raised a curtain
+    over it. That question is asked of ``kind``, which states it, rather than
+    reconstructed from a status, which only implies it.
+
+    This is a lint, not a proof. It reads both orders of comparison and a ``switch``
+    on a status, and it would still miss a status copied into a local first. What
+    makes it worth having is that every plausible spelling of the mistake, and the one
+    #40 actually makes, is caught at the point somebody merges.
+    """
+    for path in sorted(APP.rglob("*.js")):
+        if path.name == "api.js":
+            continue
+        source = _without_comments(path.read_text(encoding="utf-8"))
+        assert not _STATUS_READ.search(source), path.name
+        assert not _STATUS_NUMBER.search(source), path.name
+
+
+def test_the_narrowed_status_rule_still_bites() -> None:
+    """Proof that excusing one file left a rule that still refuses what it must.
+
+    The first version of this test asked only whether ``api.js`` compared against a
+    status *anywhere*, which ``response.status === 204`` in ``request()`` and
+    ``status !== 401`` in ``noted()`` both satisfy without classifying anything: it
+    stayed green with ``classify()`` deleted outright, which is the whole subject of
+    the task it was guarding. A guard that passes for a reason unrelated to its claim
+    is the defect this repo keeps finding, and this test was one.
+
+    So it asks about the classifier itself, by name and by slice.
+    """
+    client = _without_comments((APP / "api.js").read_text(encoding="utf-8"))
+    assert "function classify(" in client, (
+        "app/api.js no longer defines classify(), which is the one place a response "
+        "becomes a kind. If it was renamed or moved, move this test with it; do not "
+        "delete it, because the rule above goes on passing without it."
+    )
+    body = _classifier(client)
+    # Every kind is answered here, so a classifier cut down to one answer fails.
+    for kind in _KINDS:
+        assert f"'{kind}'" in body, kind
+    # And the statuses it turns into those kinds are read here, in the classifier,
+    # rather than anywhere else in the file that happens to mention a number.
+    for status in ("401", "403", "500"):
+        assert re.search(rf"(?:===|!==|==|!=|>=|<=|>|<)\s*{status}\b", body), status
+    assert _STATUS_READ.search(client)
+    # And the patterns match the shapes they claim to, so a green run above means the
+    # search ran rather than that a regex rotted.
+    assert _STATUS_READ.search("if (error.status === 401) {")
+    assert _STATUS_READ.search("if (401 === error.status) {")
+    assert _STATUS_READ.search("switch (error.status) {")
+    assert _STATUS_NUMBER.search("return error.status === 0 || error.status >= 500;")
+    assert _STATUS_NUMBER.search("if (401 === error.status) {")
+    # A status being written, which is what sw.js does, is not a comparison.
+    assert not _STATUS_READ.search("new Response(body, { status: 503 })")
+    assert not _STATUS_NUMBER.search("new Response(body, { status: 503 })")
 
 
 # --- Determinism, isolation and the stub's honesty -------------------------

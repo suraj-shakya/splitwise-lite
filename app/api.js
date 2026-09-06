@@ -5,17 +5,101 @@
    never read a cookie: one network chokepoint, so there is one answer to a 401 and
    one place to change when the contract does.
 
-   Three failure paths, and they are deliberately different screens:
+   THE ERROR CONTRACT. web.py decides what every refusal is; this file is the one
+   place that decides what a refusal means to the person holding the phone. The
+   screens print what they are handed and classify nothing. A screen may branch on
+   kind. No screen may branch on status or on code.
 
-   * 401, any request. The cached session view is dropped and onUnauthenticated fires,
-     and the boot code shows the sign-in gate. No retry, no redirect, no loop.
-   * 403 with code member_not_linked. onNotLinked fires and the boot code shows
-     "nobody has linked you to a member yet", because retyping a password would not
-     fix it.
-   * A network failure, meaning the request never got an answer at all, or the server
-     could not produce one. onOffline fires and the gate is never shown: prompting for
-     a password on a page that cannot send it is how a person ends up typing their
-     password into nothing, repeatedly.
+   Six kinds, three handlers, two fields. Every failed request is given a kind before
+   any handler runs, and every one of them ends in exactly one of two places: a
+   curtain over the whole frame, or a rejection the screen that asked for it reports.
+
+     kind              what it means                        handler    say
+     offline           no answer came back at all           onOffline  ''
+     signed-out        signing in is what fixes it          onUnauth-  message, or ''
+                                                            enticated  for the code
+                                                                       not_authenticated
+     sign-in-not-kept  the server took the sign-in and      onOffline  ''
+                       then refused the next request
+     not-linked        signed in, no member row             onNotLinked ''
+     unavailable       it answered, and this app cannot     onOffline  message
+                       go on
+     refused           it refused this one request and      none, see  message
+                       said why                             below
+
+   say is, on every path, either exactly error.message or exactly ''. There is no
+   third possibility, and a string literal here that could become one is the drift
+   this contract exists to remove: two sentences for one situation drift the moment
+   either one is edited. This file chooses whether to speak. It never chooses the
+   words. '' means there is nothing here worth reading, either because the body
+   carried no message or because the message describes a situation the person is not
+   in.
+
+   error.message is the server's sentence character for character, and '' when no body
+   carried one, a rejected fetch included. This file composes no prose at all: not a
+   prefix, not a fallback, and not a rendering of whatever object fetch rejected with.
+   That is what makes say's two possibilities two rather than three.
+
+   The screens own three sentences between them, and none of them is here. Two are
+   standing copy on the notice curtain in app/index.html, for the two situations the
+   server has no sentence to offer: nothing came back at all, and a sign-in the server
+   accepted whose very next request it then refused. The third is app/app.js's last
+   resort on the gate, for a refusal whose body carried nothing to show; that is not a
+   situation with a sentence of its own, it is what the gate says when there is
+   nothing to say.
+
+   not_authenticated is the only 401 code whose sentence is suppressed, because it
+   means there was no cookie at all, which is every first visit, and "this endpoint
+   needs a signed-in session" is written for a client rather than for a flatmate. The
+   gate already says what it is for. session_invalid and authentication_failed both
+   say something the person needs.
+
+   The classification, read top to bottom against web.py's error table. The last two
+   rows are the default and are reached by anything the rows above did not claim,
+   which is the whole point: a classifier that recognises a few cases and silently
+   drops the rest is not a classifier.
+
+     0     offline, or a response this client may not read      -> offline
+     401   not_authenticated, session_invalid,                  -> signed-out, or
+           authentication_failed                                   sign-in-not-kept
+                                                                   while armed
+     403   member_not_linked                                    -> not-linked
+     403   csrf_failed, or any other code                       -> refused
+     400   malformed_request, invalid_email, invalid_password,  -> refused
+           invalid_amount, invalid_currency, currency_mismatch,
+           invalid_split, invalid_record, amount_too_large
+     404   record_not_found, not_found                          -> refused
+     405   method_not_allowed                                   -> refused
+     409   email_already_registered, duplicate_record,          -> refused
+           constraint_violated, group_mismatch,
+           member_already_linked, user_already_linked
+     413   request_too_large                                    -> refused
+     429   too_many_attempts                                    -> refused
+     500   internal_error                                       -> unavailable
+     503   no_group_configured, ambiguous_group                 -> unavailable
+     any other status at or above 500, or a status that is      -> unavailable
+     not a readable number
+     any other status below 500                                 -> refused
+
+   An unreadable status is never refused and never raises the gate: if the client
+   cannot tell the request was refused, offering a password box is how a person ends
+   up typing their password into nothing, repeatedly. A 500 and a rejected fetch stay
+   two different kinds for the same reason they are two different things: one is an
+   answer this app produced and logged and it carries a sentence, the other is no
+   answer at all.
+
+   A refused is the caller's to report, because it names something about the one
+   request that was made: raising a curtain over the whole frame for a 409 on signup
+   would take the gate's own message away. Two requests have no caller that reports
+   anything, because app.js discards both rejections by design, so a refused answering
+   either of those two calls onOffline as well: GET /session, whose rejection
+   refresh() discards on the grounds that a handler has already spoken, and
+   DELETE /session, whose rejection the sign out button discards.
+
+   Nothing here retries, re-sends, redirects or loops. announce() fires once per
+   failed request and does not deduplicate, debounce or coalesce: two failures in
+   flight fire twice, and when they are two different kinds the last handler to run
+   owns the screen. This file does not arbitrate between them.
 
    Money crosses the wire as a formatted string and is passed straight through. This
    file does no formatting, no cent arithmetic and no split maths, and it must not
@@ -46,6 +130,30 @@
     offline: function () {}
   };
 
+  /* The two requests whose refusal nobody else would ever report, because app.js
+     discards both rejections by design. A refused answering either is escalated to
+     the offline handler, which now prints what the server said rather than claiming
+     the network is down. */
+  var ESCALATED = { 'GET /session': true, 'DELETE /session': true };
+
+  /* The one request whose own 401 is always a wrong password rather than a session
+     that did not stick. */
+  var SIGN_IN = 'POST /session';
+
+  /* One shot, and it holds nothing about the session: armed by a 200 from
+     POST /session, disarmed by the first response after it that is not a 401 and by
+     signing out. Never persisted, and never in browser storage. */
+  var armed = false;
+
+  function noted(status) {
+    /* Every answer this client gets passes through here. A 401 while armed is the
+       sign-in that did not stick; anything else means the round trip after the
+       sign-in worked, so the question is settled. */
+    if (status !== 401) {
+      armed = false;
+    }
+  }
+
   function readCookie(name) {
     /* Read at request time rather than cached in a variable, so the token the
        server rotated on the last response is the one this request carries. */
@@ -66,8 +174,12 @@
   function ApiError(status, code, message) {
     this.name = 'ApiError';
     this.status = status;
+    /* What the server said. code stays exactly what it sent; kind is what this
+       client decided it means, and it is set by announce() before any handler runs. */
     this.code = code;
     this.message = message;
+    this.kind = '';
+    this.say = '';
   }
   ApiError.prototype = Object.create(Error.prototype);
   ApiError.prototype.constructor = ApiError;
@@ -91,6 +203,7 @@
 
     return fetch(BASE + path, options).then(
       function (response) {
+        noted(response.status);
         if (response.status === 204) {
           return null;
         }
@@ -109,29 +222,101 @@
             );
           });
       },
-      function (networkFailure) {
-        /* The request never got an answer. Never the sign-in gate. */
-        return Promise.reject(new ApiError(0, 'offline', String(networkFailure)));
+      function () {
+        /* The request never got an answer, so no body carried a message and the
+           message is '' exactly as it is for any other empty body. Never the sign-in
+           gate.
+
+           The rejection fetch hands back says "TypeError: Failed to fetch", and this
+           used to be composed into message. It was diagnostics rather than anything a
+           person reads, say kept it off the screen, and it made this file the author
+           of the one message it promises never to write. */
+        noted(0);
+        return Promise.reject(new ApiError(0, 'offline', ''));
       }
     );
   }
 
-  function announce(error) {
-    if (error.status === 401) {
+  /* The classification table in the header, as a ladder read top to bottom. It ends
+     in a default arm rather than falling off the end: everything the server can
+     answer with gets a kind, including the statuses nobody anticipated. */
+  function classify(error, route) {
+    var status = error.status;
+    if (typeof status !== 'number' || !isFinite(status)) {
+      /* Unreadable. Never refused and never the gate: if the client cannot tell the
+         request was refused, a password box is where the loop starts. */
+      return 'unavailable';
+    }
+    if (status === 0) {
+      return 'offline';
+    }
+    if (status === 401) {
+      return armed && route !== SIGN_IN ? 'sign-in-not-kept' : 'signed-out';
+    }
+    if (status === 403 && error.code === 'member_not_linked') {
+      return 'not-linked';
+    }
+    if (status >= 500) {
+      return 'unavailable';
+    }
+    return 'refused';
+  }
+
+  /* Whether the server sent anything worth putting in front of the person. The
+     answer decides between error.message and '', and there is no third answer. */
+  function speaks(kind, code) {
+    if (kind === 'offline' || kind === 'sign-in-not-kept' || kind === 'not-linked') {
+      /* Nothing came back, or what came back describes a different situation from
+         the one the person is in. */
+      return false;
+    }
+    return !(kind === 'signed-out' && code === 'not_authenticated');
+  }
+
+  function announce(error, route) {
+    var kind = classify(error, route);
+    error.kind = kind;
+    error.say = speaks(kind, error.code) ? error.message : '';
+
+    /* Both kinds mean the server no longer agrees this client is signed in, and the
+       copy goes before any handler runs, so a handler that reads cachedSession()
+       cannot see a stale one. */
+    if (kind === 'signed-out' || kind === 'sign-in-not-kept') {
       cached = null;
-      handlers.unauthenticated(error);
-    } else if (error.status === 403 && error.code === 'member_not_linked') {
-      handlers.notLinked(error);
-    } else if (error.status === 0 || error.status >= 500) {
-      /* Offline, or the server could not answer. One message covers both, because
-         from the page they are the same situation: no answer came back. */
-      handlers.offline(error);
+    }
+
+    try {
+      if (kind === 'signed-out') {
+        handlers.unauthenticated(error);
+      } else if (kind === 'not-linked') {
+        handlers.notLinked(error);
+      } else if (
+        kind === 'offline' ||
+        kind === 'unavailable' ||
+        kind === 'sign-in-not-kept'
+      ) {
+        /* No usable answer, and never the sign-in gate: prompting for a password on
+           a page that cannot send it is how a person types their password into
+           nothing, repeatedly. */
+        handlers.offline(error);
+      } else if (kind === 'refused' && ESCALATED[route]) {
+        handlers.offline(error);
+      }
+      /* Every other refused is the caller's own to report, on the screen that asked
+         for it, in the server's words. */
+    } catch (screenBug) {
+      /* A handler is a screen's code and a screen can have a bug in it. That must
+         not change what the caller is rejected with, and must not leave a caller
+         waiting forever on a promise nobody settles. */
     }
     return Promise.reject(error);
   }
 
   function call(method, path, body) {
-    return request(method, path, body).catch(announce);
+    var route = method + ' ' + path;
+    return request(method, path, body).catch(function (error) {
+      return announce(error, route);
+    });
   }
 
   window.SplitwiseApi = {
@@ -173,6 +358,11 @@
       return call('POST', '/session', { email: email, password: password }).then(
         function (view) {
           cached = view;
+          /* The server took these credentials. If the very next request comes back a
+             401 then the session did not survive one round trip, which is what a
+             browser that will not keep the cookie looks like, and signing in again
+             cannot fix it. */
+          armed = true;
           return view;
         }
       );
@@ -181,6 +371,10 @@
     signOut: function () {
       return call('DELETE', '/session').then(function () {
         cached = null;
+        /* Nothing about a session outlives signing out. The answer to this request
+           has already disarmed the check, since it was not a 401; saying it here as
+           well keeps the rule where a reader goes looking for it. */
+        armed = false;
         return null;
       });
     },
