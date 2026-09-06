@@ -176,11 +176,20 @@ the worktree root. Every path is relative to it.
    Three rows share the rule `/api/session` and differ by endpoint and method. That is not
    an edge case to work around; it is what the table has to be able to express.
 7. `_SHELL_ROUTES` is a module-level `Final[tuple[...]]` declaring the two routes that are
-   deliberately not API routes and deliberately ungated: `("/", "shell_document", ("GET",))`
-   and `("/<path:filename>", "static_path", ("GET",))`. Its docstring says these serve files
-   only, that `_static_file` refuses anything outside the app directory, and that a route
-   added here is a route with no session check, which is why it is a declaration and not an
-   omission.
+   deliberately not API routes and deliberately ungated:
+   `("/", "shell_document", _shell_document, ("GET",))` and
+   `("/<path:filename>", "static_path", _static_path, ("GET",))`. Each row is
+   `(rule, endpoint, view, methods)`, mirroring `_ApiRoute`'s fields without `access`. Its
+   docstring says these serve files only, that `_static_file` refuses anything outside the
+   app directory, and that a route added here is a route with no session check, which is
+   why it is a declaration and not an omission.
+
+   *Corrected while implementing.* As first written this criterion listed each row as the
+   triple `(rule, endpoint, methods)`, with no view, which contradicts criterion 10: a loop
+   over this table cannot call `add_url_rule` for a row that does not name a view, and the
+   constraints fix the set of new names, so there is nothing to look one up with. The rule,
+   endpoint and methods are unchanged from the original wording; the view is the only
+   addition.
 8. `_access_map(routes)` is a module-level function returning the `endpoint -> _Access`
    mapping for a tuple of rows, and it raises `ValueError` naming the endpoint when two rows
    share an endpoint name. `_API_ACCESS` is `_access_map(_API_ROUTES)` and is `Final`.

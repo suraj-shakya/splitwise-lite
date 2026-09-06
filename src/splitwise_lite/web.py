@@ -59,6 +59,17 @@ all; if an unlinked account could read the feed, that sentence would stop being 
 and any stranger who signed up could read the flat's spending. Membership of the group
 is the only authorisation this product has.
 
+**A route is registered with its access policy or not at all.** Every route this app
+serves is a row in :data:`_API_ROUTES` or :data:`_SHELL_ROUTES`, and an ``_ApiRoute``
+row has no default for ``access``, so a row that does not state what it requires does
+not construct. :func:`create_app` audits ``app.url_map`` against those two tables as
+its last act and refuses to return an application that serves anything they do not
+declare, so bypassing the table does not buy a silent endpoint, it buys an app that
+will not start. A ``/api`` rule that reaches ``_before_request`` with no declared
+policy is refused there rather than waved through, which covers the route registered
+after the factory returned. ``MEMBER`` is what a new endpoint gets unless somebody
+argues otherwise.
+
 Money crosses the wire only as a ``format_amount`` string, never as a number and never
 as cents, so the front end is handed nothing it could do arithmetic on. ``parse_amount``
 is the only route from a request body back to cents.
@@ -70,6 +81,7 @@ per request that needs it and passes that single value into every function takin
 
 from __future__ import annotations
 
+import enum
 import hmac
 import json
 import secrets
@@ -77,7 +89,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Callable, Final
 
 import flask
 
@@ -241,28 +253,42 @@ _CSRF_ISSUING_METHODS: Final[frozenset[str]] = frozenset({"GET", "HEAD"})
 without one, so loading the shell always yields one and the login POST can carry a
 header before any session exists."""
 
-_ANONYMOUS_ENDPOINTS: Final[tuple[str, ...]] = (
-    "signup",
-    "create_session",
-    "delete_session",
-)
-"""The endpoints that need no session at all. Signing up and signing in cannot have
-one yet, and signing out has to work for a person whose session already died."""
+_API_PREFIX: Final[str] = "/api"
+"""The prefix every API rule lives under, spelled once.
 
-_MEMBER_OPTIONAL_ENDPOINTS: Final[tuple[str, ...]] = (
-    "signup",
-    "create_session",
-    "read_session",
-    "delete_session",
-)
-"""The endpoints exempt from needing a linked member: the four session and signup
-endpoints and nothing else.
-
-The member requirement is the default, so a new endpoint added without thought gets
-the locked-down behaviour rather than exposing the ledger to any stranger who signed
-up. ``read_session`` is here so the shell can render "you are signed in, ask whoever
-set the flat up to link you" instead of a bare error.
+Every decision that asks "is this an API rule" compares against this constant: the
+audit in :func:`_audit_routes` and the refusal in :func:`_before_request`. One
+spelling, so the guard that runs at construction and the guard that runs per request
+cannot drift apart.
 """
+
+
+class _Access(enum.Enum):
+    """What a request has to prove before an endpoint's view runs.
+
+    ``ANONYMOUS`` needs no session at all. ``SESSION`` needs a valid session and no
+    member row. ``MEMBER`` needs both a valid session and a linked member row in the
+    group, and ``MEMBER`` is the level a new endpoint gets unless somebody argues
+    otherwise, so an endpoint added without thought locks the ledger down rather than
+    exposing it to any stranger who signed up.
+
+    ``ANONYMOUS`` exists for signup, sign-in and sign-out, which cannot require a
+    session they are there to create or destroy: signing up and signing in have none
+    yet, and signing out has to work for a person whose session already died. It is
+    an exemption from authentication only, never from CSRF: the three gates apply to
+    every state-changing method under ``/api`` with no per-endpoint exemption.
+
+    ``SESSION`` exists for ``read_session`` alone, so the shell can render "you are
+    signed in, ask whoever set the flat up to link you" instead of a bare error.
+
+    The value of each member is its own name, following ``SettlementState`` in
+    ``events.py``: the name is the whole of the meaning, and a separate value would
+    be a second thing to keep in step.
+    """
+
+    ANONYMOUS = "ANONYMOUS"
+    SESSION = "SESSION"
+    MEMBER = "MEMBER"
 
 _SECURITY_HEADERS: Final[dict[str, str]] = {
     "Cache-Control": "no-store",
@@ -1492,22 +1518,248 @@ def _static_file(filename: str) -> flask.Response:
 # --- The factory ------------------------------------------------------------
 
 
-_API_ENDPOINTS: Final[frozenset[str]] = frozenset(
-    {
-        "signup",
+@dataclass(frozen=True, slots=True)
+class _ApiRoute:
+    """One API route, and the access it requires, in one row.
+
+    Invariants, all checked eagerly in ``__post_init__``:
+
+    * ``rule`` is a ``str`` beginning with :data:`_API_PREFIX`.
+    * ``endpoint`` is a non-empty ``str``, unique across :data:`_API_ROUTES`.
+    * ``methods`` is a non-empty ``tuple`` of upper-case ``str``.
+    * ``access`` is an :class:`_Access`.
+
+    ``access`` deliberately has no default value, and neither does any other field.
+    A row that does not state what it requires is a ``TypeError`` at import rather
+    than an endpoint that quietly answers anybody, which is the whole of this
+    mechanism: giving ``access`` a default would restore the trap the type exists to
+    close.
+    """
+
+    rule: str
+    endpoint: str
+    view: Callable[..., flask.Response]
+    methods: tuple[str, ...]
+    access: _Access
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rule, str):
+            raise TypeError(
+                f"rule must be a str, got {type(self.rule).__name__}: {self.rule!r}"
+            )
+        if not self.rule.startswith(_API_PREFIX):
+            raise ValueError(
+                f"rule must start with {_API_PREFIX!r}, got {self.rule!r}"
+            )
+        if not isinstance(self.endpoint, str):
+            raise TypeError(
+                f"endpoint must be a str, got "
+                f"{type(self.endpoint).__name__}: {self.endpoint!r}"
+            )
+        if not self.endpoint:
+            raise ValueError(f"endpoint must be a non-empty str, got {self.endpoint!r}")
+        if not isinstance(self.methods, tuple):
+            raise TypeError(
+                f"methods must be a tuple, got "
+                f"{type(self.methods).__name__}: {self.methods!r}"
+            )
+        if not self.methods:
+            raise ValueError(f"methods must be a non-empty tuple, got {self.methods!r}")
+        for method in self.methods:
+            if not isinstance(method, str):
+                raise TypeError(
+                    f"every method must be a str, got "
+                    f"{type(method).__name__} in methods={self.methods!r}"
+                )
+            if method != method.upper():
+                raise ValueError(
+                    f"every method must be upper case, got methods={self.methods!r}"
+                )
+        if not isinstance(self.access, _Access):
+            raise TypeError(
+                f"access must be an _Access, got "
+                f"{type(self.access).__name__}: {self.access!r}"
+            )
+
+
+_API_ROUTES: Final[tuple[_ApiRoute, ...]] = (
+    _ApiRoute("/api/signup", "signup", _signup, ("POST",), _Access.ANONYMOUS),
+    _ApiRoute(
+        "/api/session",
         "create_session",
-        "read_session",
+        _create_session,
+        ("POST",),
+        _Access.ANONYMOUS,
+    ),
+    _ApiRoute(
+        "/api/session", "read_session", _read_session, ("GET",), _Access.SESSION
+    ),
+    _ApiRoute(
+        "/api/session",
         "delete_session",
-        "list_members",
-        "list_expenses",
-        "create_expense",
-        "read_balances",
+        _delete_session,
+        ("DELETE",),
+        _Access.ANONYMOUS,
+    ),
+    _ApiRoute(
+        "/api/members", "list_members", _list_members, ("GET",), _Access.MEMBER
+    ),
+    _ApiRoute(
+        "/api/expenses", "list_expenses", _list_expenses, ("GET",), _Access.MEMBER
+    ),
+    _ApiRoute(
+        "/api/expenses", "create_expense", _create_expense, ("POST",), _Access.MEMBER
+    ),
+    _ApiRoute(
+        "/api/balances", "read_balances", _read_balances, ("GET",), _Access.MEMBER
+    ),
+    _ApiRoute(
+        "/api/debts/<debtor_id>/<creditor_id>",
         "read_debt",
-    }
+        _read_debt,
+        ("GET",),
+        _Access.MEMBER,
+    ),
 )
-"""Every endpoint the JSON API answers. The hooks key off this rather than off the
-path, so a static file is never mistaken for an API call and the reverse cannot happen
-either."""
+"""Every route the JSON API answers, each with the access it requires.
+
+Three rows share the rule ``/api/session`` and differ by endpoint and method, which is
+why the table is keyed by row rather than by path. The order is the order the routes
+are registered in.
+
+There is no second literal to keep in step with this one. The three separate sets of
+endpoint names that used to carry this information are deleted outright rather than
+derived from here, because a constant nothing reads is the next version of the trap
+this table closes, and the next person to edit one would be editing something with no
+effect.
+"""
+
+_SHELL_ROUTES: Final[
+    tuple[tuple[str, str, Callable[..., flask.Response], tuple[str, ...]], ...]
+] = (
+    ("/", "shell_document", _shell_document, ("GET",)),
+    ("/<path:filename>", "static_path", _static_path, ("GET",)),
+)
+"""The two routes that are deliberately not API routes and deliberately ungated.
+
+They serve files and nothing else: ``_static_file`` refuses anything outside the app
+directory, so neither of them can reach the ledger. A route added here is a route with
+no session check, no CSRF check and no member check, which is why this is a
+declaration rather than an omission. The audit reads it, so a shell route cannot be
+registered without appearing here, and a reader of this file sees the ungated routes
+listed rather than having to notice their absence from the other table.
+
+Each row is ``(rule, endpoint, view, methods)``, mirroring :class:`_ApiRoute`'s fields
+without ``access``: these routes have no access policy, which is the point of them.
+"""
+
+
+def _access_map(routes: tuple[_ApiRoute, ...]) -> dict[str, _Access]:
+    """The ``endpoint -> _Access`` mapping for a tuple of rows.
+
+    Refuses two rows sharing an endpoint name, naming it. ``_before_request`` keys off
+    the endpoint, so a duplicate would silently hand one of the two rows the other's
+    policy, and the quieter of the two failures is the dangerous one.
+    """
+    mapping: dict[str, _Access] = {}
+    for route in routes:
+        if route.endpoint in mapping:
+            raise ValueError(
+                f"two routes share the endpoint name {route.endpoint!r}; the access "
+                f"policy is looked up by endpoint, so the name must be unique"
+            )
+        mapping[route.endpoint] = route.access
+    return mapping
+
+
+_API_ACCESS: Final[dict[str, _Access]] = _access_map(_API_ROUTES)
+"""What each API endpoint requires, built once at import and never written to.
+
+``_before_request`` reads this and nothing else: an endpoint absent from it under
+:data:`_API_PREFIX` is refused rather than served.
+"""
+
+
+class _RouteNotDeclared(RuntimeError):
+    # Not a ``WebError`` and not a ``DomainError``: this is a programming error in
+    # this repo, not a refusal of a request, and giving it a code would put it in a
+    # contract clients branch on.
+    """The route map and the tables disagree, in either direction.
+
+    Raised by :func:`_audit_routes` for a route the app serves that no row declares,
+    or for a row no registered rule matches, and by ``_before_request`` for a ``/api``
+    rule that reaches it with no declared policy. It reaches a client as the ordinary
+    unmapped 500, generic message and logged traceback, because it is unmapped in
+    :data:`ERROR_STATUS` and :data:`ERROR_CODE` like any other bug.
+    """
+
+
+def _audit_routes(app: flask.Flask) -> None:
+    """Refuse an app whose route map is not exactly what the two tables declare.
+
+    This lives in :func:`create_app` rather than only in a test on purpose. A test
+    runs when somebody runs the suite; this runs in every process that ever serves
+    this app, which is the suite, ``scripts/serve.py`` and whatever eventually runs
+    it for real. It is also what makes the declaration binding rather than
+    conventional: Flask's own rule registration is public and one line away, so a
+    registration helper alone would only bind the people who chose to call it.
+
+    The comparison key is ``(rule, endpoint, methods)`` with ``HEAD`` and ``OPTIONS``
+    subtracted, because Flask adds both to every rule on its own. It covers every rule
+    in ``app.url_map``, not only those under :data:`_API_PREFIX`, so an API route
+    registered at some other prefix cannot slip past it.
+
+    Raises:
+        _RouteNotDeclared: if the app serves a route no row declares, or if a row
+            declares a route the app does not serve.
+    """
+    declared = {
+        (route.rule, route.endpoint, frozenset(route.methods) - {"HEAD", "OPTIONS"})
+        for route in _API_ROUTES
+    } | {
+        (rule, endpoint, frozenset(methods) - {"HEAD", "OPTIONS"})
+        for rule, endpoint, _view, methods in _SHELL_ROUTES
+    }
+    served = {
+        (rule.rule, rule.endpoint, frozenset(rule.methods or ()) - {"HEAD", "OPTIONS"})
+        for rule in app.url_map.iter_rules()
+    }
+    undeclared = served - declared
+    if undeclared:
+        offending = ", ".join(
+            f"{' '.join(sorted(methods))} {rule} (endpoint {endpoint!r})"
+            for rule, endpoint, methods in sorted(
+                undeclared, key=lambda row: (row[0], row[1], sorted(row[2]))
+            )
+        )
+        raise _RouteNotDeclared(
+            f"this app serves {offending}, and no row in _API_ROUTES or "
+            "_SHELL_ROUTES declares it. Until a route is declared it reaches no "
+            "session check, no CSRF check and no member check, so it answers anybody "
+            "who asks. Fix it in src/splitwise_lite/web.py by appending a row to "
+            "_API_ROUTES naming the rule, the endpoint, the view, the methods and "
+            "the access it requires: ANONYMOUS needs no session at all, SESSION "
+            "needs a valid session and no member row, MEMBER needs a valid session "
+            "and a linked member row in the group. MEMBER is what a new endpoint "
+            "gets unless somebody argues otherwise. If the route is genuinely not "
+            "part of the API, it goes in _SHELL_ROUTES instead, where it is served "
+            "with no session check at all."
+        )
+    missing = declared - served
+    if missing:
+        absent = ", ".join(
+            f"{' '.join(sorted(methods))} {rule} (endpoint {endpoint!r})"
+            for rule, endpoint, methods in sorted(
+                missing, key=lambda row: (row[0], row[1], sorted(row[2]))
+            )
+        )
+        raise _RouteNotDeclared(
+            f"_API_ROUTES or _SHELL_ROUTES in src/splitwise_lite/web.py declares "
+            f"{absent}, and this app does not serve it. The audit is an equality "
+            "in both directions, so a table that claims a route nobody "
+            "registered is a failure too: either register the row in create_app or "
+            "delete it from the table."
+        )
 
 
 def create_app(
@@ -1561,35 +1813,23 @@ def create_app(
         ),
     )
 
-    app.add_url_rule("/api/signup", "signup", _signup, methods=["POST"])
-    app.add_url_rule(
-        "/api/session", "create_session", _create_session, methods=["POST"]
-    )
-    app.add_url_rule("/api/session", "read_session", _read_session, methods=["GET"])
-    app.add_url_rule(
-        "/api/session", "delete_session", _delete_session, methods=["DELETE"]
-    )
-    app.add_url_rule("/api/members", "list_members", _list_members, methods=["GET"])
-    app.add_url_rule("/api/expenses", "list_expenses", _list_expenses, methods=["GET"])
-    app.add_url_rule(
-        "/api/expenses", "create_expense", _create_expense, methods=["POST"]
-    )
-    app.add_url_rule("/api/balances", "read_balances", _read_balances, methods=["GET"])
-    app.add_url_rule(
-        "/api/debts/<debtor_id>/<creditor_id>",
-        "read_debt",
-        _read_debt,
-        methods=["GET"],
-    )
-    app.add_url_rule("/", "shell_document", _shell_document, methods=["GET"])
-    app.add_url_rule(
-        "/<path:filename>", "static_path", _static_path, methods=["GET"]
-    )
+    for route in _API_ROUTES:
+        app.add_url_rule(
+            route.rule, route.endpoint, route.view, methods=list(route.methods)
+        )
+    for rule, endpoint, view, methods in _SHELL_ROUTES:
+        app.add_url_rule(rule, endpoint, view, methods=list(methods))
 
     app.before_request(_before_request)
     app.after_request(_after_request)
     app.teardown_appcontext(_close_store)
     app.register_error_handler(Exception, _handle_error)
+    # Last, after every hook and handler, and before the app escapes this function.
+    # The audit is the part that binds: a registration helper is a convention with a
+    # signature, and Flask's own registration is always one line away, but an
+    # application that will not build is not a convention. Here rather than only in a
+    # test, so the guard runs whenever the app runs, not whenever the suite does.
+    _audit_routes(app)
     return app
 
 
@@ -1603,16 +1843,36 @@ def _before_request() -> None:
     Authentication is checked **before** group resolution, so an unauthenticated caller
     against a store with no group gets 401 rather than a 503 that tells them how the
     server is configured.
+
+    An ``/api`` rule with no row in :data:`_API_ACCESS` is refused here rather than
+    waved through. :func:`_audit_routes` has already refused to build an app that
+    serves one, so this is the second line, for a route registered after the factory
+    returned.
     """
     endpoint = flask.request.endpoint
-    if endpoint is None or endpoint not in _API_ENDPOINTS:
+    matched = flask.request.url_rule
+    if endpoint is None or matched is None:
+        return
+    access = _API_ACCESS.get(endpoint)
+    if access is None:
+        # Classified from the rule that matched, never from ``flask.request.path``:
+        # the shell's ``/<path:filename>`` catch-all matches ``/api/nope``, so a
+        # path-based test would turn today's 404 into a 500.
+        if matched.rule.startswith(_API_PREFIX):
+            raise _RouteNotDeclared(
+                f"the rule {matched.rule} (endpoint {endpoint!r}) is under "
+                f"{_API_PREFIX} and no row in _API_ROUTES declares what it requires, "
+                "so the request is refused rather than served. Declare it in "
+                "src/splitwise_lite/web.py; it was registered after create_app "
+                "audited this app's route map."
+            )
         return
     if flask.request.method in _STATE_CHANGING_METHODS:
         _check_csrf()
-    if endpoint in _ANONYMOUS_ENDPOINTS:
+    if access is _Access.ANONYMOUS:
         return
     flask.g.session = _authenticate()
-    if endpoint in _MEMBER_OPTIONAL_ENDPOINTS:
+    if access is _Access.SESSION:
         return
     flask.g.group = _acting_group()
     flask.g.member = _acting_member()
