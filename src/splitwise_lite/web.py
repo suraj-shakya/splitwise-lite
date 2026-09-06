@@ -256,10 +256,15 @@ header before any session exists."""
 _API_PREFIX: Final[str] = "/api"
 """The prefix every API rule lives under, spelled once.
 
-Every decision that asks "is this an API rule" compares against this constant: the
-audit in :func:`_audit_routes` and the refusal in :func:`_before_request`. One
-spelling, so the guard that runs at construction and the guard that runs per request
-cannot drift apart.
+Every decision that asks "is this an API rule" compares against this constant:
+:class:`_ApiRoute`, the audit in :func:`_audit_routes` and the refusal in
+:func:`_before_request`. One spelling, so the guard that runs at construction and the
+guard that runs per request cannot drift apart.
+
+The comparison is ``rule == _API_PREFIX or rule.startswith(_API_PREFIX + "/")``, a
+path segment rather than a string prefix, so ``/apiary`` is not under ``/api``. All
+three sites ask it that way; a plain ``startswith`` would leave them agreeing on a
+boundary one character wide.
 """
 
 
@@ -1524,7 +1529,8 @@ class _ApiRoute:
 
     Invariants, all checked eagerly in ``__post_init__``:
 
-    * ``rule`` is a ``str`` beginning with :data:`_API_PREFIX`.
+    * ``rule`` is a ``str`` equal to :data:`_API_PREFIX` or beginning with it followed
+      by ``/``, so the prefix is a path segment and ``/apiary`` is not under it.
     * ``endpoint`` is a non-empty ``str``, unique across :data:`_API_ROUTES`.
     * ``methods`` is a non-empty ``tuple`` of upper-case ``str``.
     * ``access`` is an :class:`_Access`.
@@ -1547,9 +1553,13 @@ class _ApiRoute:
             raise TypeError(
                 f"rule must be a str, got {type(self.rule).__name__}: {self.rule!r}"
             )
-        if not self.rule.startswith(_API_PREFIX):
+        # A path segment, not a string prefix: ``/apiary`` is not under ``/api``.
+        if not (
+            self.rule == _API_PREFIX or self.rule.startswith(_API_PREFIX + "/")
+        ):
             raise ValueError(
-                f"rule must start with {_API_PREFIX!r}, got {self.rule!r}"
+                f"rule must be {_API_PREFIX!r} or start with {_API_PREFIX + '/'!r}, "
+                f"got {self.rule!r}"
             )
         if not isinstance(self.endpoint, str):
             raise TypeError(
@@ -1723,7 +1733,7 @@ def _audit_routes(app: flask.Flask) -> None:
     misfiled = tuple(
         rule
         for rule, _endpoint, _view, _methods in _SHELL_ROUTES
-        if rule.startswith(_API_PREFIX)
+        if rule == _API_PREFIX or rule.startswith(_API_PREFIX + "/")
     )
     if misfiled:
         raise _RouteNotDeclared(
@@ -1878,8 +1888,9 @@ def _before_request() -> None:
     if access is None:
         # Classified from the rule that matched, never from ``flask.request.path``:
         # the shell's ``/<path:filename>`` catch-all matches ``/api/nope``, so a
-        # path-based test would turn today's 404 into a 500.
-        if matched.rule.startswith(_API_PREFIX):
+        # path-based test would turn today's 404 into a 500. The prefix is a path
+        # segment here too, the same question :func:`_audit_routes` asks.
+        if matched.rule == _API_PREFIX or matched.rule.startswith(_API_PREFIX + "/"):
             raise _RouteNotDeclared(
                 f"the rule {matched.rule} (endpoint {endpoint!r}) is under "
                 f"{_API_PREFIX} and no row in _API_ROUTES declares what it requires, "

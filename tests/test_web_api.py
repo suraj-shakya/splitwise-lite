@@ -2335,6 +2335,38 @@ def test_the_request_time_refusal_claims_no_provenance_it_cannot_see(app) -> Non
     assert "after that audit ran" in message
 
 
+def test_the_api_prefix_is_a_path_segment_and_not_a_string_prefix(
+    app, seeded: Path, monkeypatch
+) -> None:
+    # ``/apiary`` is not under ``/api``. All three guards ask this one question, so
+    # they agree with each other by construction; without the segment boundary they
+    # would agree on a boundary one character wide instead.
+    web._ApiRoute(web._API_PREFIX, "bare", probe_view, ("GET",), web._Access.MEMBER)
+    web._ApiRoute("/api/x", "x", probe_view, ("GET",), web._Access.MEMBER)
+    with pytest.raises(ValueError) as error:
+        web._ApiRoute("/apiary", "apiary", probe_view, ("GET",), web._Access.MEMBER)
+    assert "rule" in str(error.value)
+    assert "'/apiary'" in str(error.value)
+
+    # At request time the same boundary. A rule outside the prefix is not an API rule
+    # and is not refused as one, so this lands in the gap the spec already records
+    # for a route registered after the factory returned, rather than a second one.
+    app.add_url_rule("/apiary", "apiary", probe_view, methods=["GET"])
+    assert app.test_client().get("/apiary").status_code == 200
+
+    # And the audit's converse check reads it the same way: a shell row at
+    # ``/apiary`` is an ordinary ungated shell route, not a misfiled API one.
+    monkeypatch.setattr(
+        web,
+        "_SHELL_ROUTES",
+        web._SHELL_ROUTES + (("/apiary", "apiary", probe_view, ("GET",)),),
+    )
+    built = web.create_app(
+        store_path=seeded, secure_cookies=False, scrypt_params=CHEAP
+    )
+    assert built.test_client().get("/apiary").status_code == 200
+
+
 # --- Members ----------------------------------------------------------------
 
 
