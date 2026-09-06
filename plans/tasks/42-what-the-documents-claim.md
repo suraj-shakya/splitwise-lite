@@ -518,17 +518,21 @@ QA runs `git status` after each and records that the tree is clean.
     `test_both_documents_agree_on_what_does_not_exist_yet`. QA quotes both messages.
     Revert, and the suite is green again with the same passed count. **This is the
     criterion the task exists to satisfy: the guard catches a false claim.**
-30. **An invented capability turns the suite red.** In `CLAUDE.md` only, add a seventh
-    bullet to the first list, `- **Recurring expenses** are entered once and repeat.`
-    `test_both_documents_agree_on_what_works_today` goes red. Revert; green.
+30. **An invented capability turns the suite red.** In `CLAUDE.md` only, add one more
+    bullet to the end of the first list, `- **Recurring expenses** are entered once and
+    repeat.` `test_both_documents_agree_on_what_works_today` goes red. Revert; green.
 
     > **Amended 2026-09-07, after the second review of PR #59.** Two corrections, both
-    > to the description and neither to the probe. The bullet is a seventh now, not a
-    > sixth: criterion 4's first list gained `Transfer drill-down`. And "the same two
-    > tests go red" was already known to be wrong when this file was written, by
-    > deviation 1, which records that the probe touches the first list only so the
-    > second list's test has nothing to see. The criterion now says what deviation 1
-    > has said since the first run, so the two no longer contradict each other.
+    > to the description and neither to the probe. It read "add a sixth bullet", which
+    > was right when the first list held five and wrong once criterion 4 took it to six.
+    > The ordinal is dropped rather than corrected to "seventh", because nothing in the
+    > probe depends on how many bullets are already there and any number written here
+    > goes stale the next time the list moves. Deviation 1 was corrected the same way in
+    > the same round. Second, "the same two tests go red" was already known to be wrong
+    > when this file was written: deviation 1 records that the probe touches the first
+    > list only, so the second list's test has nothing to see. The criterion now says
+    > what deviation 1 has said since the first run, so the two no longer contradict
+    > each other.
 31. **A capability arriving without the documents moving turns the suite red.** In
     `app/api.js`, add one method to the `window.SplitwiseApi` object, for instance
     `markPaid: function () { return call('POST', '/settlements', {}); },`. The suite goes
@@ -742,12 +746,19 @@ each under an explicit instruction, and says so.
 > round. With 35 amended the count matches the observed run, so it is not a deviation at
 > all.
 
-1. **Criterion 30 turns one test red, not two.** The probe adds a sixth bullet,
+1. **Criterion 30 turns one test red, not two.** The probe adds a bullet,
    `**Recurring expenses**`, to `CLAUDE.md`'s first list only, so only
    `test_both_documents_agree_on_what_works_today` can see it; the second list is
    untouched and its test stays green. Criterion 29 does turn both red, because moving a
    bullet changes both lists. The point of criterion 30, that an invented capability
    turns the suite red, holds.
+
+   > **Corrected 2026-09-07, after the second review of PR #59.** This said "a sixth
+   > bullet", which was right when the first list held five and is wrong now that
+   > criterion 4 holds six. The ordinal is dropped rather than moved to "seventh",
+   > because nothing here depends on how many bullets the list already has and a count
+   > in this sentence would only go stale again. Criterion 30 itself, which does name
+   > the position, was amended in the same round.
 
 2. **Criterion 34's "each is green" holds for probes 29 and 30 only.** On `master`,
    probes 31 and 32 turn `test_the_recorded_digest_matches_the_files_it_covers` red,
