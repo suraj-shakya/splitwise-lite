@@ -503,3 +503,32 @@ memberless view is unreachable, and the fix above reads the member through
 what says what the helper means and callers read a member off that view once it says yes,
 and the helper's comment now says it is the invariant's statement rather than the line the
 tests are holding.
+
+### Criterion 34's arithmetic, restated at merge
+
+QA reported criterion 34 as unreconciled rather than failing it, and was right to.
+The criterion says the count rises "by exactly eleven"; it rises by fourteen. The
+amendment above restates criteria 19, 25 and 30 but never restated 34's number, so a
+reader checking it literally finds a figure nobody updated.
+
+The fourteen are the original nine scenarios and two mutants, plus the two
+shared-phone scenarios and `MUTANT_F` this amendment adds.
+
+Criterion 34's baseline is stale in a second way. It names master at 2052, which is
+where master stood when this branch was cut. Master has since taken PR #47 (the shell
+precache digest) and PR #50 (transfer provenance) and stands at 2158. The number to
+check on the merged branch is therefore **2172**, and the harness runs **83**
+scenarios: this task's 82 plus the debt-path scenario task 12a appended to the same
+array.
+
+### The precache digest, recomputed at the merge
+
+`app/app.js` is one of the nine files `app/sw.js` precaches, so merging master turned
+`test_the_recorded_digest_matches_the_files_it_covers` red, exactly as PR #47 intended
+and exactly where issue #49 predicted it would matter: on a merge commit, not on
+either branch. `SHELL_DIGEST` moves from `141951154c0a` to `62daaf7c5a5b`. `VERSION`
+stays `v4`, since the worker's own behaviour is unchanged.
+
+The failing test printed the line to paste; nothing here was worked out by hand. That
+is the mechanism doing its job, and this is the first time it has fired on a real
+merge rather than on a deliberate proof.

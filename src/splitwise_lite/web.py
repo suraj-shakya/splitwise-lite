@@ -923,6 +923,63 @@ def _expense_view(expense: events.ExpenseEvent) -> dict[str, Any]:
     }
 
 
+def _absorbed_view(row: simplify.AbsorbedDebt) -> dict[str, Any]:
+    """One pairwise debt a transfer absorbed, and how much of it that transfer covers.
+
+    ``debtor_id`` and ``creditor_id`` are the ``Balances.pairwise`` key unchanged, so
+    the two together are exactly what the debts endpoint is then asked about.
+
+    ``covers_whole_debt`` is computed here from cents and never from the two formatted
+    strings, for the same reason ``direction`` exists on a net row: a client that had
+    to compare two amount strings to decide whether a payment clears a debt would be
+    doing money arithmetic, which is the one thing the front end never does.
+    """
+    return {
+        "debtor_id": row.debtor,
+        "creditor_id": row.creditor,
+        "amount": _amount(row.amount.cents, row.amount.currency),
+        "debt_total": _amount(row.debt_total.cents, row.debt_total.currency),
+        "covers_whole_debt": row.amount.cents == row.debt_total.cents,
+    }
+
+
+_ENTRY_KIND_WIRE: Final[dict[balances.DebtEntryKind, str]] = {
+    balances.DebtEntryKind.EXPENSE: "expense",
+    balances.DebtEntryKind.SETTLEMENT: "settlement",
+}
+"""The wire spelling of every ``DebtEntryKind``, as an explicit map rather than the
+enum's own values, so renaming a domain member cannot silently rename a JSON value the
+front end branches on. Exhaustive over the enum, and a test says so."""
+
+_ENTRY_EFFECT_WIRE: Final[dict[balances.DebtEffect, str]] = {
+    balances.DebtEffect.ADDS: "adds",
+    balances.DebtEffect.REDUCES: "reduces",
+}
+"""The wire spelling of every ``DebtEffect``, on the same terms and for the same
+reason. The effect is server-computed for the same reason ``direction`` is: deciding
+which way an entry pulls from two formatted strings is arithmetic the client may not
+do."""
+
+
+def _debt_entry_view(entry: balances.DebtEntry) -> dict[str, Any]:
+    """One event behind a pairwise debt, with the way it moved that debt.
+
+    ``amount`` is always strictly positive, because ``effect`` carries the direction.
+    Display names are not here: one roster call covers every screen, exactly as
+    ``_expense_view`` decided.
+    """
+    return {
+        "kind": _ENTRY_KIND_WIRE[entry.kind],
+        "effect": _ENTRY_EFFECT_WIRE[entry.effect],
+        "id": entry.event_id,
+        "description": entry.description,
+        # The same spelling ``_expense_view`` uses, so one instant is spelled one way
+        # wherever it appears on the wire.
+        "created_at": entry.created_at.isoformat(timespec="microseconds"),
+        "amount": _amount(entry.amount.cents, entry.amount.currency),
+    }
+
+
 # --- Authentication and the acting member -----------------------------------
 
 
@@ -1254,9 +1311,11 @@ def _read_balances() -> flask.Response:
     ``direction`` carries the sign so ``amount`` is always the non-negative magnitude
     and no client ever has to parse or render a minus sign.
 
-    Transfer provenance is deliberately not here: task 13 owns the drill-down and adds
-    ``payer_debts`` and ``receiver_credits`` there, which is a widening of one response
-    object rather than a new endpoint.
+    Every transfer carries both ends of its provenance, ``payer_debts`` and
+    ``receiver_credits``, each row naming a ``Balances.pairwise`` key, the part of that
+    debt this transfer covers and the debt's whole total. ``covers_whole_debt`` on each
+    row is computed from cents here rather than by comparing the two formatted strings,
+    for the same reason ``direction`` exists on a net row.
     """
     group = flask.g.group
     ledger = _store().list_events(group.id)
@@ -1283,8 +1342,89 @@ def _read_balances() -> flask.Response:
                     "from_member_id": transfer.from_member_id,
                     "to_member_id": transfer.to_member_id,
                     "amount": money.format_amount(transfer.amount),
+                    # simplify.py's own order, ascending by (debtor, creditor).
+                    # Nothing is re-sorted, merged, filtered or deduplicated here, so a
+                    # pair appearing in both lists of one transfer appears in both on
+                    # the wire.
+                    "payer_debts": [
+                        _absorbed_view(row) for row in transfer.payer_debts
+                    ],
+                    "receiver_credits": [
+                        _absorbed_view(row) for row in transfer.receiver_credits
+                    ],
                 }
                 for transfer in plan.transfers
+            ],
+        },
+        200,
+    )
+
+
+def _read_debt(debtor_id: str, creditor_id: str) -> flask.Response:
+    """``GET /api/debts/<debtor_id>/<creditor_id>``: what one pairwise debt is made of.
+
+    The expenses and confirmed settlements behind the debt from ``debtor_id`` to
+    ``creditor_id``, each carrying a server-computed ``effect`` of ``adds`` or
+    ``reduces``. A pairwise debt is a signed fold, so a list of only the events pushing
+    one way would not account for the figure it claims to explain.
+
+    ``amount`` is the non-negative magnitude and ``direction`` carries the sign, read
+    from the debtor's side so it reads exactly as a net row does: ``owes`` when the
+    debt runs the way it was asked about. The domain value is signed, because a value
+    that hid which way a debt ran could not be checked against the fold; the wire never
+    is, because no client may parse or render a minus sign. The pair can legitimately
+    run backwards here, since the ledger may have moved between a balances read and
+    this request.
+
+    Both ids are checked against the roster before anything else, so an id from
+    another group is a ``malformed_request`` naming it rather than an empty answer that
+    looks like a settled pair. Together with the self-pair refusal that keeps
+    ``InvalidLedger`` unreachable from any request.
+
+    The whole group's pairs are readable by any linked member: the drill-down exists to
+    explain a payment between two other people, and membership of the group is the only
+    authorisation this product has.
+
+    Nothing is stored, cached or memoised. Every figure is derived on read from the
+    event log, so two requests against a ledger that changed in between may
+    legitimately differ.
+    """
+    group = flask.g.group
+    roster = {member.id for member in _store().list_members(group.id)}
+    for value in (debtor_id, creditor_id):
+        if value not in roster:
+            raise MalformedRequest(
+                f"a debt path names a member id that is not a member of this group: "
+                f"{value!r}"
+            )
+    if debtor_id == creditor_id:
+        raise MalformedRequest(
+            f"a member cannot owe themselves: {debtor_id!r} was asked about as both "
+            f"the debtor and the creditor"
+        )
+
+    ledger = _store().list_events(group.id)
+    found = balances.debt_sources(
+        ledger,
+        debtor=events.MemberId(debtor_id),
+        creditor=events.MemberId(creditor_id),
+        group_id=events.GroupId(group.id),
+        currency=group.currency,
+    )
+    return _json_response(
+        {
+            "currency": group.currency.code,
+            "debtor_id": debtor_id,
+            "creditor_id": creditor_id,
+            "amount": _amount(abs(found.amount.cents), group.currency),
+            # Read from the debtor's side: a debt they owe is a position in the red,
+            # which is what ``_direction`` spells ``owes`` for a net row.
+            "direction": _direction(-found.amount.cents),
+            # The walk returns ordering key ascending and the feed shows newest first,
+            # so this reverses it exactly as ``_list_expenses`` reverses the store's
+            # order, and ties break by descending event id the same way.
+            "entries": [
+                _debt_entry_view(entry) for entry in reversed(found.entries)
             ],
         },
         200,
@@ -1362,6 +1502,7 @@ _API_ENDPOINTS: Final[frozenset[str]] = frozenset(
         "list_expenses",
         "create_expense",
         "read_balances",
+        "read_debt",
     }
 )
 """Every endpoint the JSON API answers. The hooks key off this rather than off the
@@ -1434,6 +1575,12 @@ def create_app(
         "/api/expenses", "create_expense", _create_expense, methods=["POST"]
     )
     app.add_url_rule("/api/balances", "read_balances", _read_balances, methods=["GET"])
+    app.add_url_rule(
+        "/api/debts/<debtor_id>/<creditor_id>",
+        "read_debt",
+        _read_debt,
+        methods=["GET"],
+    )
     app.add_url_rule("/", "shell_document", _shell_document, methods=["GET"])
     app.add_url_rule(
         "/<path:filename>", "static_path", _static_path, methods=["GET"]

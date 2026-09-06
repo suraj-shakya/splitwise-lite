@@ -6,15 +6,34 @@
    data, request queue or user input is stored here. Offline entry is cut from v1;
    the shell may open offline, and that is the whole of it.
 
-   To ship a changed asset, bump VERSION and reload. Activation then deletes every
-   older cache, so exactly one entry stays in Cache Storage. Bump VERSION in the same
-   commit as any change to a file in SHELL: the shell is answered from the cache and
-   never revalidated, so until the cache name changes a returning user is served the
-   old files however carefully the new ones were written. To clear a worker that is
-   stuck: DevTools, Application, Service Workers, Unregister. */
+   To pick a changed asset up locally, bump VERSION and reload. Activation then
+   deletes every older cache, so exactly one entry stays in Cache Storage. The cache
+   name has to change in the same commit as any change to a file in SHELL: the shell
+   is answered from the cache and never revalidated, so until the cache name changes
+   a returning user is served the old files however carefully the new ones were
+   written. To clear a worker that is stuck: DevTools, Application, Service Workers,
+   Unregister.
+
+   That is what SHELL_DIGEST is for. It is a digest of the files in SHELL, recorded
+   here by hand rather than computed at run time: computing it would mean fetching
+   all nine files before the worker could name its own cache, which fails offline,
+   and opening the shell offline is the whole reason this worker exists. A pytest
+   test recomputes it from app/ and fails when this line is stale, printing the exact
+   line to paste. So an edit to a precached file moves the cache name whether or not
+   anybody remembers VERSION, and VERSION is left for the one case the digest cannot
+   see: the same shell files, treated differently by this worker. sw.js is
+   deliberately not in SHELL, and cannot be: SHELL_DIGEST is recorded in this file,
+   so hashing sw.js into it is a self-reference with no fixed point. Every edit
+   changes the digest, pasting the digest changes the file, and the new file has a
+   new digest again. That reason is unconditional. Secondarily, the browser fetches
+   the worker script with service-workers mode 'none', so no worker intercepts it
+   and no worker can be handed its own cached self today; if that ever changed, the
+   byte-compare against the running script would compare equal forever and the
+   worker could never be replaced. */
 
 var VERSION = 'v4';
-var CACHE = 'splitwise-lite-shell-' + VERSION;
+var SHELL_DIGEST = '62daaf7c5a5b';
+var CACHE = 'splitwise-lite-shell-' + VERSION + '-' + SHELL_DIGEST;
 
 /* Exactly the shell. Relative, like every other URL in app/, so the directory can
    be mounted under a prefix later without editing this list. */

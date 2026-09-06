@@ -10,6 +10,7 @@ the suite passes from anywhere.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -722,6 +723,340 @@ def test_the_worker_precaches_exactly_the_shell() -> None:
 def test_every_precache_entry_resolves_to_a_file() -> None:
     for entry in precache_entries():
         assert resolve_app_url(entry).is_file(), entry
+
+
+# --- The precache digest ---------------------------------------------------
+
+# The worker answers the shell from Cache Storage and never revalidates it, so a
+# changed shell file reaches nobody who already has the app until the cache *name*
+# changes. Until now the only thing that changed the name was a human remembering
+# to edit VERSION, and that convention has failed twice: tasks 11 and 12 shipped
+# two whole screens at v2, and task 32 rewrote three precached files at v3. Both
+# failures looked exactly like success. So the cache name now carries a digest of
+# the files it caches, and the test below fails when the two drift apart.
+
+# The extensions the digest knows how to read. Text is normalised so a checkout
+# under `core.autocrlf=true` and one under `core.autocrlf=false` agree; the PNGs
+# are hashed exactly as they sit on disk.
+DIGEST_TEXT_SUFFIXES = (".html", ".css", ".js", ".json")
+DIGEST_BINARY_SUFFIXES = (".png",)
+
+
+def shell_digest(
+    entries: list[str] | None = None,
+    contents: dict[str, bytes] | None = None,
+) -> str:
+    r"""Twelve hex characters over the precached files, and nothing else.
+
+    The whole rule, so it can be read here rather than reconstructed: the entries
+    are sorted with Python's default string ordering, and one sha256 is fed, for
+    each entry in that order, the entry's path as UTF-8, a NUL, the decimal length
+    of its content bytes as ASCII, a NUL, and then those content bytes. The length
+    is what keeps the framing unambiguous: without it two entries could shift bytes
+    across the boundary between them and leave the digest where it was.
+
+    Content bytes are the file's bytes with `\r\n` replaced by `\n` for the text
+    entries, and the raw bytes for the PNGs. That normalisation is not about churn.
+    This repo pins no `.gitattributes` rule for `.js`, `.html`, `.css` or `.json`,
+    so a checkout under `core.autocrlf=true` holds different bytes on disk from one
+    without, and a raw digest could never be green on Windows and on Linux at once.
+    It makes the digest a property of the committed content instead of the checkout.
+
+    Twelve characters is enough because this detects change, it does not resist
+    tampering. There is no adversary: anyone who can edit a file under `app/` can
+    edit `app/sw.js` in the same commit, and the mechanism is aimed at the engineer
+    who forgot, not one who is trying. Twelve hex characters is 48 bits, far more
+    than the handful of shell edits this repo will ever make, and short enough to
+    read out of a Cache Storage row in DevTools at a glance.
+
+    `entries` overrides the list and `contents` overrides individual entries' bytes,
+    so a test can hash a hypothetical `app/` without writing anything to disk.
+    """
+    if entries is None:
+        entries = precache_entries()
+    if contents is None:
+        contents = {}
+    running = hashlib.sha256()
+    for entry in sorted(entries):
+        raw = (
+            contents[entry]
+            if entry in contents
+            else resolve_app_url(entry).read_bytes()
+        )
+        if entry.endswith(DIGEST_TEXT_SUFFIXES):
+            content = raw.replace(b"\r\n", b"\n")
+        elif entry.endswith(DIGEST_BINARY_SUFFIXES):
+            content = raw
+        else:
+            raise AssertionError(
+                f"{entry} is precached, but the digest has no rule for that kind of "
+                f"file, and it will not guess one. Somebody has to decide whether "
+                f"{entry} is text, in which case its line endings are normalised and "
+                f"its extension belongs in DIGEST_TEXT_SUFFIXES, or binary, in which "
+                f"case it is hashed exactly as it sits on disk and its extension "
+                f"belongs in DIGEST_BINARY_SUFFIXES. Guessing either way is wrong for "
+                f"the other: a text file hashed raw makes the digest depend on the "
+                f"checkout, and a binary file with its CRLF pairs rewritten is corrupt."
+            )
+        running.update(entry.encode("utf-8"))
+        running.update(b"\0")
+        running.update(str(len(content)).encode("ascii"))
+        running.update(b"\0")
+        running.update(content)
+    return running.hexdigest()[:12]
+
+
+def recorded_digest() -> str:
+    """The digest `app/sw.js` currently claims, read straight out of the source."""
+    source = (APP / "sw.js").read_text(encoding="utf-8")
+    found = re.findall(r"var SHELL_DIGEST = '([0-9a-f]{12})';", source)
+    assert len(found) == 1, (
+        "app/sw.js declares SHELL_DIGEST exactly once, as twelve lowercase hex "
+        f"characters in single quotes. Found {len(found)}."
+    )
+    return found[0]
+
+
+def stale_digest_message(recorded: str, computed: str, covered: int) -> str:
+    """What the enforcing test says when the recorded value has gone stale.
+
+    Written for somebody who has just edited `app/app.js`, has never opened
+    `app/sw.js`, and has no reason to know what a service worker precache is. It
+    says what is wrong, what it costs, and the one line to change. If reading it
+    does not make the fix obvious, the message is the thing to improve.
+
+    `covered` is how many files the digest is taken over, passed in rather than
+    written into the prose. Saying "the files in app/" would be wrong: app/sw.js is
+    in app/, is not one of them, and is the very file the reader is being sent to
+    edit. Anybody chasing that would have to open a second file to find out which
+    set is meant, which is the one thing this message exists not to require.
+    """
+    return (
+        f"app/sw.js records the shell as '{recorded}'.\n"
+        f"The {covered} files it precaches now come to '{computed}'.\n"
+        "\n"
+        "So one of the files the app keeps a copy of has changed, and the cache "
+        "name in app/sw.js has not. Every browser that has already installed this "
+        "app keeps its own copy of the shell files, filed under that cache name, "
+        "and serves that copy without asking the server again. Until the name "
+        "changes, everyone who already has the app goes on getting the old files, "
+        "your change reaches nobody, and nothing anywhere reports an error. That "
+        "has happened twice in this repo, and both times it looked like success.\n"
+        "\n"
+        "Fix it by changing one line in app/sw.js to read exactly:\n"
+        "\n"
+        f"    var SHELL_DIGEST = '{computed}';\n"
+        "\n"
+        "That is the whole fix, and it is the whole of what this test is asking "
+        "for. VERSION needs bumping only if you changed how the worker itself "
+        "behaves; editing a file under app/ is not that, so leave VERSION where "
+        "it is.\n"
+        "\n"
+        "This does not know which files changed: it is one number over all of "
+        "them together. `git status app/` will tell you."
+    )
+
+
+def test_the_cache_name_is_built_from_the_version_and_the_digest() -> None:
+    # A SHELL_DIGEST that the cache name does not use is an inert constant, and the
+    # whole mechanism would be decorative: the value would still have to be pasted
+    # in to go green, and every installed client would still be served the old shell
+    # out of a cache whose name never moved. The name is what the browser keys on,
+    # so the digest has to be in the name.
+    source = (APP / "sw.js").read_text(encoding="utf-8")
+    assert (
+        "var CACHE = 'splitwise-lite-shell-' + VERSION + '-' + SHELL_DIGEST;" in source
+    )
+    assignments = re.findall(r"^\s*(?:var )?CACHE = .*$", source, re.M)
+    assert len(assignments) == 1, assignments
+
+
+def test_the_recorded_digest_matches_the_files_it_covers() -> None:
+    # The one test this whole section exists for. pytest.fail rather than a bare
+    # assert, so the reader gets the prose and not a two-string repr diff.
+    recorded = recorded_digest()
+    computed = shell_digest()
+    if recorded != computed:
+        pytest.fail(stale_digest_message(recorded, computed, len(precache_entries())))
+
+
+def test_the_digest_refuses_an_entry_it_cannot_classify() -> None:
+    # Nothing under app/ has an unknown extension today. When something does, the
+    # digest must not guess: a text file hashed raw is machine-dependent, and a
+    # binary file with its CRLF pairs rewritten is simply corrupt.
+    with pytest.raises(AssertionError) as raised:
+        shell_digest(entries=["notes.txt"], contents={"notes.txt": b"hello"})
+    message = str(raised.value)
+    assert "notes.txt" in message
+    assert "text" in message
+    assert "binary" in message
+
+
+def test_one_appended_byte_in_app_js_moves_the_digest() -> None:
+    # A whitespace-only edit retiring the cache is the accepted trade, not an
+    # oversight. Over-invalidating costs one shell download and corrects itself;
+    # under-invalidating is silent, permanent, and has already happened twice.
+    # Normalising past it would need a JavaScript parser, which is a dependency.
+    entries = precache_entries()
+    appended = (APP / "app.js").read_bytes() + b"\n"
+    assert shell_digest(entries=entries, contents={"app.js": appended}) != shell_digest(
+        entries=entries
+    )
+
+
+def test_one_changed_byte_in_an_icon_moves_the_digest() -> None:
+    # The icons are covered, not merely listed: they are precached like everything
+    # else, and a regenerated icon that never reaches an installed client is the
+    # same bug as a stale script.
+    entries = precache_entries()
+    flipped = bytearray((ICONS / "icon-192.png").read_bytes())
+    flipped[-1] ^= 0xFF
+    assert shell_digest(
+        entries=entries, contents={"icons/icon-192.png": bytes(flipped)}
+    ) != shell_digest(entries=entries)
+
+
+def test_line_endings_do_not_move_the_digest() -> None:
+    # `.gitattributes` pins no rule for .js, so the same commit is CRLF on one
+    # machine and LF on another. Without this the digest would be a property of
+    # the checkout rather than of the content, and could never be green on both.
+    entries = precache_entries()
+    unix = (APP / "app.js").read_bytes().replace(b"\r\n", b"\n")
+    windows = unix.replace(b"\n", b"\r\n")
+    assert shell_digest(entries=entries, contents={"app.js": unix}) == shell_digest(
+        entries=entries, contents={"app.js": windows}
+    )
+
+
+def test_reordering_the_entries_leaves_the_digest_alone() -> None:
+    # The entries are sorted before hashing, so shuffling SHELL never demands a
+    # cache retirement that no user would benefit from.
+    entries = precache_entries()
+    assert shell_digest(entries=list(reversed(entries))) == shell_digest(entries=entries)
+
+
+# --- The precache list against app/ ----------------------------------------
+
+# The same bug, one level out. A file added to app/ and not to SHELL is not
+# precached, does not work offline, and the digest does not cover it either, because
+# the digest only ever sees what SHELL names. test_app_holds_exactly_the_promised_files
+# forces the new file into APP_FILES and test_the_worker_precaches_exactly_the_shell
+# compares SHELL against SHELL_PRECACHE, but nothing related the two: both literals
+# could be edited consistently with SHELL left short and the suite stayed green. This
+# relates them, so the omission has to be deliberate and has to carry its reason.
+
+# path -> why it is in app/ and deliberately not in SHELL. One entry today.
+NOT_PRECACHED = {
+    "sw.js": (
+        "SHELL_DIGEST is recorded inside sw.js, so hashing sw.js into the digest is "
+        "a self-reference with no fixed point: every edit changes the digest, "
+        "pasting the digest changes the file, and the new file has a new digest "
+        "again. There is no value that could ever be correct. That reason is "
+        "unconditional and is the one to keep. Secondarily, and only as long as the "
+        "specification says so: the browser fetches the worker script itself with "
+        "service-workers mode 'none', so that fetch reaches no worker's fetch "
+        "handler and a worker cannot be served its own cached self today. Were it "
+        "ever intercepted, the byte-compare against the running script is the only "
+        "thing that ever replaces a worker, a worker handed its own cached self "
+        "would compare equal forever and could never be replaced, and that is the "
+        "one failure with no way out short of unregistering by hand."
+    ),
+}
+
+
+def unlisted_shell_file_message(missing: list[str], unknown: list[str]) -> str:
+    """What the test below says when SHELL and app/ have come apart.
+
+    Written for whoever has just added a file to app/ and has no reason to know
+    that a second list decides what the installed app is made of.
+    """
+    parts = []
+    if missing:
+        parts.append(
+            "These files are in app/, and the worker does not precache them:\n\n"
+            + "\n".join(f"    {path}" for path in missing)
+            + "\n\n"
+            "So they are not part of the installed app. They are fetched from the "
+            "network every time, the app does not open offline without them, and "
+            "the cache name does not move when they change, because it only covers "
+            "what the worker precaches. Somebody has to decide which of two things "
+            "is meant. Either add the path to SHELL in app/sw.js, which precaches "
+            "it and folds it into the digest; or add it to NOT_PRECACHED in "
+            "tests/test_web_shell.py with a sentence saying why it stays out, the "
+            "way sw.js does."
+        )
+    if unknown:
+        parts.append(
+            "The worker precaches these, and app/ does not hold them:\n\n"
+            + "\n".join(f"    {path}" for path in unknown)
+            + "\n\n"
+            "A SHELL entry with no file behind it fails the whole install, so no "
+            "visitor gets a worker at all. Either the file was deleted and SHELL in "
+            "app/sw.js still names it, or APP_FILES in this file has not been told "
+            "the file exists."
+        )
+    return "\n\n".join(parts)
+
+
+def omissions_carry_their_reasons(omissions: dict[str, str]) -> None:
+    """Fail unless every omission above is justified in prose.
+
+    Without this the mapping checks only its keys, so a blank string buys a file its
+    way out of the precache list for nothing, which is the one thing the mapping
+    exists to prevent.
+    """
+    blank = sorted(path for path, reason in omissions.items() if not reason.strip())
+    assert not blank, (
+        "These paths are named as deliberate omissions with no reason given:\n\n"
+        + "\n".join(f"    {path}" for path in blank)
+        + "\n\n"
+        "A reason is the price of the omission. Naming a file here takes it out of "
+        "the installed app: it is fetched from the network every time, it is not "
+        "there offline, and the cache name does not move when it changes. That can "
+        "be the right call, and sw.js is one, but it has to be a call somebody made "
+        "and wrote down, in a sentence that lands in the diff where a reviewer can "
+        "disagree with it. An empty reason is the same omission with nobody's name "
+        "on it. Write the sentence, or add the path to SHELL in app/sw.js."
+    )
+
+
+def test_the_precache_list_covers_app_minus_the_named_omissions() -> None:
+    for path in NOT_PRECACHED:
+        assert path in APP_FILES, f"{path} is named as an omission but is not in app/"
+    omissions_carry_their_reasons(NOT_PRECACHED)
+    entries = set(precache_entries())
+    # Against app/ as it actually is, first. A file dropped into the directory has
+    # to fail here on its own, without waiting for anyone to add it to APP_FILES:
+    # the whole point is that no pair of literals can be kept agreeing with each
+    # other while the shell the browser installs is quietly short of a file.
+    on_disk = {
+        path.relative_to(APP).as_posix() for path in APP.rglob("*") if path.is_file()
+    }
+    expected = on_disk - set(NOT_PRECACHED)
+    if entries != expected:
+        pytest.fail(
+            unlisted_shell_file_message(
+                missing=sorted(expected - entries), unknown=sorted(entries - expected)
+            )
+        )
+    # And against the promised set, so APP_FILES cannot drift out of the relation
+    # and leave the check above comparing the directory only with itself.
+    assert entries == APP_FILES - set(NOT_PRECACHED)
+
+
+def test_an_omission_with_no_reason_is_refused() -> None:
+    # The mapping is a toll, not a list. Its whole worth is that dropping a file out
+    # of the precache costs a sentence in the diff, where a reviewer reads it and can
+    # disagree. Checking only the keys leaves the cheapest way out of the test above
+    # open: name the file, say nothing, go green, and the file is outside the
+    # installed app with nothing on record saying anybody meant it.
+    for blank in ("", "   ", "\n\t "):
+        with pytest.raises(AssertionError) as raised:
+            omissions_carry_their_reasons({"probe.txt": blank})
+        message = str(raised.value)
+        assert "probe.txt" in message
+        assert "a reason is the price of the omission" in message.lower()
+    omissions_carry_their_reasons(NOT_PRECACHED)
 
 
 # --- Docs ------------------------------------------------------------------

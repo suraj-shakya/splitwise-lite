@@ -128,6 +128,8 @@ SCENARIOS = [
     "a_sign_out_the_server_refuses_leaves_the_draft_alone",
     "a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry",
     "a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally",
+    # The debts path
+    "the_api_client_builds_a_debt_path_from_two_ids",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied
