@@ -1278,7 +1278,7 @@ def _resolve_split(
         _require_keys(body, ("mode", "member_ids"), what)
         raw = _require_list(body, "member_ids", what)
         member_ids = [_require_member_id(value, roster) for value in raw]
-        return split.split_equally(total_cents, member_ids)
+        return split.split_equally(total_cents, member_ids, currency=currency)
     if mode == "weight":
         _require_keys(body, ("mode", "weights"), what)
         weights = _require_object(body, "weights", what)
@@ -1288,6 +1288,7 @@ def _resolve_split(
                 _require_member_id(key, roster): _require_weight(key, value)
                 for key, value in weights.items()
             },
+            currency=currency,
         )
     if mode == "exact":
         _require_keys(body, ("mode", "amounts"), what)
@@ -1300,6 +1301,7 @@ def _resolve_split(
                 )
                 for key, value in amounts.items()
             },
+            currency=currency,
         )
     raise MalformedRequest(
         f"{what} mode must be one of 'equal', 'weight' or 'exact', got {mode!r}"

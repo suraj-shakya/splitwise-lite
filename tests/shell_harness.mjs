@@ -1308,14 +1308,18 @@ const ADD_CREATED = {
   }
 };
 
-/* split_exact's own refusal, pinned by
-   tests/test_web_api.py::test_exact_amounts_that_do_not_add_up_report_both_figures.
-   Its figures are raw cents against dollars the person typed, and it is still shown
-   word for word: the alternatives are inventing replacement copy for one code, which
-   drifts from web.py the day either changes, or dividing by a hundred in JavaScript,
-   which is the one thing this codebase exists to prevent. Raised as its own issue
-   against src/splitwise_lite/split.py. */
-const ADD_SUM_REFUSED = 'exact amounts sum to 950, not the total 1000';
+/* split_exact's own refusal, in the money the person typed rather than in cents.
+   split.py renders both figures through money.format_amount, so this is the sentence
+   the resolver writes and the screen shows word for word: no replacement copy per
+   error code on the client, which would drift from web.py the day either changes, and
+   no dividing by a hundred in JavaScript, which is the one thing this codebase exists
+   to prevent.
+
+   This literal is a fixture with a producer, and
+   tests/test_web_api.py::test_the_shell_harness_refusal_fixture_is_the_sentence_the_api_sends
+   reads it out of this file and compares it against a live 400 from the same figures.
+   Reword split.py's refusal and that test goes red pointing here. */
+const ADD_SUM_REFUSED = 'the shares add up to 9.50, but the total is 10.00';
 
 /* Every body spelled out rather than rebuilt from the values a scenario typed in: a
    request whose payload is asserted against a copy of the code that built it asserts
@@ -2629,8 +2633,8 @@ const SCENARIOS = [
   },
 
   {
-    /* The refusal that matters most, shown in the resolver's own words including its
-       raw cent figures, and nothing the person typed is thrown away by it. */
+    /* The refusal that matters most, shown in the resolver's own words and in the
+       money the person typed, and nothing they typed is thrown away by it. */
     name: 'shares_that_do_not_add_up_show_the_resolvers_own_message_and_keep_the_draft',
     async run(page) {
       await addBoot(page, ADD_ROSTER);
