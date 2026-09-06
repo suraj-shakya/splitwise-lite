@@ -54,7 +54,12 @@ from .accounts import (
 )
 from .balances import (
     Balances,
+    DebtEffect,
+    DebtEntry,
+    DebtEntryKind,
+    DebtSources,
     InvalidLedger,
+    debt_sources,
     derive_balances,
     settlement_states,
 )
@@ -172,6 +177,10 @@ __all__ = [
     "ConstraintViolated",
     "Currency",
     "CurrencyMismatch",
+    "DebtEffect",
+    "DebtEntry",
+    "DebtEntryKind",
+    "DebtSources",
     "DomainError",
     "DuplicateRecord",
     "EmailAlreadyRegistered",
@@ -227,6 +236,7 @@ __all__ = [
     "apply_group_definition",
     "authenticate",
     "change_password",
+    "debt_sources",
     "derive_balances",
     "format_amount",
     "hash_password",
