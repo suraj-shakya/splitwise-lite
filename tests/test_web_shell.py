@@ -998,9 +998,32 @@ def unlisted_shell_file_message(missing: list[str], unknown: list[str]) -> str:
     return "\n\n".join(parts)
 
 
+def omissions_carry_their_reasons(omissions: dict[str, str]) -> None:
+    """Fail unless every omission above is justified in prose.
+
+    Without this the mapping checks only its keys, so a blank string buys a file its
+    way out of the precache list for nothing, which is the one thing the mapping
+    exists to prevent.
+    """
+    blank = sorted(path for path, reason in omissions.items() if not reason.strip())
+    assert not blank, (
+        "These paths are named as deliberate omissions with no reason given:\n\n"
+        + "\n".join(f"    {path}" for path in blank)
+        + "\n\n"
+        "A reason is the price of the omission. Naming a file here takes it out of "
+        "the installed app: it is fetched from the network every time, it is not "
+        "there offline, and the cache name does not move when it changes. That can "
+        "be the right call, and sw.js is one, but it has to be a call somebody made "
+        "and wrote down, in a sentence that lands in the diff where a reviewer can "
+        "disagree with it. An empty reason is the same omission with nobody's name "
+        "on it. Write the sentence, or add the path to SHELL in app/sw.js."
+    )
+
+
 def test_the_precache_list_covers_app_minus_the_named_omissions() -> None:
     for path in NOT_PRECACHED:
         assert path in APP_FILES, f"{path} is named as an omission but is not in app/"
+    omissions_carry_their_reasons(NOT_PRECACHED)
     entries = set(precache_entries())
     # Against app/ as it actually is, first. A file dropped into the directory has
     # to fail here on its own, without waiting for anyone to add it to APP_FILES:
@@ -1019,6 +1042,21 @@ def test_the_precache_list_covers_app_minus_the_named_omissions() -> None:
     # And against the promised set, so APP_FILES cannot drift out of the relation
     # and leave the check above comparing the directory only with itself.
     assert entries == APP_FILES - set(NOT_PRECACHED)
+
+
+def test_an_omission_with_no_reason_is_refused() -> None:
+    # The mapping is a toll, not a list. Its whole worth is that dropping a file out
+    # of the precache costs a sentence in the diff, where a reviewer reads it and can
+    # disagree. Checking only the keys leaves the cheapest way out of the test above
+    # open: name the file, say nothing, go green, and the file is outside the
+    # installed app with nothing on record saying anybody meant it.
+    for blank in ("", "   ", "\n\t "):
+        with pytest.raises(AssertionError) as raised:
+            omissions_carry_their_reasons({"probe.txt": blank})
+        message = str(raised.value)
+        assert "probe.txt" in message
+        assert "a reason is the price of the omission" in message.lower()
+    omissions_carry_their_reasons(NOT_PRECACHED)
 
 
 # --- Docs ------------------------------------------------------------------
