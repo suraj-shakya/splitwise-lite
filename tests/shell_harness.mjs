@@ -170,6 +170,16 @@ function element(tag, attributes, sink) {
       own.attributes.type = String(value);
     },
 
+    /* Reflected off the attribute the way hidden and type are. app.js assigns an
+       id to a region it built so the button controlling it can name that id in
+       aria-controls: feedDetail's `detail.id = ...`, and task 13's detail regions. */
+    get id() {
+      return own.attributes.id === undefined ? '' : own.attributes.id;
+    },
+    set id(value) {
+      own.attributes.id = String(value);
+    },
+
     get hidden() {
       return own.attributes.hidden !== undefined;
     },
@@ -618,6 +628,10 @@ function page(scripts, name, provokeRunawayTimer) {
       querySelector: (selector) => select(parsed.root, selector)[0] || null,
       querySelectorAll: (selector) => select(parsed.root, selector),
       createElement: (tag) => element(String(tag).toLowerCase(), {}, sink),
+      /* The { text } shape the textContent getter above already understands. app.js
+         composes a row out of text nodes so that a display name holding a `<` reaches
+         the DOM as text: balancesNetRow, balancesTransferRow and task 13's rows. */
+      createTextNode: (text) => ({ text: String(text) }),
       head: head,
       get title() {
         return titleElement.textContent;
@@ -3663,9 +3677,10 @@ const SCENARIOS = [
     /* Task 12a. api.debt is the whole of what that task adds to app/, and no screen
        calls it yet: issue #14 owns the drill-down. So this boots to the app, starts the
        request through the shipped client itself, and reads the payload back off the
-       promise rather than off the page. Nothing is rendered, so no DOM stub widening is
-       needed here and document.createTextNode and an element type property stay absent
-       and stay issue #14's to add.
+       promise rather than off the page. Nothing is rendered, so this scenario reaches
+       for no part of the DOM stub: document.createTextNode and an element id property
+       are there for issue #14's drill-down, and an element type property has been
+       there since the add screen.
 
        The fixture is a local rather than a module constant on purpose: this file is
        being edited on another branch at the same time, and one appended block conflicts
