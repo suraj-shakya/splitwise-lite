@@ -1162,6 +1162,10 @@ API_SURFACE = {
 }
 
 # Capability key -> the (file under `app/`, substring) pairs that must all be PRESENT.
+# These bite when machinery vanishes under a claim that still stands. They do not bite
+# when a claim is dropped from both documents and from here at once, because then
+# there is nothing left for the pair to disagree about; see the note on NOT_YET below
+# for the same limit stated from the other side.
 WORKS_TODAY = {
     "Sign in": (("index.html", 'id="gate-form"'), ("api.js", "signIn:")),
     "The expense feed": (("index.html", 'id="feed-list"'), ("api.js", "expenses:")),
@@ -1189,31 +1193,60 @@ WORKS_TODAY = {
 # substring) pairs that must be ABSENT, and a reason. An entry with no substring rule
 # still carries a reason naming what covers it instead, because an empty rule with no
 # explanation is a guard nobody can audit.
+#
+# Every reason says which of two strengths it has, and the two words are used strictly,
+# because reading a prompt as an interlock is exactly the mistake this section exists to
+# stop somebody making:
+#
+#   INTERLOCK. An `absent` rule names a substring in a file under `app/`. While the
+#   capability is in the shell there is no green tree that also calls it missing here,
+#   so the documents have to move. Routing around it means deleting an evidence rule
+#   and writing a reason that is false, which is a deliberate edit and reads as one in
+#   a diff.
+#
+#   PROMPT. No `absent` rule. Something else goes red when the capability lands and its
+#   message says to move the bullets, but one string added to a literal clears that red
+#   while both documents stay stale, and that edit is textually indistinguishable from
+#   correct maintenance. The failure message is the whole of the enforcement.
+#
+# Nothing below is an interlock. `Transfer drill-down` was the only one this section
+# ever had, and it has been spent: task 13 shipped, `.debt(` appeared in app/app.js
+# while both documents still called the capability missing, the rule fired, and the
+# entry moved to WORKS_TODAY. Adding an interlock needs a substring that a capability
+# cannot arrive without, and for the entries left that substring is not knowable in
+# advance.
 NOT_YET = {
     "Mark as paid": {
         "task": 14,
         "absent": (),
         "reason": (
-            "Recording a payment is a round trip, and app/api.js is the only file "
-            "allowed to make one, so "
+            "A PROMPT, not an interlock. Recording a payment is a round trip, and "
+            "app/api.js is the only file allowed to make one, so "
             "test_the_api_client_offers_exactly_the_named_calls goes red the moment "
-            "the method appears."
+            "the method appears, and its message names both lists in both documents. "
+            "That is where the enforcement stops: adding \"markPaid\" to API_SURFACE "
+            "turns the suite green again with this entry, and both bullets, untouched. "
+            "Whoever adds that string is the one who has to move them."
         ),
     },
     "Receiver confirmation": {
         "task": 15,
         "absent": (),
         "reason": (
+            "A PROMPT, not an interlock, on the same terms as Mark as paid. "
             "Confirming a settlement is a round trip too, so it cannot arrive without "
             "a new name in API_SURFACE, which "
-            "test_the_api_client_offers_exactly_the_named_calls catches."
+            "test_the_api_client_offers_exactly_the_named_calls notices; and one "
+            "string in that set clears the red without either document moving. The "
+            "failure message is the whole of what holds this bullet honest."
         ),
     },
     "The incompleteness signal": {
         "task": 16,
         "absent": (),
         "reason": (
-            "Nothing in this suite would catch this one, and pretending otherwise "
+            "NEITHER, and this is the honest end of the scale. Nothing in this suite "
+            "would catch this one, and pretending otherwise "
             "would be worse than saying so. Staleness can be computed on the client "
             "from the feed payload the app already fetches, adding no API method and "
             "no new call, so neither API_SURFACE nor an absent-substring rule would "
@@ -1224,9 +1257,12 @@ NOT_YET = {
         "task": 17,
         "absent": (),
         "reason": (
-            "Editing or voiding an expense appends an event through the server, so it "
-            "too has to add a name to API_SURFACE first, and "
-            "test_the_api_client_offers_exactly_the_named_calls fails when it does."
+            "A PROMPT, not an interlock. Editing or voiding an expense appends an "
+            "event through the server, so it too has to add a name to API_SURFACE "
+            "first, and test_the_api_client_offers_exactly_the_named_calls fails when "
+            "it does. One string in that set is the whole cost of clearing that "
+            "failure with both documents left saying this cannot be done, so treat the "
+            "red as a reminder to move the bullets, not as a rule that makes you."
         ),
     },
 }
