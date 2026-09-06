@@ -3062,6 +3062,43 @@ def test_the_shell_harness_refusal_fixture_is_the_sentence_the_api_sends(
     assert declared.group(1) == response.get_json()["error"]["message"]
 
 
+def test_the_shell_harness_zero_amount_fixture_is_the_sentence_the_api_sends(
+    app, seeded: Path
+) -> None:
+    """The harness's other refusal fixture, held to the standard criterion 19 set.
+
+    ``ADD_ZERO_REFUSED`` is both the body the harness's stubbed ``fetch`` hands back
+    and the value its scenario expects in ``#add-error-server``, so the JavaScript
+    half is self-consistent by construction: set it to nonsense and the scenario
+    still passes. Rendering the sentence proves the shell shows what it is given; it
+    cannot prove the server still gives it. This reads the literal out of the fixture
+    and compares it against a live 400 with the characters that scenario types, so a
+    reword of ``_require_total``'s refusal reds here rather than going unnoticed.
+    """
+    import re
+
+    source = (REPO / "tests" / "shell_harness.mjs").read_text(encoding="utf-8")
+    declared = re.search(
+        r"^const ADD_ZERO_REFUSED = '([^']*)';$", source, re.MULTILINE
+    )
+    assert declared is not None, "shell_harness.mjs declares no ADD_ZERO_REFUSED"
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        # "0" and not "0.00": the screen sends the field's characters untouched, so
+        # the fixture and the live request have to agree about that as well.
+        amount="0",
+        split=equal_split(members["Sam"], members["Ali"]),
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "invalid_split"
+    assert declared.group(1) == response.get_json()["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
 @pytest.mark.parametrize("mode", ["percentage", "", "EQUAL", 7])
 def test_an_unknown_split_mode_names_the_three_that_exist(
     app, seeded: Path, mode
