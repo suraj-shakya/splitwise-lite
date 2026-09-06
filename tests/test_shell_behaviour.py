@@ -116,9 +116,23 @@ SCENARIOS = [
     "a_roster_without_the_acting_member_defaults_to_the_first_one",
     "switching_modes_twice_still_names_every_member_once",
     "a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives",
+    # A screen that waits for a session, and a draft that survives signing back in
+    "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone",
+    "a_route_change_behind_the_not_linked_notice_asks_for_nothing",
+    "a_route_change_under_a_curtain_a_live_session_raised_asks_for_nothing",
+    "a_route_change_with_no_api_client_loaded_asks_for_nothing",
+    "the_retry_controls_behind_the_gate_ask_for_nothing",
+    "an_interrupted_save_keeps_what_was_typed_through_signing_back_in",
+    "an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows",
+    "signing_out_clears_the_draft_before_the_next_person_signs_in",
+    "a_sign_out_the_server_refuses_leaves_the_draft_alone",
+    "a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry",
+    "a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally",
+    # The debts path
+    "the_api_client_builds_a_debt_path_from_two_ids",
 ]
 
-# The three mutants the harness is measured against, as anchored substitutions applied
+# The six mutants the harness is measured against, as anchored substitutions applied
 # to the real source at run time. None is a committed copy of a shipped file, so none
 # can rot into a false pass or be served to a browser by accident, and the text lives
 # here where a reviewer reads it rather than buried in the harness.
@@ -164,6 +178,40 @@ MUTANT_C = {
     "file": "app/api.js",
     "find": "return 'refused';",
     "replace": "return '';",
+}
+# Mutant D: the feed goes back to asking only whether the client has loaded, which is
+# what all three screens asked before there was a session guard, and is defect 1 in
+# the shape it shipped in. The app still works for somebody signed in; what comes back
+# is one screen reading the ledger while a curtain is over it, and a request certain to
+# be refused going out on every route change made by somebody who is signed out.
+MUTANT_D = {
+    "file": "app/app.js",
+    "find": "if (!ledgerIsUp() || window.location.hash !== FEED_ROUTE || feedBusy) {",
+    "replace": "if (!api || window.location.hash !== FEED_ROUTE || feedBusy) {",
+}
+# Mutant E: showApp() clears the add form again, which is defect 2 exactly. A curtain
+# coming down is treated as a visit to the screen, so the draft the 401 correctly
+# preserved is thrown away by the person doing the one thing the gate is telling them
+# to do. Every other screen behaves, and so does the add screen on a real navigation:
+# only the resume is wrong, which is why a scenario that navigates cannot see it.
+MUTANT_E = {
+    "file": "app/app.js",
+    "find": "addResumed();",
+    "replace": "addEntered();",
+}
+# Mutant F: the resume keeps the draft for whoever signs in next, which is the shape
+# this branch itself first shipped and the defect review found in it. The identity
+# check is switched off rather than the lines deleted, so the anchor stays on one line
+# and cannot rot on a checkout whose line endings differ; the effect is the same, which
+# is a draft cleared on a confirmed sign out and nowhere else, on a path where nobody
+# signs out. Sam types an expense, takes a 401 on save, hands the phone to Ali, Ali
+# signs in, and Sam's amount and description are on screen with Ali named as the payer
+# of them. The screen still works for one person, which is what makes this a
+# shared-phone defect rather than a resume that stopped resuming.
+MUTANT_F = {
+    "file": "app/app.js",
+    "find": "if (addActingId() !== addDraftMember) {",
+    "replace": "if (false) {",
 }
 
 REFUSED = "a_refused_sign_in_tells_the_person_why"
@@ -294,7 +342,7 @@ def test_the_harness_reports_exactly_the_declared_scenarios(
     assert [entry["name"] for entry in report["scenarios"]] == SCENARIOS
 
 
-# --- The three mutants -----------------------------------------------------
+# --- The six mutants -------------------------------------------------------
 
 
 def mutated(mutant: dict[str, str]) -> str:
@@ -382,6 +430,54 @@ def test_mutant_c_a_classifier_that_drops_what_it_does_not_recognise_is_killed()
     # client and nowhere else, so that is the only place a mutation of it can land.
     loaded = loaded_under(MUTANT_C)
     assert loaded["app/app.js"] == (REPO / "app" / "app.js").read_text(encoding="utf-8")
+
+
+# The three scenarios that stand or fall with the mutants below. None turns red on
+# master, because no defect here was pinned by anything before them: a new scenario
+# that passes proves nothing on its own, and these mutants are what prove it bites.
+BEHIND_THE_GATE = "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone"
+THE_DRAFT = "an_interrupted_save_keeps_what_was_typed_through_signing_back_in"
+SHARED_PHONE = "a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry"
+
+
+def test_mutant_d_a_screen_that_only_checks_the_client_loaded_is_killed() -> None:
+    found = killed(MUTANT_D)
+    assert not found[BEHIND_THE_GATE]["passed"]
+    messages = " ".join(found[BEHIND_THE_GATE]["failures"])
+    # The right failure, not a coincidence: the feed asked the server for the ledger
+    # on a route change made by somebody who is looking at the sign-in gate.
+    assert "GET /api/expenses" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # One screen broken, not the app: the other two still wait for a session, and
+    # somebody signed in still gets their feed.
+    assert found["boot_with_a_linked_session_shows_the_app"]["passed"]
+
+
+def test_mutant_e_clearing_the_draft_when_the_curtain_lifts_is_killed() -> None:
+    found = killed(MUTANT_E)
+    assert not found[THE_DRAFT]["passed"]
+    messages = " ".join(found[THE_DRAFT]["failures"])
+    # The right failure: the amount that was typed is gone from the field.
+    assert "#add-amount" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # A navigation still clears, which is what makes this a resume defect rather than
+    # a clearing that stopped happening altogether.
+    assert found["leaving_add_and_coming_back_starts_a_fresh_entry"]["passed"]
+
+
+def test_mutant_f_a_resume_that_hands_one_persons_draft_to_another_is_killed() -> None:
+    found = killed(MUTANT_F)
+    assert not found[SHARED_PHONE]["passed"]
+    messages = " ".join(found[SHARED_PHONE]["failures"])
+    # The right failure, and it is the money one: the amount Sam typed is on screen in
+    # front of Ali, whom the rebuilt picker has already named as its payer.
+    assert "12.50" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # The same person coming back still keeps their draft. That is what makes this an
+    # identity defect rather than a resume that stopped keeping anything, and it is
+    # why a scenario in which the same person signs back in cannot see it. Every
+    # scenario written before this one had one person in it.
+    assert found[THE_DRAFT]["passed"], found[THE_DRAFT]["failures"]
 
 
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------

@@ -3232,8 +3232,515 @@ const SCENARIOS = [
         'GET /api/members'
       ]);
     }
+  },
+  /* --- Task 43: a screen waits for a session, and a draft survives signing back
+         in ------------------------------------------------------------------ */
+
+  {
+    /* Three route changes with the gate up. Nothing is read, focus stays in the
+       gate, and the sentence the server sent about the refused sign-in is still
+       there to read afterwards: a request nobody asked for takes a 401, and that
+       401 blanks #gate-error and refocuses #gate-title on its way past, so a person
+       who pressed Back would lose what they had just been told. Everything render()
+       does apart from moving focus is unchanged, which is why the screens, the tab
+       and the title are asserted here as well. */
+    name: 'a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone',
+    async run(page) {
+      page.respond('GET', '/session', noSession());
+      page.respond('POST', '/session', refusal(REFUSED));
+      await page.boot();
+      await signIn(page, 'sam@example.com', 'hunter2');
+      page.is(
+        page.el('gate-error').textContent,
+        REFUSED,
+        '#gate-error text before the route changes'
+      );
+      /* Set directly, so the claim that the add screen left it alone is falsifiable:
+         a screen that cleared it would otherwise be indistinguishable from one that
+         never ran at all. */
+      page.el('add-amount').value = '12.50';
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      page.same(visibleScreens(page), ['screen-balances'], 'the screens on show');
+      page.same(currentTabs(page), ['#/balances'], 'aria-current');
+      page.is(page.title, 'Balances - ' + APP_NAME, 'document.title');
+      await page.goTo('#/feed');
+      gateIsUp(page, 'after three route changes behind the gate');
+      page.is(page.focused, page.el('gate-title'), 'focus');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, REFUSED, '#gate-error text');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.same(visibleScreens(page), ['screen-feed'], 'the screens at the end');
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY }
+      ]);
+    }
+  },
+
+  {
+    /* The same three route changes with the not-linked notice up. A session view is
+       held here and it carries no member, which is what says no: every endpoint
+       these three screens read refuses an account nobody has linked, by name. */
+    name: 'a_route_change_behind_the_not_linked_notice_asks_for_nothing',
+    async run(page) {
+      page.respond('GET', '/session', ok(NO_MEMBER));
+      await page.boot();
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      await page.goTo('#/feed');
+      noticeIsUp(page, 'unlinked', 'three route changes behind the notice', true);
+      page.is(
+        page.global('window.SplitwiseApi.cachedSession().member'),
+        null,
+        'the cached session view carries no member'
+      );
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* The case a session check on its own cannot catch. A 500 raises a curtain and
+       leaves the cached session view exactly where it was, which is api.js's
+       decision and stands, so this client still holds a live and linked session
+       while nobody can see the ledger. What refuses the three reads here is that
+       show() last raised a notice, and nothing else would. */
+    name: 'a_route_change_under_a_curtain_a_live_session_raised_asks_for_nothing',
+    async run(page) {
+      page.startAt('#/balances');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(EMPTY_ROSTER));
+      page.respond('GET', '/balances', serverError());
+      await page.boot();
+      noticeIsUp(page, 'problem', 'a 500 answering the balances read', true);
+      await page.goTo('#/feed');
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      noticeIsUp(page, 'problem', 'three route changes under the curtain', true);
+      page.is(
+        page.el('notice-problem').textContent,
+        GENERIC_500,
+        '#notice-problem text'
+      );
+      page.is(
+        page.global('window.SplitwiseApi.cachedSession().member.id'),
+        'mem-1',
+        'the session this curtain went up over is still live and still linked'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* With no client there is nothing to ask and nothing to ask it with. Whether one
+       is loaded is read before anything is read off it, so a hashchange that arrives
+       before the client has loaded, or after it has failed to load at all, returns
+       rather than throwing on its way to the offline curtain. */
+    name: 'a_route_change_with_no_api_client_loaded_asks_for_nothing',
+    async run(page) {
+      page.absent('api.js');
+      await page.boot();
+      await page.goTo('#/add');
+      await page.goTo('#/balances');
+      await page.goTo('#/feed');
+      noticeIsUp(page, 'offline', 'three route changes with no client', false);
+      page.is(page.global('typeof window.SplitwiseApi'), 'undefined', 'SplitwiseApi');
+      page.expectRequests([]);
+    }
+  },
+
+  {
+    /* Both retry controls, each clicked while its own screen's route is the current
+       one, so the route guard cannot be what refuses them and the session guard is
+       what does. Neither read even reaches its in-flight state. */
+    name: 'the_retry_controls_behind_the_gate_ask_for_nothing',
+    async run(page) {
+      page.respond('GET', '/session', noSession());
+      await page.boot();
+      await page.dispatch(page.el('feed-retry'), 'click');
+      await page.goTo('#/add');
+      await page.dispatch(page.el('add-roster-retry'), 'click');
+      gateIsUp(page, 'after both retry controls behind the gate');
+      page.is(page.focused, page.el('gate-title'), 'focus');
+      page.is(page.el('feed-loading').hidden, true, '#feed-loading');
+      page.same(addRosterStates(page), [false, false, false], 'the roster states');
+      page.expectRequests(['GET /api/session']);
+    }
+  },
+
+  {
+    /* The 401 keeps everything typed, which is today's behaviour and is pinned here
+       at the mid-point. Then the person does the one thing the gate is telling them
+       to do, and it is all still there afterwards: the curtain coming down on a
+       screen they never left is not a visit to it. The roster is read again and the
+       picker rebuilt, so the marker and the default payer are true for whoever is
+       signed in now. */
+    name: 'an_interrupted_save_keeps_what_was_typed_through_signing_back_in',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(
+        page.el('add-amount').value,
+        '12.50',
+        '#add-amount while the gate is up'
+      );
+      page.is(
+        page.el('add-description').value,
+        'Milk',
+        '#add-description while the gate is up'
+      );
+      page.is(page.el('add-submit').disabled, false, '#add-submit');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'after signing back in');
+      page.is(
+        page.el('add-amount').value,
+        '12.50',
+        '#add-amount after signing back in'
+      );
+      page.is(
+        page.el('add-description').value,
+        'Milk',
+        '#add-description after signing back in'
+      );
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-error').hidden, true, '#add-error');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam (you)', 'Ali', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.el('add-payer').value, 'mem-1', '#add-payer value');
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_MILK },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* What a resume keeps and what it rebuilds, pinned as a decision rather than
+       left as an accident. The mode stays on uneven amounts, because returning it to
+       Equally would silently turn three uneven shares into an even split, which is a
+       wrong ledger entry one tap away; the rows come back empty, because the roster
+       read rebuilds them, and rebuilding is what keeps the marker and the default
+       payer true for whoever is holding the phone now. */
+    name: 'an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.el('add-amount').value = '10.00';
+      await addChooseMode(page, 'add-mode-exact');
+      const shares = addPersonFields(page);
+      shares[0].value = '8.00';
+      shares[2].value = '1.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      /* Held at the mid-point, so "rebuilt empty" below is a change and not a field
+         that was empty all along. */
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['8.00', '', '1.50'],
+        'the typed shares while the gate is up'
+      );
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'after signing back in');
+      page.is(page.el('add-amount').value, '10.00', '#add-amount');
+      page.same(addModeChecks(page), [false, false, true], 'the three mode radios');
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['', '', ''],
+        'the share fields, rebuilt empty'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_UNEVEN_SHORT },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* A visit that really ended takes the draft with it, and a flat shares phones:
+       without this, Sam types an expense, signs out, and Ali signs in to find Sam's
+       amount and description sitting in the form with Ali named as the payer. It is
+       still empty when the next sign-in brings the frame back, because a resume
+       clears nothing and there is nothing left to keep. */
+    name: 'signing_out_clears_the_draft_before_the_next_person_signs_in',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('DELETE', '/session', noContent());
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await addChooseMode(page, 'add-mode-exact');
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+      page.is(page.el('add-amount').value, '', '#add-amount after signing out');
+      page.is(
+        page.el('add-description').value,
+        '',
+        '#add-description after signing out'
+      );
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'the next person signing in');
+      page.is(page.el('add-amount').value, '', '#add-amount');
+      page.is(page.el('add-description').value, '', '#add-description');
+      page.same(
+        addModeChecks(page),
+        [true, false, false],
+        'the three mode radios after signing in'
+      );
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* A sign out the server refused did not end the visit, so it takes nothing with
+       it. The curtain over it is the client's, escalated because the sign out button
+       discards its own rejection and nobody else speaks for this one. */
+    name: 'a_sign_out_the_server_refuses_leaves_the_draft_alone',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('DELETE', '/session', csrfRefused());
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('sign-out'), 'click');
+      noticeIsUp(page, 'problem', 'a refused sign out', true);
+      page.is(page.el('notice-problem').textContent, STALE_FORM, '#notice-problem text');
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.is(page.el('add-description').value, 'Milk', '#add-description');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'DELETE', path: '/session', body: NO_BODY }
+      ]);
+    }
+  },
+
+  {
+    /* The phone changes hands, and nobody signs out anywhere in this. A 401 on save
+       is the dominant way a curtain comes down over a live draft, and it is the path
+       this whole guard exists to serve: Sam types, saves, takes the 401, and hands
+       the phone to Ali, who signs in. What Sam typed is not Ali's to save, and the
+       picker rebuilt for Ali names Ali as the payer of it, which is a wrong ledger
+       entry one tap away. So the resume asks who is coming back rather than assuming
+       it is the person who left, and starts a fresh entry for anybody else.
+
+       Held at the mid-point, so "empty afterwards" is a change and not a field that
+       was empty all along. */
+    name: 'a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.el('add-amount').value = '12.50';
+      page.el('add-description').value = 'Milk';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      page.is(
+        page.el('add-amount').value,
+        '12.50',
+        "Sam's #add-amount while the gate is up"
+      );
+      page.is(
+        page.el('add-description').value,
+        'Milk',
+        "Sam's #add-description while the gate is up"
+      );
+      /* Somebody else entirely: another account, another member row. */
+      page.respond('POST', '/session', ok(A_SECOND_MEMBER));
+      page.respond('GET', '/session', ok(A_SECOND_MEMBER));
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'after a different person signs in');
+      page.is(page.el('add-amount').value, '', "Sam's draft amount shown to Ali");
+      page.is(
+        page.el('add-description').value,
+        '',
+        "Sam's draft description shown to Ali"
+      );
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      page.is(page.el('add-error').hidden, true, '#add-error');
+      page.same(
+        addPayerOptions(page).map((option) => option.textContent),
+        ['Sam', 'Ali (you)', 'Jo'],
+        '#add-payer option text'
+      );
+      page.is(page.el('add-payer').value, 'mem-2', '#add-payer value');
+      page.is(page.focused, page.el('add-amount'), 'focus');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_MILK },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* The exception a resume makes for the split mode is an exception for the person
+       who chose it, not for the phone. Sam's Exact and the shares under it go with
+       the amount and the description when somebody else signs in, so Ali's fresh
+       entry cannot open on three uneven shares nobody sitting at it typed. The mirror
+       of an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows, which
+       pins the same act for the same person coming back. */
+    name: 'a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond('POST', '/expenses', sessionDied(EXPIRED));
+      page.el('add-amount').value = '10.00';
+      await addChooseMode(page, 'add-mode-exact');
+      const shares = addPersonFields(page);
+      shares[0].value = '8.00';
+      shares[2].value = '1.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      gateIsUp(page, 'a save the session did not survive');
+      page.same(
+        addModeChecks(page),
+        [false, false, true],
+        'the mode while the gate is up'
+      );
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        ['8.00', '', '1.50'],
+        "Sam's typed shares while the gate is up"
+      );
+      page.respond('POST', '/session', ok(A_SECOND_MEMBER));
+      page.respond('GET', '/session', ok(A_SECOND_MEMBER));
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'after a different person signs in');
+      page.is(page.el('add-amount').value, '', '#add-amount');
+      page.same(addModeChecks(page), [true, false, false], 'the three mode radios');
+      /* Gone rather than rebuilt empty: Equally shows no per-person row at all, so
+         the rows Sam's Exact put up are not there for Ali to inherit either. */
+      page.same(
+        addPersonFields(page).map((row) => row.value),
+        [],
+        "the person rows Sam's Exact put up"
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_UNEVEN_SHORT },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members'
+      ]);
+    }
+  },
+
+  {
+    /* Task 12a. api.debt is the whole of what that task adds to app/, and no screen
+       calls it yet: issue #14 owns the drill-down. So this boots to the app, starts the
+       request through the shipped client itself, and reads the payload back off the
+       promise rather than off the page. Nothing is rendered, so no DOM stub widening is
+       needed here and document.createTextNode and an element type property stay absent
+       and stay issue #14's to add.
+
+       The fixture is a local rather than a module constant on purpose: this file is
+       being edited on another branch at the same time, and one appended block conflicts
+       with less than a constant threaded into the fixtures above.
+
+       Real member ids come from new_id() and are plain UUIDs, but the roster an
+       operator writes is not bound to that, so both ids here carry a space, a percent
+       sign and a hash, and the declared request list holds the exact encoded path. */
+    name: 'the_api_client_builds_a_debt_path_from_two_ids',
+    async run(page) {
+      const debtView = {
+        currency: 'AUD',
+        debtor_id: 'a b',
+        creditor_id: 'c%d#e',
+        amount: '5.50',
+        direction: 'owes',
+        entries: [
+          {
+            kind: 'expense',
+            effect: 'adds',
+            id: 'exp-1',
+            description: 'Milk',
+            created_at: '2026-09-05T09:00:00.000000+00:00',
+            amount: '5.50'
+          }
+        ]
+      };
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/debts/a%20b/c%25d%23e', ok(debtView));
+      await page.boot();
+      page.global(
+        'window.debt = null;' +
+          "window.SplitwiseApi.debt('a b', 'c%d#e').then(function (view) {" +
+          '  window.debt = view;' +
+          '});'
+      );
+      /* settle() drives nothing and drains what is already in flight, which is what it
+         exists for: this scenario starts a request through the client rather than
+         through an affordance on the page. */
+      await page.settle();
+      page.is(page.global('window.debt.amount'), '5.50', 'amount');
+      page.is(page.global('window.debt.direction'), 'owes', 'direction');
+      page.is(page.global('window.debt.entries.length'), 1, 'entries');
+      page.is(page.global('window.debt.entries[0].effect'), 'adds', 'effect');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        'GET /api/debts/a%20b/c%25d%23e'
+      ]);
+    }
   }
 ];
+
+/* --- Task 43: a second person at the same phone ---------------------------------
+
+   A session view for somebody who is not Sam, so a scenario can put two people at one
+   phone and assert what each of them sees. Every other session fixture in this file
+   is acc-1/mem-1, or that same account with member: null, which is why the shared
+   phone case was unassertable and the defect hiding in it went unseen.
+
+   These sit below SCENARIOS rather than beside A_MEMBER because this task appends to
+   this file and edits none of it, while task 38 appends to the same array. Module
+   evaluation reaches them long before main() runs, which is all a scenario body
+   needs. */
+const A_SECOND_MEMBER = {
+  account: { id: 'acc-2', email: 'ali@example.com', display_name: 'Ali' },
+  group: { id: 'grp-1', name: 'Flat', currency: 'AUD' },
+  member: { id: 'mem-2', display_name: 'Ali' }
+};
+/* Spelled out rather than rebuilt from what the scenario typed, for the reason
+   SIGN_IN_BODY is: a body asserted against a copy of the code that built it asserts
+   nothing. */
+const SECOND_SIGN_IN_BODY = '{"email":"ali@example.com","password":"opensesame"}';
 
 /* --- Running ---------------------------------------------------------------- */
 

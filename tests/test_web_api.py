@@ -16,10 +16,12 @@ Paths are resolved from this file, never from the current working directory.
 
 from __future__ import annotations
 
+import itertools
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -1907,6 +1909,7 @@ ENDPOINT_ROWS = [
     ("GET", "/api/expenses", None, 401, 401),
     ("POST", "/api/expenses", EXPENSE_BODY, 403, 401),
     ("GET", "/api/balances", None, 401, 401),
+    ("GET", "/api/debts/<debtor_id>/<creditor_id>", None, 401, 401),
 ]
 
 
@@ -1956,6 +1959,7 @@ UNLINKED_ROWS = [
     ("GET", "/api/expenses", None, 403),
     ("POST", "/api/expenses", EXPENSE_BODY, 403),
     ("GET", "/api/balances", None, 403),
+    ("GET", "/api/debts/<debtor_id>/<creditor_id>", None, 403),
 ]
 
 
@@ -2692,11 +2696,48 @@ def test_balances_report_the_exact_figures_and_the_exact_transfer_list(
         {"member_id": members["Ali"], "amount": "0.00", "direction": "settled"},
         {"member_id": members["Jo"], "amount": "10.50", "direction": "owes"},
     ]
+    # Both provenance arrays keep simplify.py's order, ascending by
+    # (debtor, creditor), and member ids are UUIDs, so the expectation is written out
+    # in full and ordered by that same documented rule rather than loosened.
+    def by_pair(rows: list[dict]) -> list[dict]:
+        return sorted(rows, key=lambda row: (row["debtor_id"], row["creditor_id"]))
+
+    jo_owes_sam = {
+        "debtor_id": members["Jo"],
+        "creditor_id": members["Sam"],
+        "amount": "5.50",
+        "debt_total": "5.50",
+        "covers_whole_debt": True,
+    }
     assert body["transfers"] == [
         {
             "from_member_id": members["Jo"],
             "to_member_id": members["Sam"],
             "amount": "10.50",
+            "payer_debts": by_pair(
+                [
+                    jo_owes_sam,
+                    {
+                        "debtor_id": members["Jo"],
+                        "creditor_id": members["Ali"],
+                        "amount": "5.00",
+                        "debt_total": "5.00",
+                        "covers_whole_debt": True,
+                    },
+                ]
+            ),
+            "receiver_credits": by_pair(
+                [
+                    jo_owes_sam,
+                    {
+                        "debtor_id": members["Ali"],
+                        "creditor_id": members["Sam"],
+                        "amount": "5.00",
+                        "debt_total": "5.00",
+                        "covers_whole_debt": True,
+                    },
+                ]
+            ),
         }
     ]
 
@@ -2728,18 +2769,53 @@ def test_a_member_the_ledger_has_never_seen_is_settled_at_zero(
     assert len(body["net"]) == len(ROSTER)
 
 
-def test_a_transfer_carries_no_provenance(
+def test_a_transfer_carries_both_ends_of_its_provenance(
     app, seeded: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Task 13 owns the drill-down and widens this object; it is not here yet.
+    # Task 12a. Task 5 built two-ended provenance and called it the deliverable; this
+    # is where it reaches the browser. ``covers_whole_debt`` is the server's answer,
+    # computed from cents, for the same reason ``direction`` exists on a net row: the
+    # screen must never compare two amount strings.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     seed_three_expenses(signed, members, monkeypatch)
     body = signed.get("/api/balances").get_json()
+    assert len(body["transfers"]) == 1
     for transfer in body["transfers"]:
-        assert set(transfer) == {"from_member_id", "to_member_id", "amount"}
+        assert set(transfer) == {
+            "from_member_id",
+            "to_member_id",
+            "amount",
+            "payer_debts",
+            "receiver_credits",
+        }
+        # Task 5 guarantees both lists are non-empty for a strictly positive
+        # transfer, so this server never sends the empty ones task 13 falls back on.
+        assert transfer["payer_debts"] != []
+        assert transfer["receiver_credits"] != []
+        for row in transfer["payer_debts"] + transfer["receiver_credits"]:
+            assert set(row) == {
+                "debtor_id",
+                "creditor_id",
+                "amount",
+                "debt_total",
+                "covers_whole_debt",
+            }
+            assert isinstance(row["covers_whole_debt"], bool)
+            assert not row["amount"].startswith("-")
+            assert not row["debt_total"].startswith("-")
+        assert {row["debtor_id"] for row in transfer["payer_debts"]} == {
+            transfer["from_member_id"]
+        }
+        assert {row["creditor_id"] for row in transfer["receiver_credits"]} == {
+            transfer["to_member_id"]
+        }
+        for rows in (transfer["payer_debts"], transfer["receiver_credits"]):
+            assert rows == sorted(
+                rows, key=lambda row: (row["debtor_id"], row["creditor_id"])
+            )
     text = signed.get("/api/balances").get_data(as_text=True)
-    for forbidden in ("payer_debts", "receiver_credits", "pair", "absorbed"):
+    for forbidden in ("pair", "absorbed", "cents"):
         assert forbidden not in text
 
 
@@ -2764,12 +2840,17 @@ def test_every_direction_is_one_of_the_three_and_the_amount_is_never_negative(
 # --- Money on the wire ------------------------------------------------------
 
 
+AMOUNT_KEYS = ("amount", "debt_total")
+"""Every key an amount lives at on the wire. ``debt_total`` joined ``amount`` with
+task 12a's transfer provenance, so both are held to the two-decimal string rule."""
+
+
 def every_amount_key(payload) -> list:
     """Every value under a key an amount lives at, anywhere in a payload."""
     found = []
     if isinstance(payload, dict):
         for key, value in payload.items():
-            if key == "amount":
+            if key in AMOUNT_KEYS:
                 found.append(value)
             found.extend(every_amount_key(value))
     elif isinstance(payload, list):
@@ -2784,7 +2865,14 @@ def test_no_amount_is_ever_a_json_number_and_no_payload_names_cents(
     signed = linked_client(app, seeded)
     members = by_name(signed)
     seed_three_expenses(signed, members, monkeypatch)
-    for path in ("/api/session", "/api/members", "/api/expenses", "/api/balances"):
+    paths = [
+        "/api/session",
+        "/api/members",
+        "/api/expenses",
+        "/api/balances",
+        f"/api/debts/{members['Jo']}/{members['Sam']}",
+    ]
+    for path in paths:
         response = signed.get(path)
         assert response.status_code == 200
         payload = response.get_json()
@@ -3086,3 +3174,664 @@ def test_a_name_the_filesystem_refuses_is_a_404_not_a_five_hundred(client) -> No
     assert response.status_code in (404, 414)
     if response.status_code == 404:
         assert response.get_json()["error"]["code"] == "not_found"
+
+
+# --- The debts behind one pair ----------------------------------------------
+#
+# Task 12a of plans/backlog.md, sharpened in
+# plans/tasks/12a-transfer-provenance-api.md. One pair per request, asked for only
+# when somebody opens a row: there is no bulk endpoint and no endpoint per transfer.
+
+
+def debt_path(debtor_id: str, creditor_id: str) -> str:
+    """The endpoint's path with both ids encoded, exactly as ``api.debt`` builds it."""
+    return f"/api/debts/{quote(debtor_id, safe='')}/{quote(creditor_id, safe='')}"
+
+
+def read_debt(client, debtor_id: str, creditor_id: str):
+    return client.get(debt_path(debtor_id, creditor_id))
+
+
+def append_settlement(
+    path: Path,
+    *,
+    payer_id: str,
+    receiver_id: str,
+    amount_cents: int,
+    confirm: bool,
+    settlement_id: str = "settlement-1",
+    hour: int = 12,
+) -> str:
+    """Append one settlement, plus the receiver's confirmation when ``confirm``.
+
+    Written straight through ``open_store`` rather than through an endpoint, because
+    no endpoint creates a settlement until task 14 and a confirmed settlement is the
+    only thing besides an expense that moves a pairwise debt. The tests below that need
+    one therefore build it here, and this comment is where that is stated.
+    """
+    from splitwise_lite.events import (
+        SettlementDecisionEvent,
+        SettlementEvent,
+        SettlementId,
+        SettlementState,
+    )
+    from splitwise_lite.groups import resolve_sole_group
+
+    with open_store(path) as store:
+        group = resolve_sole_group(store)
+        store.append_settlement(
+            SettlementEvent(
+                id=SettlementId(settlement_id),
+                group_id=group.id,
+                currency=group.currency,
+                from_member_id=payer_id,
+                to_member_id=receiver_id,
+                amount_cents=amount_cents,
+                created_at=at(hour),
+                created_by=payer_id,
+            )
+        )
+        if confirm:
+            store.append_settlement_decision(
+                SettlementDecisionEvent(
+                    id=f"decision-{settlement_id}",
+                    settlement_id=SettlementId(settlement_id),
+                    decision=SettlementState.CONFIRMED,
+                    decided_by=receiver_id,
+                    created_at=at(hour, 1),
+                )
+            )
+    return settlement_id
+
+
+def add_member_with_id(path: Path, member_id: str, display_name: str) -> None:
+    """Put one member into the group with an id chosen here rather than by ``new_id``.
+
+    Real ids come from ``new_id()`` and are plain UUIDs, so this is the only way to
+    reach a member id that has to survive percent-encoding on the way through a path.
+    """
+    from splitwise_lite.groups import resolve_sole_group
+    from splitwise_lite.store import Member
+
+    with open_store(path) as store:
+        group = resolve_sole_group(store)
+        store.add_member(
+            Member(
+                id=member_id,
+                group_id=group.id,
+                display_name=display_name,
+                user_id=None,
+                created_at=at(),
+            )
+        )
+
+
+def seed_two_member_debt(client, members: dict[str, str], monkeypatch) -> None:
+    """Sam pays 10.00 for Sam and Ali, so Ali owes Sam 5.00 and nobody else moves."""
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            client,
+            payer_id=members["Sam"],
+            amount="10.00",
+            split=equal_split(members["Sam"], members["Ali"]),
+        ).status_code
+        == 201
+    )
+
+
+def seed_chain(client, members: dict[str, str], monkeypatch) -> None:
+    """Task 5's chain fixture, entered through the real endpoint.
+
+    Jo owes Ali 10.00 and Ali owes Sam 4.00, so the plan carries two transfers out of
+    Jo, one 10.00 debt is split across both of them, and Jo and Sam share no expense at
+    all: exactly the situation issue #14 exists to explain.
+    """
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            client,
+            payer_id=members["Ali"],
+            amount="10.00",
+            split=equal_split(members["Jo"]),
+        ).status_code
+        == 201
+    )
+    monkeypatch.setattr(web, "_now", lambda: at(10))
+    assert (
+        add_expense(
+            client,
+            payer_id=members["Sam"],
+            amount="4.00",
+            split=equal_split(members["Ali"]),
+        ).status_code
+        == 201
+    )
+
+
+def transfer_to(client, member_id: str) -> dict:
+    """The one suggested transfer that pays ``member_id``.
+
+    Looked up rather than indexed: ``simplify_debts`` returns its plan sorted by
+    ``(from_member_id, to_member_id)``, and member ids are UUIDs, so which of two
+    transfers comes first is not something a test can write down.
+    """
+    transfers = client.get("/api/balances").get_json()["transfers"]
+    found = [row for row in transfers if row["to_member_id"] == member_id]
+    assert len(found) == 1, transfers
+    return found[0]
+
+
+def seed_cycle(client, members: dict[str, str], monkeypatch) -> None:
+    """A pure cycle: Sam owes Ali, Ali owes Jo and Jo owes Sam, all 10.00.
+
+    Every net position is zero, so the plan is empty while three debts are live.
+    """
+    for index, (payer, other) in enumerate(
+        [("Ali", "Sam"), ("Jo", "Ali"), ("Sam", "Jo")]
+    ):
+        monkeypatch.setattr(web, "_now", lambda hour=9 + index: at(hour))
+        assert (
+            add_expense(
+                client,
+                payer_id=members[payer],
+                amount="10.00",
+                split=equal_split(members[other]),
+            ).status_code
+            == 201
+        )
+
+
+def test_the_debt_endpoint_is_in_the_api_endpoint_set_so_the_hooks_run(app) -> None:
+    # ``_before_request`` returns early for any endpoint not in this set, so a route
+    # registered without an entry gets no session check at all. It is in neither
+    # exemption tuple either, so it inherits the locked-down default.
+    assert "read_debt" in web._API_ENDPOINTS
+    assert "read_debt" not in web._ANONYMOUS_ENDPOINTS
+    assert "read_debt" not in web._MEMBER_OPTIONAL_ENDPOINTS
+    response = app.test_client().get("/api/debts/whoever/somebody-else")
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "not_authenticated"
+
+
+def test_two_members_with_no_shared_history_are_settled_at_zero(
+    app, seeded: Path
+) -> None:
+    # An empty list is a real answer, never a 404 and never an error.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = read_debt(signed, members["Jo"], members["Sam"])
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "currency": CURRENCY,
+        "debtor_id": members["Jo"],
+        "creditor_id": members["Sam"],
+        "amount": "0.00",
+        "direction": "settled",
+        "entries": [],
+    }
+
+
+def test_a_pair_with_expenses_both_ways_lists_both_effects_newest_first(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Jo took 10.00 of Sam's 30.00 and Sam took 4.50 of Jo's 9.00, so the pair holds
+    # one entry each way and the signed sum is what the balances payload reports.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    third, _second, first = signed.get("/api/expenses").get_json()["expenses"]
+
+    response = read_debt(signed, members["Jo"], members["Sam"])
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "currency": CURRENCY,
+        "debtor_id": members["Jo"],
+        "creditor_id": members["Sam"],
+        "amount": "5.50",
+        "direction": "owes",
+        "entries": [
+            {
+                "kind": "expense",
+                "effect": "reduces",
+                "id": third["id"],
+                "description": "Milk",
+                "created_at": third["created_at"],
+                "amount": "4.50",
+            },
+            {
+                "kind": "expense",
+                "effect": "adds",
+                "id": first["id"],
+                "description": "Milk",
+                "created_at": first["created_at"],
+                "amount": "10.00",
+            },
+        ],
+    }
+
+
+def test_the_pair_read_the_other_way_flips_every_effect_and_the_direction(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+
+    forward = read_debt(signed, members["Jo"], members["Sam"]).get_json()
+    backward = read_debt(signed, members["Sam"], members["Jo"]).get_json()
+    assert backward["amount"] == "5.50"
+    assert backward["direction"] == "owed"
+    assert [entry["id"] for entry in backward["entries"]] == [
+        entry["id"] for entry in forward["entries"]
+    ]
+    assert [entry["effect"] for entry in backward["entries"]] == ["adds", "reduces"]
+
+
+def test_a_debt_a_confirmed_settlement_cancelled_still_lists_what_is_behind_it(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This is why no client may add the entries up and call the total the debt.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+    append_settlement(
+        seeded,
+        payer_id=members["Ali"],
+        receiver_id=members["Sam"],
+        amount_cents=500,
+        confirm=True,
+    )
+
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    assert body["amount"] == "0.00"
+    assert body["direction"] == "settled"
+    assert [(entry["kind"], entry["effect"], entry["amount"]) for entry in body["entries"]] == [
+        ("settlement", "reduces", "5.00"),
+        ("expense", "adds", "5.00"),
+    ]
+
+
+def test_a_settlement_larger_than_the_debt_flips_the_pair_on_the_wire(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ids are unchanged and the magnitude is the overshoot, which is exactly the
+    # case a path of two ids can be asked about after the ledger moved.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+    append_settlement(
+        seeded,
+        payer_id=members["Ali"],
+        receiver_id=members["Sam"],
+        amount_cents=800,
+        confirm=True,
+    )
+
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    assert body["debtor_id"] == members["Ali"]
+    assert body["creditor_id"] == members["Sam"]
+    assert body["amount"] == "3.00"
+    assert body["direction"] == "owed"
+
+
+def test_a_pending_settlement_appears_in_no_entries_and_moves_no_figure(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+    append_settlement(
+        seeded,
+        payer_id=members["Ali"],
+        receiver_id=members["Sam"],
+        amount_cents=500,
+        confirm=False,
+    )
+
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    assert body["amount"] == "5.00"
+    assert body["direction"] == "owes"
+    assert [entry["kind"] for entry in body["entries"]] == ["expense"]
+    assert "settlement-1" not in read_debt(
+        signed, members["Ali"], members["Sam"]
+    ).get_data(as_text=True)
+
+
+def test_a_transfer_between_two_people_who_share_nothing_is_explained_by_both_arrays(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The whole claim the drill-down makes, asserted in one place: Jo pays Sam because
+    # Jo owes Ali and Ali owes Sam, and Jo and Sam have no debt between them at all.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_chain(signed, members, monkeypatch)
+
+    to_sam = transfer_to(signed, members["Sam"])
+    assert to_sam["from_member_id"] == members["Jo"]
+    assert to_sam["amount"] == "4.00"
+    assert [(row["debtor_id"], row["creditor_id"]) for row in to_sam["payer_debts"]] == [
+        (members["Jo"], members["Ali"])
+    ]
+    assert [
+        (row["debtor_id"], row["creditor_id"]) for row in to_sam["receiver_credits"]
+    ] == [(members["Ali"], members["Sam"])]
+
+    body = read_debt(signed, members["Jo"], members["Sam"]).get_json()
+    assert body["entries"] == []
+    assert body["amount"] == "0.00"
+    assert body["direction"] == "settled"
+
+
+def test_a_debt_split_across_two_transfers_carries_the_whole_debt_on_both_rows(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_chain(signed, members, monkeypatch)
+
+    # The one 10.00 debt Jo owes Ali pays for both transfers, 6.00 of it through the
+    # one to Ali and 4.00 through the one to Sam, and each row carries the whole 10.00.
+    assert transfer_to(signed, members["Ali"])["payer_debts"] == [
+        {
+            "debtor_id": members["Jo"],
+            "creditor_id": members["Ali"],
+            "amount": "6.00",
+            "debt_total": "10.00",
+            "covers_whole_debt": False,
+        }
+    ]
+    assert transfer_to(signed, members["Sam"])["payer_debts"] == [
+        {
+            "debtor_id": members["Jo"],
+            "creditor_id": members["Ali"],
+            "amount": "4.00",
+            "debt_total": "10.00",
+            "covers_whole_debt": False,
+        }
+    ]
+
+
+def test_a_transfer_covering_a_whole_single_debt_says_so(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_chain(signed, members, monkeypatch)
+
+    assert transfer_to(signed, members["Sam"])["receiver_credits"] == [
+        {
+            "debtor_id": members["Ali"],
+            "creditor_id": members["Sam"],
+            "amount": "4.00",
+            "debt_total": "4.00",
+            "covers_whole_debt": True,
+        }
+    ]
+
+
+def test_a_pure_cycle_has_no_transfers_and_every_live_pair_still_reads(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_cycle(signed, members, monkeypatch)
+
+    response = signed.get("/api/balances")
+    assert response.get_json()["transfers"] == []
+    text = response.get_data(as_text=True)
+    for forbidden in ("payer_debts", "receiver_credits", "debt_total", "covers_whole_debt"):
+        assert forbidden not in text
+
+    for debtor, creditor in (("Sam", "Ali"), ("Ali", "Jo"), ("Jo", "Sam")):
+        body = read_debt(signed, members[debtor], members[creditor]).get_json()
+        assert body["amount"] == "10.00", (debtor, creditor)
+        assert body["direction"] == "owes", (debtor, creditor)
+        assert [entry["effect"] for entry in body["entries"]] == ["adds"]
+
+
+def test_every_entry_holds_exactly_six_keys(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+    append_settlement(
+        seeded,
+        payer_id=members["Ali"],
+        receiver_id=members["Sam"],
+        amount_cents=200,
+        confirm=True,
+    )
+
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    assert set(body) == {
+        "currency",
+        "debtor_id",
+        "creditor_id",
+        "amount",
+        "direction",
+        "entries",
+    }
+    assert len(body["entries"]) == 2
+    for entry in body["entries"]:
+        assert set(entry) == {
+            "kind",
+            "effect",
+            "id",
+            "description",
+            "created_at",
+            "amount",
+        }
+        assert entry["kind"] in ("expense", "settlement")
+        assert entry["effect"] in ("adds", "reduces")
+        assert not entry["amount"].startswith("-")
+
+
+def test_the_wire_vocabulary_is_a_map_that_covers_both_domain_enums() -> None:
+    # An explicit map rather than the enum values, so renaming a domain enum member
+    # cannot silently rename a JSON value the front end branches on.
+    from splitwise_lite.balances import DebtEffect, DebtEntryKind
+
+    assert set(web._ENTRY_KIND_WIRE) == set(DebtEntryKind)
+    assert set(web._ENTRY_EFFECT_WIRE) == set(DebtEffect)
+    assert sorted(web._ENTRY_KIND_WIRE.values()) == ["expense", "settlement"]
+    assert sorted(web._ENTRY_EFFECT_WIRE.values()) == ["adds", "reduces"]
+
+
+def test_a_settlement_entry_carries_an_empty_description(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+    append_settlement(
+        seeded,
+        payer_id=members["Ali"],
+        receiver_id=members["Sam"],
+        amount_cents=200,
+        confirm=True,
+    )
+
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    settlement_entry = next(
+        entry for entry in body["entries"] if entry["kind"] == "settlement"
+    )
+    assert settlement_entry["description"] == ""
+    assert settlement_entry["id"] == "settlement-1"
+
+
+def test_a_description_reaches_the_entry_verbatim(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            signed,
+            payer_id=members["Sam"],
+            amount="10.00",
+            split=equal_split(members["Sam"], members["Ali"]),
+            description="Two bags of flour",
+        ).status_code
+        == 201
+    )
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    assert [entry["description"] for entry in body["entries"]] == ["Two bags of flour"]
+
+
+def test_created_at_is_spelled_the_way_the_feed_spells_it(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+
+    expense = signed.get("/api/expenses").get_json()["expenses"][0]
+    body = read_debt(signed, members["Ali"], members["Sam"]).get_json()
+    assert body["entries"][0]["created_at"] == expense["created_at"]
+    assert body["entries"][0]["created_at"] == "2026-09-05T09:00:00.000000+00:00"
+
+
+@pytest.mark.parametrize("position", ["debtor", "creditor"])
+def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_it(
+    app, seeded: Path, position: str
+) -> None:
+    # A 404 was considered and rejected: the path names members, not a stored record,
+    # and web.py already refuses an out-of-group member id this way when recording an
+    # expense.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    stranger = "not-a-member-of-this-group"
+    pair = (
+        (stranger, members["Sam"])
+        if position == "debtor"
+        else (members["Sam"], stranger)
+    )
+    response = read_debt(signed, *pair)
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert stranger in body["error"]["message"]
+    assert members["Sam"] not in body["error"]["message"]
+
+
+def test_a_member_may_not_ask_what_they_owe_themselves(app, seeded: Path) -> None:
+    # Together with the roster check this keeps InvalidLedger unreachable from any
+    # request, so its place in DELIBERATELY_UNMAPPED stays true.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = read_debt(signed, members["Sam"], members["Sam"])
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    assert "themselves" in body["error"]["message"]
+
+
+def test_an_id_that_needs_percent_encoding_reaches_the_right_member(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    odd = "a member with a space and a % sign"
+    add_member_with_id(seeded, odd, "Oddly Named")
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    monkeypatch.setattr(web, "_now", lambda: at(9))
+    assert (
+        add_expense(
+            signed,
+            payer_id=odd,
+            amount="10.00",
+            split=equal_split(members["Sam"]),
+        ).status_code
+        == 201
+    )
+
+    response = read_debt(signed, members["Sam"], odd)
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["debtor_id"] == members["Sam"]
+    assert body["creditor_id"] == odd
+    assert body["amount"] == "10.00"
+    assert body["direction"] == "owes"
+    assert [entry["effect"] for entry in body["entries"]] == ["adds"]
+
+
+def test_a_member_id_containing_a_slash_is_unreachable_through_this_path(
+    app, seeded: Path
+) -> None:
+    # A recorded limitation rather than something worked around: ids come from
+    # ``new_id()`` and an operator's roster, so none of them holds a slash.
+    sliced = "one/two"
+    add_member_with_id(seeded, sliced, "Slashed")
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = signed.get(debt_path(sliced, members["Sam"]))
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize("path", ["/api/debts//x", "/api/debts/x/"])
+def test_an_empty_path_segment_matches_no_route(app, seeded: Path, path: str) -> None:
+    signed = linked_client(app, seeded)
+    response = signed.get(path)
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "not_found"
+
+
+def test_any_linked_member_may_read_a_pair_they_are_not_part_of(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The drill-down exists to explain a payment between two other people, and
+    # membership of the group is the only authorisation this product has.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_chain(signed, members, monkeypatch)
+    body = read_debt(signed, members["Jo"], members["Ali"]).get_json()
+    assert body["amount"] == "10.00"
+    assert body["direction"] == "owes"
+
+
+def test_nothing_is_cached_between_two_reads_of_one_pair(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every figure is derived on read, so two requests against a ledger that changed
+    # in between may legitimately differ.
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_two_member_debt(signed, members, monkeypatch)
+    assert read_debt(signed, members["Ali"], members["Sam"]).get_json()["amount"] == "5.00"
+
+    append_settlement(
+        seeded,
+        payer_id=members["Ali"],
+        receiver_id=members["Sam"],
+        amount_cents=200,
+        confirm=True,
+    )
+    assert read_debt(signed, members["Ali"], members["Sam"]).get_json()["amount"] == "3.00"
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_the_path_serves_no_second_method(app, seeded: Path, method: str) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = send(signed, method, debt_path(members["Jo"], members["Sam"]))
+    assert response.status_code == 405
+    assert response.get_json()["error"]["code"] == "method_not_allowed"
+
+
+def test_no_debt_payload_ever_carries_a_minus_sign(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    seed_three_expenses(signed, members, monkeypatch)
+    for debtor, creditor in itertools.permutations(["Sam", "Ali", "Jo"], 2):
+        # ``direction`` carries the sign, exactly as it does on a net row, so no
+        # client ever has to parse or render one.
+        body = read_debt(signed, members[debtor], members[creditor]).get_json()
+        assert not body["amount"].startswith("-"), (debtor, creditor)
+        assert body["direction"] in ("owes", "owed", "settled"), (debtor, creditor)
+        for entry in body["entries"]:
+            assert not entry["amount"].startswith("-"), (debtor, creditor)
