@@ -1148,6 +1148,8 @@ BALANCES_IDS = {
     "balances-currency-code",
     "balances-net",
     "balances-transfers",
+    # Task 13's one added sentence, hidden until a payment can actually be opened.
+    "balances-drill-hint",
 }
 
 # Every fixed sentence the screen can show lives in the markup, so a Python test can
@@ -1350,21 +1352,21 @@ def test_the_balances_screen_registers_none_of_the_three_global_handlers() -> No
         assert forbidden not in region, forbidden
 
 
-def test_no_transfer_row_pretends_to_be_tappable() -> None:
-    # Task 13 makes a transfer row expand into the pairwise debts it absorbed. Until
-    # then an affordance that does nothing is worse than none, so the row is not an
-    # anchor, a button or a disclosure, carries no interactive role or tab stop, and
-    # has no click, key or pointer handler.
+def test_the_transfer_row_is_a_disclosure_and_nothing_hand_rolled() -> None:
+    # Task 13 made a transfer row a real <button type="button"> that opens on the
+    # debts the payment absorbed, so `createElement('button')`, `aria-expanded` and a
+    # click listener are now the shape this screen is meant to have, and those three
+    # are exactly what the task 12 ban list loses. Everything else it forbade holds
+    # for a stronger reason than before: a native button gets Enter, Space, the tab
+    # order and the semantics for free, so an anchor, a <details>, a hand-set role, a
+    # tab stop or a key, pointer or touch listener appearing here would mean somebody
+    # had rebuilt a button badly.
     region = balances_region()
     for forbidden in (
         "createElement('a')",
-        "createElement('button')",
         "createElement('details')",
         "createElement('summary')",
-        "aria-expanded",
         "tabindex",
-        "setAttribute('role'",
-        "addEventListener('click'",
         "addEventListener('keydown'",
         "addEventListener('keyup'",
         "addEventListener('keypress'",
@@ -1373,14 +1375,35 @@ def test_no_transfer_row_pretends_to_be_tappable() -> None:
         "onclick",
     ):
         assert forbidden not in region, forbidden
+    # `role` is the one item on that list this test reasons about rather than
+    # forbids outright. A ban on the byte sequence forbade what criterion 51
+    # requires this region to ship, a role="status" live region in every debt
+    # region, and the answer to that is not to spell the attribute through a
+    # variable: an indirection is a hole in the ban, and it takes the word out of
+    # the source where a reader and a grep both look for it. So the rule is the one
+    # the ban always meant. Every attribute here is named by a literal, which is
+    # what makes the source readable in full, and the only role this region sets is
+    # `status`. An interactive role hand-set on a div still cannot get in, and now
+    # neither can a double-quoted, templated or aliased spelling of one.
+    for named in re.findall(r"setAttribute\(\s*([^,]+),", region):
+        assert re.fullmatch(r"'[a-z-]+'", named.strip()), named
+    for value in re.findall(
+        r"""setAttribute\(\s*['"`]role['"`]\s*,\s*([^)]*)\)""", region
+    ):
+        assert value.strip() == "'status'", value
+    # The property form of the same act, which no rule about setAttribute can see.
+    assert re.search(r"\.role\s*=", region) is None
 
 
-def test_nothing_asks_for_provenance_that_is_not_in_the_payload() -> None:
-    # `payer_debts` and `receiver_credits` are task 13's, along with the payload
-    # change that carries them.
-    source = (APP / "app.js").read_text(encoding="utf-8")
-    assert "payer_debts" not in source
-    assert "receiver_credits" not in source
+def test_the_drill_down_never_moves_focus() -> None:
+    # The button that was activated keeps focus when its region opens and keeps it
+    # when the region closes. The only control that closes a region sits outside it
+    # and takes focus when it is activated, so focus is never inside a region at the
+    # moment that region becomes hidden and the browser never has to move it to
+    # <body>. Issue #37 records that the harness counts focus() on a hidden element
+    # as a focus, so a scenario asserting a focus move here would report a pass it
+    # had not earned; this ban is what covers it instead.
+    assert ".focus(" not in balances_region()
 
 
 # --- Task 12: the balances screen, the layout ------------------------------
@@ -1421,13 +1444,50 @@ def test_the_balances_block_never_moves_a_row_out_of_document_order() -> None:
     assert re.search(r"(?<![-\w])order\s*:", block) is None
 
 
-def test_the_balances_block_offers_no_affordance_that_does_nothing() -> None:
-    # No pointer cursor and no generated chevron, arrow or currency symbol: the
-    # drill-down is task 13's, and until then the rows are inert and must look it.
+def test_only_the_two_disclosure_buttons_look_tappable() -> None:
+    # The pointer cursor is the one affordance this screen offers and exactly the two
+    # controls that really open something offer it. A transfer row whose payload
+    # carries no usable provenance is drawn inert and has to look inert, so a cursor
+    # on the row itself, on a debt row or on a list would be a promise the screen
+    # cannot keep. Still no generated glyph either: the open and closed indicators
+    # are text app.js writes, which a reader can be told to ignore and a copy carries.
     block = without_comments(balances_styles())
-    assert "cursor" not in block
     # `content`, and not the `content` inside `justify-content`.
     assert re.search(r"(?<![-\w])content\s*:", block) is None
+    carrying = 0
+    for rule in block.split("}"):
+        head, _, body = rule.partition("{")
+        if "cursor" not in body:
+            continue
+        carrying += 1
+        assert re.findall(r"cursor:\s*([a-z-]+)", body) == ["pointer"], head
+        selectors = [part.strip() for part in head.split(",")]
+        assert selectors
+        for selector in selectors:
+            assert selector in (
+                ".balances-transfer-button",
+                ".balances-debt-button",
+            ), selector
+    assert carrying == 1, carrying
+
+
+def test_both_disclosure_buttons_show_a_keyboard_user_where_they_are() -> None:
+    # Two levels of control, both in the tab order with no tabindex written for them,
+    # so both have to say which one the keyboard is on.
+    block = without_comments(balances_styles())
+    for name in (".balances-transfer-button", ".balances-debt-button"):
+        outlined = False
+        for rule in block.split("}"):
+            head, _, body = rule.partition("{")
+            if name + ":focus-visible" not in [
+                part.strip() for part in head.split(",")
+            ]:
+                continue
+            found = re.search(r"outline:\s*([^;]+);", body)
+            assert found is not None, name
+            assert "none" not in found.group(1), name
+            outlined = True
+        assert outlined, name
 
 
 def test_every_transfer_row_clears_the_hit_area_floor() -> None:
@@ -1453,6 +1513,51 @@ def test_a_long_display_name_wraps_rather_than_being_cut_off() -> None:
     assert [head.strip() for head in refusing] == [".balances-figure"]
 
 
+def balances_declarations() -> dict[str, str]:
+    """Selector to declarations, over every rule in the balances block.
+
+    The block carries no @media and no nesting, which
+    `test_every_balances_selector_is_namespaced_to_this_screen` pins, so splitting on
+    the braces is the whole parse.
+    """
+    rules: dict[str, str] = {}
+    for rule in without_comments(balances_styles()).split("}"):
+        if "{" not in rule:
+            continue
+        head, body = rule.split("{", 1)
+        for selector in head.split(","):
+            name = selector.strip()
+            if name:
+                rules[name] = rules.get(name, "") + body
+    return rules
+
+
+# Every class on this screen that a display name is interpolated into. A name is the
+# one string here of unbounded length that the group chose rather than this repo, and
+# 40 unbroken characters at 16px runs 300 to 330px against a content box of 258px at
+# the narrowest supported width and 228px three levels in. Add to this list when a new
+# line carries a name.
+CARRIES_A_NAME = (
+    ".balances-line",
+    ".balances-shape-note",
+    ".balances-debt-label",
+    ".balances-entry-description",
+    ".balances-entry-effect",
+)
+
+
+def test_every_line_that_carries_a_name_can_break_a_long_one() -> None:
+    # The test above is satisfied by one `overflow-wrap` anywhere in the block, which
+    # is how three of these five shipped without it. This one names them, because the
+    # check criterion 68 states cannot see the difference: body sets `overflow:
+    # hidden` and the scroll container is `.content`, so `documentElement.scrollWidth`
+    # equals `clientWidth` whether or not a name is running out of its box.
+    rules = balances_declarations()
+    for selector in CARRIES_A_NAME:
+        assert selector in rules, selector
+        assert "overflow-wrap: break-word" in rules[selector], selector
+
+
 def test_no_row_carries_its_meaning_in_colour_alone() -> None:
     # "owes" and "is owed" are told apart by the words first, and rows are separated
     # by a rule rather than by a tint.
@@ -1475,3 +1580,32 @@ def test_the_balances_block_adds_no_animation() -> None:
     block = without_comments(balances_styles())
     for forbidden in ("animation", "transition", "@keyframes"):
         assert forbidden not in block, forbidden
+
+
+# --- Task 13: the transfer drill-down --------------------------------------
+
+DRILL_HINT = "Open a payment to see the debts behind it."
+
+
+def test_the_drill_down_hint_ships_hidden_between_the_heading_and_the_list() -> None:
+    # The one sentence task 13 adds to the markup. It is shown at most once on the
+    # screen, so it lives here rather than in app.js, where a Python test can pin it
+    # exactly and a reviewer can read it in a diff. It ships hidden and is revealed
+    # only once at least one rendered transfer row is a control that really opens.
+    section = balances_section()
+    assert inner(section, "balances-drill-hint", "p") == DRILL_HINT
+    opening = re.search(r'<p\b[^>]*\bid="balances-drill-hint"[^>]*>', section)
+    assert opening is not None
+    assert " hidden" in opening.group(0)
+    # Between the heading it belongs to and the list it talks about, so a screen
+    # reader meets it before the rows rather than after them.
+    heading = section.index("Suggested payments")
+    hint = section.index('id="balances-drill-hint"')
+    transfers = section.index('id="balances-transfers"')
+    assert heading < hint < transfers
+    # Outside #balances-status: that region holds exactly the four fixed messages
+    # task 12 wrote, of which at most one is ever visible, and this hint is shown
+    # alongside a list rather than instead of one.
+    status = re.search(r'<div\b[^>]*\bid="balances-status".*?</div>', section, re.S)
+    assert status is not None
+    assert "balances-drill-hint" not in status.group(0)

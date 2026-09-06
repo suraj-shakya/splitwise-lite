@@ -85,6 +85,9 @@ const CODES = {
   invalidSplit: 'invalid_split',
   emailAlreadyRegistered: 'email_already_registered',
   tooManyAttempts: 'too_many_attempts',
+  /* The refusal the debts route composes for an id that is not in the roster,
+     and for a self-pair. */
+  malformedRequest: 'malformed_request',
   internalError: 'internal_error',
   noGroupConfigured: 'no_group_configured',
   ambiguousGroup: 'ambiguous_group'
@@ -168,6 +171,16 @@ function element(tag, attributes, sink) {
     },
     set type(value) {
       own.attributes.type = String(value);
+    },
+
+    /* Reflected off the attribute the way hidden and type are. app.js assigns an
+       id to a region it built so the button controlling it can name that id in
+       aria-controls: feedDetail's `detail.id = ...`, and task 13's detail regions. */
+    get id() {
+      return own.attributes.id === undefined ? '' : own.attributes.id;
+    },
+    set id(value) {
+      own.attributes.id = String(value);
     },
 
     get hidden() {
@@ -618,6 +631,10 @@ function page(scripts, name, provokeRunawayTimer) {
       querySelector: (selector) => select(parsed.root, selector)[0] || null,
       querySelectorAll: (selector) => select(parsed.root, selector),
       createElement: (tag) => element(String(tag).toLowerCase(), {}, sink),
+      /* The { text } shape the textContent getter above already understands. app.js
+         composes a row out of text nodes so that a display name holding a `<` reaches
+         the DOM as text: balancesNetRow, balancesTransferRow and task 13's rows. */
+      createTextNode: (text) => ({ text: String(text) }),
       head: head,
       get title() {
         return titleElement.textContent;
@@ -3663,9 +3680,10 @@ const SCENARIOS = [
     /* Task 12a. api.debt is the whole of what that task adds to app/, and no screen
        calls it yet: issue #14 owns the drill-down. So this boots to the app, starts the
        request through the shipped client itself, and reads the payload back off the
-       promise rather than off the page. Nothing is rendered, so no DOM stub widening is
-       needed here and document.createTextNode and an element type property stay absent
-       and stay issue #14's to add.
+       promise rather than off the page. Nothing is rendered, so this scenario reaches
+       for no part of the DOM stub: document.createTextNode and an element id property
+       are there for issue #14's drill-down, and an element type property has been
+       there since the add screen.
 
        The fixture is a local rather than a module constant on purpose: this file is
        being edited on another branch at the same time, and one appended block conflicts
@@ -3718,6 +3736,1307 @@ const SCENARIOS = [
         'GET /api/debts/a%20b/c%25d%23e'
       ]);
     }
+  },
+
+  {
+    /* Task 13, the mixed shape, which is task 5's own worked fixture: one payment
+       made of more than one debt, with a direct debt among them appearing in both
+       lists. One debt here is only partly covered, so both readings of a debt row
+       are on screen at once. Sam is the acting member, so every mention of Sam
+       carries ` (you)` inside the drill-down as it does in the two outer lists. */
+    name: 'opening_a_suggested_payment_shows_both_ends_of_it',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '600.00', direction: 'owed' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-1',
+            to_member_id: 'mem-2',
+            amount: '600.00',
+            payer_debts: [
+              absorbed('mem-1', 'mem-2', '300.00', '300.00', true),
+              absorbed('mem-1', 'mem-3', '300.00', '500.00', false)
+            ],
+            receiver_credits: [
+              absorbed('mem-1', 'mem-2', '300.00', '300.00', true),
+              absorbed('mem-3', 'mem-2', '300.00', '300.00', true)
+            ]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const rows = transferRows(page);
+      page.is(rows.length, 1, 'transfer rows');
+      const row = rows[0];
+      /* Task 14 finds the transfer a row belongs to through these two, and neither
+         is ever rendered as text. */
+      page.is(row.getAttribute('data-from'), 'mem-1', 'data-from');
+      page.is(row.getAttribute('data-to'), 'mem-2', 'data-to');
+      /* Exactly two, so task 14 can append a third without unpicking either. */
+      page.is(row.childNodes.length, 2, 'children of the transfer row');
+
+      const button = row.childNodes[0];
+      const detail = row.childNodes[1];
+      page.is(button.tagName, 'BUTTON', 'the control');
+      page.is(button.type, 'button', 'the control type');
+      page.is(button.getAttribute('aria-expanded'), 'false', 'aria-expanded closed');
+      page.is(button.getAttribute('aria-controls'), detail.id, 'aria-controls');
+      page.is(detail.hidden, true, 'the region while closed');
+      page.is(regionFor(page, button), detail, 'the region the button names');
+
+      /* Byte for byte what task 12 rendered, payer first, the amount inserted
+         exactly as received and inside its own figure. */
+      page.is(lineOf(button).textContent, 'Sam (you) pays Ali 600.00', 'the row');
+      page.same(figuresIn(button), ['600.00'], 'the figures on the row');
+      const indicators = button.querySelectorAll('.balances-indicator');
+      page.is(indicators.length, 1, 'the indicator');
+      page.is(
+        indicators[0].getAttribute('aria-hidden'),
+        'true',
+        'the indicator to a reader'
+      );
+      page.is(indicators[0].textContent, '+', 'the closed indicator');
+      /* Shown, because at least one rendered row really opens. */
+      page.is(page.el('balances-drill-hint').hidden, false, 'the drill-down hint');
+
+      await page.dispatch(button, 'click');
+      page.is(button.getAttribute('aria-expanded'), 'true', 'aria-expanded open');
+      page.is(detail.hidden, false, 'the region while open');
+      page.is(indicators[0].textContent, '-', 'the open indicator');
+
+      /* Both ends, each under a label naming whose end it is, every row in the order
+         its array arrived, nothing sorted, merged or deduplicated: (mem-1, mem-2) is
+         in both lists and renders in both, which is the two-ended view and not a
+         duplicate. The mixed shape says nothing about a shared expense, and closes
+         with the one sentence that stops 300 and 300 reading as 600 owed twice. */
+      page.same(
+        detailLines(detail),
+        [
+          'What Sam (you) owes',
+          'Sam (you) owes Ali 300.00',
+          'Sam (you) owes Cass 300.00 of 500.00',
+          'What Ali is owed',
+          'Sam (you) owes Ali 300.00',
+          'Cass owes Ali 300.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the open payment'
+      );
+      /* Every figure in its own span, inserted exactly as received. */
+      page.same(
+        debtRowsIn(detail).map((item) => figuresIn(item.childNodes[0])),
+        [['300.00'], ['300.00', '500.00'], ['300.00'], ['300.00']],
+        'the figures inside the payment'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* The case the whole task exists for: Jo has never bought anything with Kit, and
+       the row still has to explain itself. Ali is named because both lists name Ali,
+       and no chain, arrow or "via" clause is drawn between the three. Sam is in the
+       roster and in neither list, and is named nowhere inside the open payment. */
+    name: 'a_payment_to_someone_you_never_shared_an_expense_with_says_why',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '400.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-4', amount: '400.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-4',
+            amount: '400.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '400.00', '400.00', true)],
+            receiver_credits: [absorbed('mem-3', 'mem-4', '400.00', '400.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const button = transferRows(page)[0].childNodes[0];
+      const detail = regionFor(page, button);
+      await page.dispatch(button, 'click');
+      page.same(
+        detailLines(detail),
+        [
+          'Jo and Kit have not shared an expense. These are the debts on each side ' +
+            'of this payment.',
+          'What Jo owes',
+          'Jo owes Ali 400.00',
+          'What Kit is owed',
+          'Ali owes Kit 400.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the open payment'
+      );
+      /* No path is drawn. The open payment names only the members its two lists
+         name, and Sam, who is in the roster and in neither list, is not among
+         them. */
+      page.is(detail.textContent.indexOf('Sam'), -1, 'a member neither list names');
+      page.is(detail.textContent.indexOf('via'), -1, 'a via clause');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* The simple case task 5's "direct debt first" rule guarantees. Two labelled
+       lists holding the same single row would read as a bug, so this shows one list
+       under one sentence, and no "seen from each end" line: there is only one end
+       here to see it from. */
+    name: 'a_payment_that_settles_one_debt_directly_shows_it_once',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '50.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '50.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '50.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '50.00', '50.00', true)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '50.00', '50.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const button = transferRows(page)[0].childNodes[0];
+      const detail = regionFor(page, button);
+      await page.dispatch(button, 'click');
+      page.same(
+        detailLines(detail),
+        ['This payment settles what Jo owes Ali directly.', 'Jo owes Ali 50.00'],
+        'the open payment'
+      );
+      page.is(debtRowsIn(detail).length, 1, 'debt rows in a direct payment');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* Task 5's chain fixture: Bo owes Ali 10.00 and Ali owes Cass 4.00, which
+       simplifies to two payments, and the debt Bo owes Ali is split across both of
+       them. Open both and the same pair is on screen twice. What stops that reading
+       as 10.00 owed twice is the whole total on each row. */
+    name: 'a_debt_split_across_two_payments_shows_each_share_of_the_whole',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Bo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '10.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '6.00', direction: 'owed' },
+          { member_id: 'mem-4', amount: '4.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '6.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '6.00', '10.00', false)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '6.00', '10.00', false)]
+          },
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-4',
+            amount: '4.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '4.00', '10.00', false)],
+            receiver_credits: [absorbed('mem-3', 'mem-4', '4.00', '4.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const rows = transferRows(page);
+      page.is(rows.length, 2, 'transfer rows');
+      const first = rows[0].childNodes[0];
+      const second = rows[1].childNodes[0];
+      await page.dispatch(first, 'click');
+      await page.dispatch(second, 'click');
+
+      page.same(
+        detailLines(regionFor(page, first)),
+        [
+          'This payment settles what Bo owes Ali directly.',
+          'Bo owes Ali 6.00 of 10.00'
+        ],
+        'the first payment'
+      );
+      page.same(
+        detailLines(regionFor(page, second)),
+        [
+          'Bo and Cass have not shared an expense. These are the debts on each side ' +
+            'of this payment.',
+          'What Bo owes',
+          'Bo owes Ali 4.00 of 10.00',
+          'What Cass is owed',
+          'Ali owes Cass 4.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the second payment'
+      );
+
+      /* Every region id is this task's own sequence number, unique in the document
+         and derived from no member id: the pair (mem-2, mem-3) has a debt row in
+         both payments, and those two rows carry two different ids. */
+      const ids = regionIds(page);
+      page.is(ids.length, 5, 'regions in the document');
+      page.same(unique(ids), ids, 'every region id is its own');
+      page.ok(
+        ids.every((id) => /^balances-detail-[0-9]+$/.test(id)),
+        'every region id is balances-detail-N: ' + JSON.stringify(ids)
+      );
+      page.ok(
+        ids.every((id) => id.indexOf('mem-') === -1),
+        'no region id carries a member id: ' + JSON.stringify(ids)
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* The "of" clause is dropped on one strict equality with true and on nothing
+       else. false keeps it, and so does a value of the wrong type: the clause states
+       two figures the server sent and claims nothing, while dropping it claims the
+       payment clears the whole debt, which a garbled flag has not earned. */
+    name: 'a_payment_that_covers_a_whole_debt_does_not_say_of_itself',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' },
+          { id: 'mem-6', display_name: 'Ray' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '4.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '4.00',
+            payer_debts: [
+              absorbed('mem-2', 'mem-3', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-4', '1.00', '2.00', false),
+              /* The string 'true' and null: present, so the transfer still carries
+                 usable provenance, and not true, so the clause stays. */
+              absorbed('mem-2', 'mem-5', '1.00', '1.00', 'true'),
+              absorbed('mem-2', 'mem-6', '1.00', '1.00', null)
+            ],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '4.00', '4.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+
+      const button = transferRows(page)[0].childNodes[0];
+      const detail = regionFor(page, button);
+      await page.dispatch(button, 'click');
+      page.same(
+        detailLines(detail),
+        [
+          'What Jo owes',
+          'Jo owes Ali 1.00',
+          'Jo owes Kit 1.00 of 2.00',
+          'Jo owes Mo 1.00 of 1.00',
+          'Jo owes Ray 1.00 of 1.00',
+          'What Ali is owed',
+          'Jo owes Ali 4.00',
+          'The same payment seen from each end. These are not two payments.'
+        ],
+        'the open payment'
+      );
+      /* A row that says "of" carries two figures; a row that covers the whole debt
+         carries one. No amount string is compared to decide which. */
+      page.same(
+        debtRowsIn(detail).map((item) => figuresIn(item.childNodes[0]).length),
+        [1, 2, 2, 2, 1],
+        'figures per debt row'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* A payload with no usable provenance renders the row exactly as task 12 did: an
+       inert span, with nothing on it that looks tappable. Four different ways of
+       being unusable, beside one good row, and the good row is still a button, the
+       net list and the currency line are still there and nothing threw. */
+    name: 'a_transfer_row_without_provenance_is_not_tappable',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' }
+        ]
+      };
+      const good = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '9.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+        receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+      };
+      /* No payer_debts at all; an empty receiver_credits; an amount that is not a
+         string; and a row with no covers_whole_debt property. */
+      const noList = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '1.00',
+        receiver_credits: [absorbed('mem-2', 'mem-3', '1.00', '1.00', true)]
+      };
+      const emptyList = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '2.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '2.00', '2.00', true)],
+        receiver_credits: []
+      };
+      const numberAmount = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '3.00',
+        payer_debts: [
+          {
+            debtor_id: 'mem-2',
+            creditor_id: 'mem-3',
+            amount: 3,
+            debt_total: '3.00',
+            covers_whole_debt: true
+          }
+        ],
+        receiver_credits: [absorbed('mem-2', 'mem-3', '3.00', '3.00', true)]
+      };
+      const noFlag = {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '4.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '4.00', '4.00', true)],
+        receiver_credits: [
+          { debtor_id: 'mem-2', creditor_id: 'mem-3', amount: '4.00', debt_total: '4.00' }
+        ]
+      };
+      const net = [
+        { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+        { member_id: 'mem-2', amount: '19.00', direction: 'owes' },
+        { member_id: 'mem-3', amount: '19.00', direction: 'owed' }
+      ];
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respondInOrder('GET', '/balances', [
+        ok({
+          currency: 'AUD',
+          net: net,
+          transfers: [noList, good, emptyList, numberAmount, noFlag]
+        }),
+        ok({ currency: 'AUD', net: net, transfers: [noList, emptyList] })
+      ]);
+      page.startAt('#/balances');
+      await page.boot();
+
+      const rows = transferRows(page);
+      page.is(rows.length, 5, 'transfer rows');
+      page.same(
+        rows.map((row) => row.childNodes[0].tagName),
+        ['SPAN', 'BUTTON', 'SPAN', 'SPAN', 'SPAN'],
+        'what each row leads with'
+      );
+      rows.forEach((row, index) => {
+        if (index === 1) {
+          return;
+        }
+        page.is(row.childNodes.length, 1, 'children of inert row ' + index);
+        page.is(row.childNodes[0].className, 'balances-line', 'inert row ' + index);
+        page.is(row.className, 'balances-row', 'the class on inert row ' + index);
+        page.is(
+          row.childNodes[0].getAttribute('aria-expanded'),
+          null,
+          'aria-expanded on inert row ' + index
+        );
+        page.is(
+          row.querySelectorAll('.balances-indicator').length,
+          0,
+          'the indicator on inert row ' + index
+        );
+      });
+      /* The inert rows still say exactly what task 12 had them say. */
+      page.is(rows[0].textContent, 'Jo pays Ali 1.00', 'the first inert row');
+      /* One malformed row affects nothing else: the good row still opens, and the
+         net list and the currency line are untouched. */
+      page.is(page.el('balances-net').childNodes.length, 3, 'the net list');
+      page.is(page.el('balances-currency').hidden, false, 'the currency line');
+      page.is(page.el('balances-currency-code').textContent, 'AUD', 'the currency');
+      page.is(
+        page.el('balances-drill-hint').hidden,
+        false,
+        'the hint beside one good row'
+      );
+      await page.dispatch(rows[1].childNodes[0], 'click');
+      page.is(
+        regionFor(page, rows[1].childNodes[0]).hidden,
+        false,
+        'the good row still opens'
+      );
+
+      /* A list in which nothing can be opened hides the hint again. */
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      page.same(
+        transferRows(page).map((row) => row.childNodes[0].tagName),
+        ['SPAN', 'SPAN'],
+        'a list of inert rows'
+      );
+      page.is(
+        page.el('balances-drill-hint').hidden,
+        true,
+        'the hint with nothing to open'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* Collapsing somebody else's row to open yours is surprising, so more than one
+       payment may be open at once, and more than one debt inside one payment. */
+    name: 'a_second_payment_opens_without_closing_the_first',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' },
+          { id: 'mem-6', display_name: 'Ray' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '5.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '5.00',
+            payer_debts: [
+              absorbed('mem-2', 'mem-3', '3.00', '3.00', true),
+              absorbed('mem-2', 'mem-4', '2.00', '2.00', true)
+            ],
+            receiver_credits: [
+              absorbed('mem-2', 'mem-3', '3.00', '3.00', true),
+              absorbed('mem-4', 'mem-3', '2.00', '2.00', true)
+            ]
+          },
+          {
+            from_member_id: 'mem-5',
+            to_member_id: 'mem-6',
+            amount: '1.00',
+            payer_debts: [absorbed('mem-5', 'mem-6', '1.00', '1.00', true)],
+            receiver_credits: [absorbed('mem-5', 'mem-6', '1.00', '1.00', true)]
+          }
+        ]
+      };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok(figures));
+      page.respond('GET', '/debts/mem-2/mem-3', ok(oneEntryDebt('mem-2', 'mem-3')));
+      page.respond('GET', '/debts/mem-2/mem-4', ok(oneEntryDebt('mem-2', 'mem-4')));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const rows = transferRows(page);
+      const first = rows[0].childNodes[0];
+      const second = rows[1].childNodes[0];
+      await page.dispatch(first, 'click');
+      const firstDetail = regionFor(page, first);
+      const debts = debtRowsIn(firstDetail);
+      await page.dispatch(debts[0].childNodes[0], 'click');
+      await page.dispatch(debts[1].childNodes[0], 'click');
+      await page.dispatch(second, 'click');
+
+      page.is(first.getAttribute('aria-expanded'), 'true', 'the first payment');
+      page.is(firstDetail.hidden, false, 'the first region');
+      page.is(second.getAttribute('aria-expanded'), 'true', 'the second payment');
+      page.is(regionFor(page, second).hidden, false, 'the second region');
+      page.same(
+        debts.slice(0, 2).map((item) => item.childNodes[0].getAttribute('aria-expanded')),
+        ['true', 'true'],
+        'two debts open inside one payment'
+      );
+      page.same(
+        debts.slice(0, 2).map((item) => item.childNodes[1].hidden),
+        [false, false],
+        'both debt regions'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/debts/mem-2/mem-4'
+        ])
+      );
+    }
+  },
+
+  {
+    /* The second read, and the whole point of it: what one pairwise debt is made of,
+       in the words the entry's own kind and effect choose. Seven entries covering
+       the four sentences, a settlement's fixed name, an empty description, and a
+       kind and an effect nobody expected. The dates are checked against spelledDate,
+       which is a second copy of feedDate's rule and not an independent oracle: read
+       the note above spelledDate for exactly how much that is worth and why the
+       feed's own spelling of the same instant is not available to compare against.
+       This scenario never visits the feed. */
+    name: 'opening_a_debt_lists_the_expenses_behind_it',
+    async run(page) {
+      const first = '2026-09-04T08:00:00.000000+00:00';
+      const second = '2026-09-02T23:30:00.000000+00:00';
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '9.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '9.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+          }
+        ]
+      };
+      const behind = {
+        currency: 'AUD',
+        debtor_id: 'mem-2',
+        creditor_id: 'mem-3',
+        amount: '9.00',
+        direction: 'owes',
+        entries: [
+          entry('expense', 'adds', 'exp-1', 'Milk run', first, '4.00'),
+          entry('expense', 'reduces', 'exp-2', 'Bus fare', first, '2.00'),
+          entry('settlement', 'reduces', 'set-1', '', first, '5.00'),
+          /* A description on a settlement, which the wire never sends: kind decides
+             the name before the description is looked at. */
+          entry('settlement', 'adds', 'set-2', 'ignored', second, '1.00'),
+          entry('refund', 'wobbles', 'odd-1', 'Odd one', second, '3.00'),
+          entry('expense', 'sideways', 'odd-2', 'Sideways', second, '7.00'),
+          entry('expense', 'adds', 'exp-3', '   ', second, '9.00')
+        ]
+      };
+      page.respond('GET', '/debts/mem-2/mem-3', ok(behind));
+      await onBalances(page, roster, figures);
+      const transfer = transferRows(page)[0].childNodes[0];
+      await page.dispatch(transfer, 'click');
+      const payment = regionFor(page, transfer);
+      /* Nothing was asked for on entering the route or on opening the payment. */
+      page.same(page.requests, BALANCES_ENTRY, 'requests before the debt opens');
+
+      const item = debtRowsIn(payment)[0];
+      const button = item.childNodes[0];
+      const region = item.childNodes[1];
+      page.is(button.tagName, 'BUTTON', 'the debt control');
+      page.is(button.type, 'button', 'the debt control type');
+      page.is(button.getAttribute('aria-expanded'), 'false', 'the debt closed');
+      page.is(button.getAttribute('aria-controls'), region.id, 'the debt aria-controls');
+      page.is(region.hidden, true, 'the debt region while closed');
+      page.is(regionFor(page, button), region, 'the region the debt button names');
+
+      /* A transfer region carries no live region and no aria-busy of its own: the
+         request belongs to a debt row, and so does everything said about it. */
+      page.is(payment.getAttribute('aria-busy'), null, 'aria-busy on a payment');
+      page.same(
+        payment.childNodes.map((child) => child.getAttribute('role')),
+        [null, null],
+        'roles on a payment region'
+      );
+
+      await page.dispatch(button, 'click');
+      page.is(button.getAttribute('aria-expanded'), 'true', 'the debt open');
+      page.is(region.hidden, false, 'the debt region while open');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy once it settled');
+
+      /* Exactly one live region per debt, holding one sentence and nothing else,
+         with the entry list as its sibling rather than its child. */
+      page.is(region.childNodes.length, 2, 'children of a debt region');
+      const status = statusIn(region);
+      const list = entryListIn(region);
+      page.is(status.getAttribute('role'), 'status', 'the live region');
+      page.is(status.textContent, '', 'the live region once the entries arrived');
+      page.is(list.className, 'balances-entries', 'the entry list');
+      page.is(list.hidden, false, 'the entry list once it has entries');
+
+      const parts = entriesIn(region).map(entryParts);
+      page.is(parts.length, 7, 'entries');
+      page.same(
+        parts.map((part) => part.description),
+        [
+          'Milk run',
+          'Bus fare',
+          'A settlement',
+          'A settlement',
+          'Odd one',
+          'Sideways',
+          'No description'
+        ],
+        'descriptions'
+      );
+      page.same(
+        parts.map((part) => part.amount),
+        ['4.00', '2.00', '5.00', '1.00', '3.00', '7.00', '9.00'],
+        'amounts'
+      );
+      /* The four sentences, and no sentence at all for a kind or an effect nobody
+         expected: inventing a direction for one would be worse than saying nothing. */
+      page.same(
+        parts.map((part) => part.effect),
+        [
+          'Adds to this debt: Ali paid, and Jo shared',
+          'Takes off this debt: Jo paid, and Ali shared',
+          'Takes off this debt: Jo paid Ali',
+          'Adds to this debt: Ali paid Jo',
+          null,
+          null,
+          'Adds to this debt: Ali paid, and Jo shared'
+        ],
+        'effect lines'
+      );
+      /* In the order the server sent them and in no other. */
+      page.same(
+        parts.map((part) => part.datetime),
+        [first, first, first, second, second, second, second],
+        'the instants, unchanged and in the order they arrived'
+      );
+      page.same(
+        parts.map((part) => part.dateTag),
+        ['TIME', 'TIME', 'TIME', 'TIME', 'TIME', 'TIME', 'TIME'],
+        'the date elements'
+      );
+      page.same(
+        parts.map((part) => part.dateText),
+        [first, first, first, second, second, second, second].map(spelledDate),
+        'the dates, absolute and local'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* A live region whose text changed while it was hidden announces nothing in
+       several screen readers, so the reveal comes first, then aria-busy, then the
+       sentence, and only then the request. onRequest sees the page at the one moment
+       that ordering is observable. */
+    name: 'the_waiting_line_is_on_screen_before_the_request_goes_out',
+    async run(page) {
+      const { region, button, transfer } = await oneOpenPayment(page, ok(oneEntryDebt('mem-2', 'mem-3')));
+      let seen = null;
+      page.onRequest('GET', '/debts/mem-2/mem-3', () => {
+        seen = {
+          hidden: region.hidden,
+          busy: region.getAttribute('aria-busy'),
+          expanded: button.getAttribute('aria-expanded'),
+          disabled: button.disabled,
+          status: statusIn(region).textContent
+        };
+      });
+      await page.dispatch(button, 'click');
+      page.ok(seen !== null, 'the request went out');
+      page.same(
+        seen,
+        {
+          hidden: false,
+          busy: 'true',
+          expanded: 'true',
+          disabled: false,
+          status: 'Looking up the expenses behind this.'
+        },
+        'the page at the moment the request went out'
+      );
+      /* Settled, so the busy flag is gone and the sentence has been replaced by the
+         entries it was waiting for. */
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy after it settled');
+      page.is(statusIn(region).textContent, '', 'the waiting line afterwards');
+      page.is(entriesIn(region).length, 1, 'the entries');
+      page.is(transfer.getAttribute('aria-expanded'), 'true', 'the payment above');
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* The answer is in that row's own DOM, so closing and opening it again asks
+       nothing further. Not a cache: it lives in the row and dies with it. */
+    name: 'the_expenses_behind_a_debt_are_asked_for_once',
+    async run(page) {
+      const { region, button } = await oneOpenPayment(page, ok(oneEntryDebt('mem-2', 'mem-3')));
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      page.is(button.getAttribute('aria-expanded'), 'true', 'open again');
+      page.is(region.hidden, false, 'the region, open again');
+      page.is(entriesIn(region).length, 1, 'the entries, still there');
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* A failure keeps nothing, so asking again is asking afresh. The sentence is
+       this screen's own for every kind: the one this route composes for its own 400
+       names a member id, and no member id is ever shown here. */
+    name: 'a_debt_whose_expenses_do_not_arrive_says_so_and_can_be_asked_again',
+    async run(page) {
+      const refusal = failure(400, CODES.malformedRequest, MALFORMED_DEBT);
+      const { region, button, transfer, payment } = await oneOpenPayment(page, [
+        refusal,
+        ok(oneEntryDebt('mem-2', 'mem-3'))
+      ]);
+      await page.dispatch(button, 'click');
+      page.is(
+        statusIn(region).textContent,
+        'Those expenses could not be listed just now.',
+        'the failure sentence'
+      );
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy after a failure');
+      page.is(entryListIn(region).hidden, true, 'the entry list after a failure');
+      page.is(entriesIn(region).length, 0, 'entries after a failure');
+      /* One row's failure, not the screen's: the payment above stays open with its
+         debt rows listed, the net list is untouched and the screen's own message
+         stays hidden. Nothing the server said is on screen. */
+      page.is(transfer.getAttribute('aria-expanded'), 'true', 'the payment above');
+      page.is(payment.hidden, false, 'the payment region');
+      page.is(debtRowsIn(payment).length, 1, 'the debt rows');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.is(page.el('balances-net').childNodes.length, 1, 'the net list');
+      const shown = page.el('screen-balances').textContent;
+      page.is(shown.indexOf(MALFORMED_DEBT), -1, "the server's own sentence");
+      page.is(shown.indexOf('mem-'), -1, 'a member id as visible text');
+
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      page.is(entriesIn(region).length, 1, 'the entries, asked for again');
+      page.is(statusIn(region).textContent, '', 'the failure sentence afterwards');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/debts/mem-2/mem-3'
+        ])
+      );
+    }
+  },
+
+  {
+    /* An empty list is a valid answer and not a failure: the ledger can move between
+       the balances read and this request. It is an answer, so the row keeps it and
+       asks nothing further. */
+    name: 'a_debt_with_nothing_behind_it_says_so_rather_than_failing',
+    async run(page) {
+      const empty = {
+        currency: 'AUD',
+        debtor_id: 'mem-2',
+        creditor_id: 'mem-3',
+        amount: '0.00',
+        direction: 'settled',
+        entries: []
+      };
+      const { region, button } = await oneOpenPayment(page, ok(empty));
+      await page.dispatch(button, 'click');
+      page.is(
+        statusIn(region).textContent,
+        'Nothing is recorded behind this debt.',
+        'the nothing-recorded sentence'
+      );
+      /* No list at all, rather than an empty one. */
+      page.is(entryListIn(region).hidden, true, 'the entry list');
+      page.is(entriesIn(region).length, 0, 'entries');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      await page.dispatch(button, 'click');
+      await page.dispatch(button, 'click');
+      page.is(
+        statusIn(region).textContent,
+        'Nothing is recorded behind this debt.',
+        'the sentence on a second look'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* "Nothing is recorded behind this debt" is a claim about the ledger, and a
+       payload this screen could not read is no evidence for it. Five ways of being
+       unreadable, one per debt row, all of them 200s. */
+    name: 'a_debt_that_answers_with_the_wrong_shape_is_a_failure_not_an_empty_debt',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' },
+          { id: 'mem-6', display_name: 'Ray' },
+          { id: 'mem-7', display_name: 'Wu' }
+        ]
+      };
+      const head = {
+        currency: 'AUD',
+        debtor_id: 'mem-2',
+        creditor_id: 'mem-3',
+        amount: '1.00',
+        direction: 'owes'
+      };
+      const good = entry('expense', 'adds', 'exp-1', 'Milk run', WHEN, '1.00');
+      const missing = { kind: 'expense', effect: 'adds', id: 'exp-1',
+        description: 'Milk run', created_at: WHEN };
+      const numbered = { kind: 'expense', effect: 'adds', id: 'exp-1',
+        description: 'Milk run', created_at: 4, amount: '1.00' };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok({
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '5.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '5.00',
+            payer_debts: [
+              absorbed('mem-2', 'mem-3', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-4', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-5', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-6', '1.00', '1.00', true),
+              absorbed('mem-2', 'mem-7', '1.00', '1.00', true)
+            ],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '5.00', '5.00', true)]
+          }
+        ]
+      }));
+      /* No entries key at all; entries that are not an array; an element that is not
+         an object; an element with no amount; an element whose created_at is a
+         number rather than the string the wire sends. */
+      page.respond('GET', '/debts/mem-2/mem-3', ok(head));
+      page.respond('GET', '/debts/mem-2/mem-4', ok({ ...head, entries: {} }));
+      page.respond('GET', '/debts/mem-2/mem-5', ok({ ...head, entries: ['nope'] }));
+      page.respond('GET', '/debts/mem-2/mem-6', ok({ ...head, entries: [good, missing] }));
+      page.respond('GET', '/debts/mem-2/mem-7', ok({ ...head, entries: [numbered] }));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const transfer = transferRows(page)[0].childNodes[0];
+      await page.dispatch(transfer, 'click');
+      const rows = debtRowsIn(regionFor(page, transfer)).slice(0, 5);
+      for (const item of rows) {
+        await page.dispatch(item.childNodes[0], 'click');
+      }
+      page.same(
+        rows.map((item) => statusIn(item.childNodes[1]).textContent),
+        [
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.',
+          'Those expenses could not be listed just now.'
+        ],
+        'every unreadable answer is a failure'
+      );
+      page.same(
+        rows.map((item) => entriesIn(item.childNodes[1]).length),
+        [0, 0, 0, 0, 0],
+        'nothing was rendered from an unreadable answer'
+      );
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/debts/mem-2/mem-4',
+          'GET /api/debts/mem-2/mem-5',
+          'GET /api/debts/mem-2/mem-6',
+          'GET /api/debts/mem-2/mem-7'
+        ])
+      );
+    }
+  },
+
+  {
+    /* A member id means nothing to a flatmate and is never shown, so a row whose
+       member the roster does not know still shows the money under one fixed name.
+       Hiding a debt because a name is missing is the worse failure, and the refusal
+       this route composes for that id names it, which is why the row prints its own
+       sentence and never the server's. */
+    name: 'a_member_missing_from_the_roster_still_shows_the_debt',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' }
+        ]
+      };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok({
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '5.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-9',
+            amount: '5.00',
+            payer_debts: [absorbed('mem-2', 'mem-9', '5.00', '8.00', false)],
+            receiver_credits: [absorbed('mem-2', 'mem-9', '5.00', '8.00', false)]
+          }
+        ]
+      }));
+      page.respond(
+        'GET',
+        '/debts/mem-2/mem-9',
+        failure(400, CODES.malformedRequest, MALFORMED_DEBT)
+      );
+      page.startAt('#/balances');
+      await page.boot();
+
+      const transfer = transferRows(page)[0].childNodes[0];
+      page.is(lineOf(transfer).textContent, 'Jo pays Unknown member 5.00', 'the row');
+      await page.dispatch(transfer, 'click');
+      const payment = regionFor(page, transfer);
+      page.same(
+        detailLines(payment),
+        [
+          'This payment settles what Jo owes Unknown member directly.',
+          'Jo owes Unknown member 5.00 of 8.00'
+        ],
+        'the open payment'
+      );
+      const item = debtRowsIn(payment)[0];
+      await page.dispatch(item.childNodes[0], 'click');
+      page.is(
+        statusIn(item.childNodes[1]).textContent,
+        'Those expenses could not be listed just now.',
+        'the failure sentence'
+      );
+      /* At every level, in every state, the failure state included. */
+      const shown = page.el('screen-balances').textContent;
+      page.is(shown.indexOf('mem-'), -1, 'a member id as visible text');
+      page.is(shown.indexOf(MALFORMED_DEBT), -1, "the server's own sentence");
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-9']));
+    }
+  },
+
+  {
+    /* The same answer the feed and the add retries give behind a curtain, through
+       the same shared helper. Signing out leaves the rows in the document, so both
+       controls are still there to be pressed and both do nothing at all. */
+    name: 'a_drill_down_behind_a_curtain_asks_for_nothing',
+    async run(page) {
+      const { region, button, transfer, payment } = await oneOpenPayment(page, ok(oneEntryDebt('mem-2', 'mem-3')), { keepClosed: true });
+      page.respond('DELETE', '/session', noContent());
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+
+      await page.dispatch(transfer, 'click');
+      await page.dispatch(button, 'click');
+      page.is(transfer.getAttribute('aria-expanded'), 'false', 'the payment');
+      page.is(payment.hidden, true, 'the payment region');
+      page.is(button.getAttribute('aria-expanded'), 'false', 'the debt');
+      page.is(region.hidden, true, 'the debt region');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy');
+      page.is(statusIn(region).textContent, '', 'the live region');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([{ method: 'DELETE', path: '/session', body: NO_BODY }])
+      );
+    }
+  },
+
+  {
+    /* A 401 is task 9a's gate, reached through announce() exactly as every other 401
+       is, and this screen adds nothing to it: no second sentence anywhere outside
+       the row that asked. */
+    name: 'a_401_on_a_drill_down_is_the_gate_and_not_this_screens_message',
+    async run(page) {
+      const { region, button } = await oneOpenPayment(page, sessionDied(EXPIRED));
+      await page.dispatch(button, 'click');
+      gateIsUp(page, 'after a 401 on a drill-down');
+      page.is(page.el('gate-error').hidden, false, '#gate-error hidden');
+      page.is(page.el('gate-error').textContent, EXPIRED, '#gate-error text');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      /* Written into a row nobody can see, which is harmless and keeps one path. */
+      page.is(
+        statusIn(region).textContent,
+        'Those expenses could not be listed just now.',
+        'the row that asked'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat(['GET /api/debts/mem-2/mem-3']));
+    }
+  },
+
+  {
+    /* Entering the route costs the same two reads however large the plan is, and
+       opening a payment costs nothing at all: no hash, no history entry, no fourth
+       route, and no other row touched. */
+    name: 'opening_a_payment_changes_no_route_and_no_history',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Jo' },
+          { id: 'mem-3', display_name: 'Ali' },
+          { id: 'mem-4', display_name: 'Kit' },
+          { id: 'mem-5', display_name: 'Mo' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [{ member_id: 'mem-2', amount: '3.00', direction: 'owes' }],
+        transfers: [
+          {
+            from_member_id: 'mem-2',
+            to_member_id: 'mem-3',
+            amount: '2.00',
+            payer_debts: [absorbed('mem-2', 'mem-3', '2.00', '2.00', true)],
+            receiver_credits: [absorbed('mem-2', 'mem-3', '2.00', '2.00', true)]
+          },
+          {
+            from_member_id: 'mem-4',
+            to_member_id: 'mem-5',
+            amount: '1.00',
+            payer_debts: [absorbed('mem-4', 'mem-5', '1.00', '1.00', true)],
+            receiver_credits: [absorbed('mem-4', 'mem-5', '1.00', '1.00', true)]
+          }
+        ]
+      };
+      await onBalances(page, roster, figures);
+      /* Two reads on entry and no drill-down request, whatever the plan holds. */
+      page.same(page.requests, BALANCES_ENTRY, 'requests on entering the route');
+
+      const rows = transferRows(page);
+      const other = rows[1].childNodes[0];
+      const otherRegion = regionFor(page, other);
+      const otherLine = lineOf(other).textContent;
+      await page.dispatch(rows[0].childNodes[0], 'click');
+
+      page.is(page.hash, '#/balances', 'the hash');
+      page.same(page.pushStates, [], 'history entries pushed');
+      page.same(page.replaceStates, [], 'history entries replaced');
+      page.is(page.focused, null, 'focus');
+      /* The other row is neither re-rendered nor closed. */
+      page.is(other.getAttribute('aria-expanded'), 'false', 'the other payment');
+      page.is(otherRegion.hidden, true, 'the other region');
+      page.is(lineOf(other).textContent, otherLine, 'the other row');
+      page.is(regionFor(page, other), otherRegion, 'the other region, same node');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* Nothing survives a navigation. The whole list is rebuilt closed, and an answer
+       that arrives after the rebuild is written into the row that asked for it,
+       which is no longer in the document, and never into the new list. The answer is
+       held open here until the navigation has happened, which is the only way that
+       ordering is observable. */
+    name: 'leaving_the_balances_screen_and_returning_closes_every_drill_down',
+    async run(page) {
+      let release = null;
+      const held = {
+        status: 200,
+        ok: true,
+        json: () =>
+          new Promise((resolve) => {
+            release = () => resolve(oneEntryDebt('mem-2', 'mem-3'));
+          })
+      };
+      const { region, button, transfer } = await oneOpenPayment(page, held);
+      await page.dispatch(button, 'click');
+      page.ok(release !== null, 'the request went out and is waiting');
+      page.is(
+        statusIn(region).textContent,
+        'Looking up the expenses behind this.',
+        'the waiting line'
+      );
+
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      const rebuilt = transferRows(page);
+      page.is(rebuilt.length, 1, 'transfer rows after returning');
+      page.ok(rebuilt[0] !== transfer, 'the row was rebuilt rather than reused');
+      const freshTransfer = rebuilt[0].childNodes[0];
+      page.is(freshTransfer.getAttribute('aria-expanded'), 'false', 'the payment');
+      page.is(regionFor(page, freshTransfer).hidden, true, 'the payment region');
+
+      release();
+      await page.settle();
+      /* The late answer went to the row that asked, which is detached, and nowhere
+         near the list that replaced it. */
+      page.is(entriesIn(region).length, 1, 'the detached row that asked');
+      await page.dispatch(freshTransfer, 'click');
+      const fresh = debtRowsIn(regionFor(page, freshTransfer))[0];
+      page.is(fresh.childNodes[0].getAttribute('aria-expanded'), 'false', 'the debt');
+      page.is(fresh.childNodes[1].hidden, true, 'the debt region');
+      page.is(entriesIn(fresh.childNodes[1]).length, 0, 'entries in the new list');
+      page.is(statusIn(fresh.childNodes[1]).textContent, '', 'the new live region');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-2/mem-3',
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  /* The four states criterion 14 names in which the drill-down hint has to be gone,
+     and until these existed none of them was asserted anywhere. The QA of PR #56
+     neutralised the one line in balancesClear() that hides the hint and the harness
+     exited 0 with all 101 scenarios green: the two scenarios that did assert the hint
+     both drew a list straight after, so the line that hides it was never the reason
+     it was hidden. Each of these shows the hint first and then takes it away, which
+     is the only ordering that can tell those two apart. */
+
+  {
+    /* Busy. The lists are emptied before the read goes out, so the instruction to
+       open one of them goes with them: a hint over an empty screen points at
+       nothing, and the rows it will point at when the answer lands may be inert. */
+    name: 'the_hint_goes_while_the_next_read_is_in_flight',
+    async run(page) {
+      let release = null;
+      const held = {
+        status: 200,
+        ok: true,
+        json: () =>
+          new Promise((resolve) => {
+            release = () => resolve(HINT_FIGURES);
+          })
+      };
+      await hintShownThenReadAgain(page, held);
+      page.ok(release !== null, 'the second read went out and is waiting');
+      page.is(page.el('balances-busy').hidden, false, '#balances-busy');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint while busy');
+      page.is(transferRows(page).length, 0, 'the transfer rows while busy');
+
+      release();
+      await page.settle();
+      /* And back once there is something to open again, so the assertion above is
+         about this state and not about a hint that is simply never shown twice. */
+      page.is(page.el('balances-busy').hidden, true, '#balances-busy afterwards');
+      page.is(page.el('balances-drill-hint').hidden, false, 'the hint once it landed');
+      page.expectRequests(HINT_REQUESTS);
+    }
+  },
+
+  {
+    /* Failed. A hint sitting beside "Those figures could not be loaded" invites a tap
+       on a list that is not there, and stale rows behind it would be worse. */
+    name: 'a_failed_read_leaves_no_hint_beside_the_failure',
+    async run(page) {
+      await hintShownThenReadAgain(page, missingRecord());
+      page.is(page.el('balances-error').hidden, false, '#balances-error');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint beside a failure');
+      page.is(transferRows(page).length, 0, 'the transfer rows');
+      page.is(page.el('balances-net').childNodes.length, 0, 'the net list');
+      page.is(page.el('balances-currency').hidden, true, 'the currency line');
+      page.expectRequests(HINT_REQUESTS);
+    }
+  },
+
+  {
+    /* The empty roster, which a half-finished setup_group.py run reaches. Both lists
+       are hidden behind one sentence, and an instruction to open a row is a promise
+       about a list nobody can see. */
+    name: 'a_group_with_no_member_rows_shows_no_hint',
+    async run(page) {
+      await hintShownThenReadAgain(page, ok({ currency: 'AUD', net: [], transfers: [] }));
+      page.is(page.el('balances-empty-roster').hidden, false, '#balances-empty-roster');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint over an empty roster');
+      page.is(transferRows(page).length, 0, 'the transfer rows');
+      page.is(page.el('balances-net').childNodes.length, 0, 'the net list');
+      page.expectRequests(HINT_REQUESTS);
+    }
+  },
+
+  {
+    /* Nothing left to settle. The net list is there and every member is square, so
+       there is no payment to suggest and nothing at all to open. */
+    name: 'a_group_with_nothing_left_to_settle_shows_no_hint',
+    async run(page) {
+      const settled = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: []
+      };
+      await hintShownThenReadAgain(page, ok(settled));
+      page.is(page.el('balances-none').hidden, false, '#balances-none');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the hint with no payments');
+      page.is(page.el('balances-net').childNodes.length, 2, 'the net list');
+      page.is(page.el('balances-transfers').hidden, true, 'the transfer list');
+      page.is(transferRows(page).length, 0, 'the transfer rows');
+      page.expectRequests(HINT_REQUESTS);
+    }
   }
 ];
 
@@ -3741,6 +5060,299 @@ const A_SECOND_MEMBER = {
    SIGN_IN_BODY is: a body asserted against a copy of the code that built it asserts
    nothing. */
 const SECOND_SIGN_IN_BODY = '{"email":"ali@example.com","password":"opensesame"}';
+
+
+/* --- Task 13: the transfer drill-down -------------------------------------------
+
+   Below SCENARIOS for the reason task 43's block above is: this task appends to this
+   file and edits none of it, and module evaluation reaches these long before main()
+   runs, which is all a scenario body needs. What is shared here is the reaching, not
+   the data: every fixture stays local to its own scenario, following task 38's note
+   that one appended block conflicts with less on a file other branches are editing. */
+
+/* One absorbed pairwise debt, in the five keys _absorbed_view sends. */
+function absorbed(debtorId, creditorId, amount, total, covers) {
+  return {
+    debtor_id: debtorId,
+    creditor_id: creditorId,
+    amount: amount,
+    debt_total: total,
+    covers_whole_debt: covers
+  };
+}
+
+/* The six top-level keys _read_debt sends, with one expense behind the pair. */
+function oneEntryDebt(debtorId, creditorId) {
+  return {
+    currency: 'AUD',
+    debtor_id: debtorId,
+    creditor_id: creditorId,
+    amount: '3.00',
+    direction: 'owes',
+    entries: [
+      {
+        kind: 'expense',
+        effect: 'adds',
+        id: 'exp-1',
+        description: 'Milk run',
+        created_at: '2026-09-04T08:00:00.000000+00:00',
+        amount: '3.00'
+      }
+    ]
+  };
+}
+
+/* Boots straight onto the balances route, so the feed never reads and the recorded
+   request list is about this screen alone. */
+async function onBalances(page, roster, figures) {
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(roster));
+  page.respond('GET', '/balances', ok(figures));
+  page.startAt('#/balances');
+  await page.boot();
+}
+
+/* Entering the route costs exactly these three and no drill-down request, however
+   large the plan is. */
+const BALANCES_ENTRY = ['GET /api/session', 'GET /api/members', 'GET /api/balances'];
+
+function transferRows(page) {
+  return page.el('balances-transfers').childNodes;
+}
+
+/* page.el knows only the ids parsed out of app/index.html and throws for anything
+   else, so a region app.js built at run time is reached through the button that
+   names it in aria-controls. */
+function regionFor(page, button) {
+  const found = page.query('#' + button.getAttribute('aria-controls'));
+  return found.length === 1 ? found[0] : null;
+}
+
+/* The sentence-carrying child of a disclosure button, which is its first child; the
+   indicator is its second. */
+function lineOf(button) {
+  return button.childNodes[0];
+}
+
+function figuresIn(node) {
+  return node.querySelectorAll('.balances-figure').map((figure) => figure.textContent);
+}
+
+function debtRowsIn(detail) {
+  return detail.querySelectorAll('.balances-debt');
+}
+
+/* What an open payment reads as, top to bottom: every sentence and label it holds,
+   and the line on every debt row inside it, in document order. */
+function detailLines(detail) {
+  const lines = [];
+  detail.childNodes.forEach((child) => {
+    if (child.tagName === 'UL') {
+      child.childNodes.forEach((item) => {
+        lines.push(lineOf(item.childNodes[0]).textContent);
+      });
+    } else {
+      lines.push(child.textContent);
+    }
+  });
+  return lines;
+}
+
+/* Every detail region in the document, at both levels. */
+function regionIds(page) {
+  return page
+    .query('.balances-transfer-detail')
+    .concat(page.query('.balances-debt-detail'))
+    .map((region) => region.id);
+}
+
+/* One entry behind a pairwise debt, in the six keys _debt_entry_view sends. */
+function entry(kind, effect, id, description, when, amount) {
+  return {
+    kind: kind,
+    effect: effect,
+    id: id,
+    description: description,
+    created_at: when,
+    amount: amount
+  };
+}
+
+const WHEN = '2026-09-04T08:00:00.000000+00:00';
+
+/* feedDate's spelling of one instant, recomputed here. Be clear about how much that
+   is worth: this is a second copy of the rule feedDate applies, not an independent
+   oracle, so a mutation both copies would make in step is not caught by it. What it
+   does catch is the whole of what a date can get wrong on this screen: the wrong
+   field read, an instant printed in UTC rather than in the reader's own timezone, a
+   relative label, or a second format. A hard-coded string could not, because the
+   day a given instant falls on depends on the machine running the suite.
+
+   Reading the feed's own spelling of the same instant would be the independent
+   check, and it is not available: feedRender calls document.createDocumentFragment,
+   which this stub does not fake, so no scenario in this repo has ever rendered a
+   feed row. Issue #14's task file forbids widening the stub for anything but the two
+   properties it names, so that stays for whoever covers the feed. */
+const SPELLED_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+];
+
+function spelledDate(when) {
+  const at = new Date(when);
+  return at.getDate() + ' ' + SPELLED_MONTHS[at.getMonth()] + ' ' + at.getFullYear();
+}
+
+/* The sentence _read_debt composes for its own 400, which names a member id and is
+   therefore the one this screen may never render. Spelled out here rather than
+   imported, and asserted absent from the screen character for character. */
+const MALFORMED_DEBT =
+  "a debt path names a member id that is not a member of this group: 'mem-9'";
+
+/* The commonest fixture: one payment settling one debt directly, opened, with the
+   one debt row inside it left closed for the scenario to open. `answer` is the
+   response the drill-down request gets, or a list consumed in order. */
+async function oneOpenPayment(page, answer, options) {
+  const roster = {
+    members: [
+      { id: 'mem-1', display_name: 'Sam' },
+      { id: 'mem-2', display_name: 'Jo' },
+      { id: 'mem-3', display_name: 'Ali' }
+    ]
+  };
+  const figures = {
+    currency: 'AUD',
+    net: [{ member_id: 'mem-2', amount: '9.00', direction: 'owes' }],
+    transfers: [
+      {
+        from_member_id: 'mem-2',
+        to_member_id: 'mem-3',
+        amount: '9.00',
+        payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+        receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+      }
+    ]
+  };
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(roster));
+  page.respond('GET', '/balances', ok(figures));
+  if (Array.isArray(answer)) {
+    page.respondInOrder('GET', '/debts/mem-2/mem-3', answer);
+  } else {
+    page.respond('GET', '/debts/mem-2/mem-3', answer);
+  }
+  page.startAt('#/balances');
+  await page.boot();
+
+  const transfer = transferRows(page)[0].childNodes[0];
+  if (!(options && options.keepClosed)) {
+    await page.dispatch(transfer, 'click');
+  }
+  const payment = regionFor(page, transfer);
+  const item = debtRowsIn(payment)[0];
+  return { transfer, payment, item, button: item.childNodes[0], region: item.childNodes[1] };
+}
+
+/* One payment that really opens, so the drill-down hint is shown by the first read.
+   Deliberately not oneOpenPayment's fixture: nothing here opens a row, and a fixture
+   these four share with the drill-down scenarios would tie them to a shape they do
+   not care about. */
+const HINT_ROSTER = {
+  members: [
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-2', display_name: 'Jo' },
+    { id: 'mem-3', display_name: 'Ali' }
+  ]
+};
+
+const HINT_FIGURES = {
+  currency: 'AUD',
+  net: [{ member_id: 'mem-2', amount: '9.00', direction: 'owes' }],
+  transfers: [
+    {
+      from_member_id: 'mem-2',
+      to_member_id: 'mem-3',
+      amount: '9.00',
+      payer_debts: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)],
+      receiver_credits: [absorbed('mem-2', 'mem-3', '9.00', '9.00', true)]
+    }
+  ]
+};
+
+/* Entering balances, going to the feed, coming back. The same list for all four,
+   because what changes between them is the answer to the second read and nothing
+   else. */
+const HINT_REQUESTS = BALANCES_ENTRY.concat([
+  'GET /api/expenses',
+  'GET /api/members',
+  'GET /api/members',
+  'GET /api/balances'
+]);
+
+/* Draws the hint, checks it is really there, then leaves the screen and comes back
+   for `second`. Leaving and returning is the honest way to a second read: tapping
+   Balances while on Balances changes no hash, so no hashchange fires and nothing
+   happens, which is task 8's no-op rule. */
+async function hintShownThenReadAgain(page, second) {
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(HINT_ROSTER));
+  page.respondInOrder('GET', '/balances', [ok(HINT_FIGURES), second]);
+  page.startAt('#/balances');
+  await page.boot();
+  page.is(
+    transferRows(page)[0].childNodes[0].tagName,
+    'BUTTON',
+    'a row that really opens, on the first read'
+  );
+  page.is(page.el('balances-drill-hint').hidden, false, 'the hint on the first read');
+  await page.goTo('#/feed');
+  await page.goTo('#/balances');
+}
+
+function statusIn(region) {
+  return region.childNodes[0];
+}
+
+function entryListIn(region) {
+  return region.childNodes[1];
+}
+
+function entriesIn(region) {
+  return region.querySelectorAll('.balances-entry');
+}
+
+/* One entry, split into the three parts criterion 36 names: a first line holding
+   the description and the amount, an effect sentence that is absent when neither
+   the kind nor the effect was recognised, and the date. */
+function entryParts(item) {
+  const first = item.childNodes[0];
+  const last = item.childNodes[item.childNodes.length - 1];
+  return {
+    description: first.childNodes[0].textContent,
+    amount: first.childNodes[1].textContent,
+    effect: item.childNodes.length === 3 ? item.childNodes[1].textContent : null,
+    dateTag: last.tagName,
+    dateText: last.textContent,
+    datetime: last.getAttribute('datetime')
+  };
+}
+
+function unique(values) {
+  return values.filter((value, at) => values.indexOf(value) === at);
+}
 
 /* --- Running ---------------------------------------------------------------- */
 

@@ -252,6 +252,13 @@
     <ul class="balances-list" id="balances-net"></ul>
 
     <h2 class="balances-heading">Suggested payments</h2>
+    <!-- Task 13. Shown only once at least one rendered payment is a control that
+         really opens: a transfer whose payload carries no usable provenance stays
+         inert, and an instruction to open something that does not open is worse
+         than silence. Hidden here, and hidden again by every clear, so it can
+         neither survive a refresh nor sit beside a failure message. -->
+    <p class="balances-note" id="balances-drill-hint" hidden>Open a payment to see
+      the debts behind it.</p>
     <ul class="balances-list" id="balances-transfers"></ul>
 
     <!-- Every fixed sentence the screen can show lives here, hidden, and the code
