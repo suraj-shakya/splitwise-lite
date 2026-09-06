@@ -123,32 +123,6 @@ body {
   --accent: var(--theme-balances);
 }
 
-.card {
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-left: 6px solid var(--accent);
-  border-radius: 10px;
-  background: var(--surface);
-}
-
-.marker {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--accent);
-}
-
-.notes {
-  margin: 12px 0 0;
-  padding-left: 20px;
-  font-size: 16px;
-  color: var(--muted);
-}
-
-.notes li + li {
-  margin-top: 6px;
-}
-
 /* The expense feed ------------------------------------------------------- */
 
 /* Every selector here is namespaced `feed-` or `expense-`, because the task 12 branch
@@ -502,6 +476,234 @@ body {
   font-size: 16px;
   font-weight: 600;
   touch-action: manipulation;
+}
+
+/* The expense entry form ------------------------------------------------- */
+
+/* Every selector here is namespaced `add-`, because two sibling branches are editing
+   this same file and a shared selector is a collision at merge time. The block sits
+   here rather than at the end of the file on purpose: test_web_shell.py reads this
+   stylesheet from the balances banner to the end of the file and holds everything
+   after it to task 12's rules, so an add screen appended there fails tests that name
+   the balances screen.
+
+   Nothing on this screen moves, so the reduced-motion block at the end of the file
+   has nothing new to switch off and none of the three properties that would give it
+   something is used here. There is no sticky or fixed save bar either, and that is
+   not an oversight: position: fixed under an iOS keyboard is the
+   class of layout no test in this repo can see and a browser gets wrong in a way that
+   reads as broken, so the honest cost is recorded instead: at 320px with the keyboard
+   up, Save is one short flick away. The three modes sitting in one wrapping row
+   rather than three stacked rows is what keeps that flick short.
+
+   Every colour here is the screen's own --accent from .screen--add, so a route change
+   still looks like one and nothing is added to :root. */
+
+.add-note,
+.add-hint {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+
+.add-label {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* 17px, comfortably over the 16px below which iOS zooms the page on focus.
+   min-width: 0 so a flex item never takes its intrinsic width as a floor, which is
+   what would let a 100 character display name in an option push the page wider than
+   the viewport. */
+.add-field {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 48px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 17px;
+  color: var(--text);
+}
+
+.add-field:focus-visible,
+.add-person-share:focus-visible,
+.add-mode input:focus-visible,
+.add-person-tick:focus-visible,
+.add-submit:focus-visible,
+.add-retry:focus-visible,
+.add-action:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A fieldset's default min-inline-size is min-content, which is the other way a long
+   word inside one widens the page. */
+.add-modes {
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 4px 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.add-legend {
+  padding: 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* inline-flex, so the three sit in one row and wrap onto a second at 320px instead of
+   stacking into three. */
+.add-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 0 14px 0 0;
+  font-size: 17px;
+}
+
+/* The browser's own dot or tick tells chosen from not chosen and ticked from
+   unticked, which is a shape and not a colour. Nothing here replaces the control with
+   a coloured box: accent-color only tints what the browser already draws. */
+.add-mode input,
+.add-person-tick {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.add-people {
+  margin: 0 0 12px;
+}
+
+/* A long display name wraps in full rather than being clipped or ellipsised, and the
+   row never pushes the page into a horizontal scroll. */
+.add-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 17px;
+}
+
+.add-person-name {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.add-person-share {
+  flex: 0 0 auto;
+  width: 7em;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 17px;
+  color: var(--text);
+}
+
+.add-panel {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* The same red the gate's error already uses, so a failure looks like a failure and
+   never like a confirmation. */
+.add-panel--failed {
+  border-left-color: #9f1239;
+}
+
+.add-panel-text {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: break-word;
+}
+
+.add-action {
+  display: inline-block;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 700;
+  text-decoration: none;
+  touch-action: manipulation;
+}
+
+.add-retry {
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  touch-action: manipulation;
+}
+
+.add-submit {
+  min-height: 48px;
+  margin-top: 4px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  touch-action: manipulation;
+}
+
+.add-submit[disabled] {
+  opacity: 0.6;
+}
+
+.add-errors {
+  margin: 0 0 12px;
+}
+
+.add-error-text {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid #9f1239;
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
+  color: #9f1239;
+  overflow-wrap: break-word;
 }
 
 /* Bottom nav -------------------------------------------------------------- */
