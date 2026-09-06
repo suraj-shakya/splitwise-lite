@@ -942,11 +942,18 @@ def test_reordering_the_entries_leaves_the_digest_alone() -> None:
 # path -> why it is in app/ and deliberately not in SHELL. One entry today.
 NOT_PRECACHED = {
     "sw.js": (
-        "The browser fetches the worker script itself and byte-compares it against "
-        "the copy it is running, and that comparison is the only thing that ever "
-        "replaces a worker. A worker handed its own cached self would compare equal "
-        "forever and could never be replaced, which is the one failure with no way "
-        "out short of unregistering by hand."
+        "SHELL_DIGEST is recorded inside sw.js, so hashing sw.js into the digest is "
+        "a self-reference with no fixed point: every edit changes the digest, "
+        "pasting the digest changes the file, and the new file has a new digest "
+        "again. There is no value that could ever be correct. That reason is "
+        "unconditional and is the one to keep. Secondarily, and only as long as the "
+        "specification says so: the browser fetches the worker script itself with "
+        "service-workers mode 'none', so that fetch reaches no worker's fetch "
+        "handler and a worker cannot be served its own cached self today. Were it "
+        "ever intercepted, the byte-compare against the running script is the only "
+        "thing that ever replaces a worker, a worker handed its own cached self "
+        "would compare equal forever and could never be replaced, and that is the "
+        "one failure with no way out short of unregistering by hand."
     ),
 }
 

@@ -86,8 +86,16 @@ Rejected.
 
 `VERSION` is not made redundant, and removing it would cost more than it saves:
 
-* **`sw.js` is not itself precached**, and cannot be: the browser fetches and byte-compares
-  the worker script, and a worker serving its own stale self from Cache Storage is a trap.
+* **`sw.js` is not itself precached**, and cannot be. The decisive reason is arithmetic, not
+  browser behaviour: `SHELL_DIGEST` is recorded *inside* `sw.js`, so hashing `sw.js` into a
+  digest stored in `sw.js` is a self-reference with no fixed point. Every edit changes the
+  digest, pasting the digest changes the file, and the new file has a new digest again. No
+  value could ever be correct. Secondarily, and only while the specification says so, the
+  browser fetches the worker script with service-workers mode `none`, so that fetch is
+  intercepted by no worker and the byte-compare cannot today be fed a worker's own cached
+  self; if it ever were, that worker would compare equal forever and could never be
+  replaced. Do not record the second reason on its own: it is disprovable against a current
+  browser, and a reader who disproves it will conclude `sw.js` belongs in `SHELL`.
   So a change to the worker's *logic* moves no digest at all. `VERSION` is the knob for
   "the shell files are the same but the worker treats them differently", and there is
   nothing else that could be.
@@ -242,8 +250,15 @@ the worktree root.
 
 22. `tests/test_web_shell.py` gains a mapping of files under `app/` that are deliberately not
     precached, keyed by path, valued with the reason in prose. It contains exactly one entry
-    today, `sw.js`, whose reason says that the browser fetches and byte-compares the worker
-    script itself and that a worker served from its own cache could not be replaced.
+    today, `sw.js`. Its reason leads with the decisive one: `SHELL_DIGEST` is recorded inside
+    `sw.js`, so hashing `sw.js` into the digest is a self-reference with no fixed point, and
+    no value could ever be correct. It may then add, marked as secondary, that the browser
+    fetches and byte-compares the worker script itself and that a worker served its own
+    cached self could never be replaced, stated accurately: that fetch uses service-workers
+    mode `none`, so it reaches no worker's `fetch` handler and the trap does not spring
+    today. The secondary reason must not stand alone. It is disprovable against a current
+    browser, and a reader who disproves it will conclude `sw.js` belongs in `SHELL`; the
+    self-reference holds whatever browsers do.
 23. A test asserts `set(precache_entries()) == APP_FILES - set(NOT_PRECACHED)` and that every
     key of that mapping is in `APP_FILES`. A file present in `app/` and absent from both
     `SHELL` and the mapping fails it.
