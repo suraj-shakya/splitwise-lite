@@ -198,12 +198,12 @@ establish the replacement guard actually bites.
    from the JSON API, behind a sign-in gate.
 3. `CLAUDE.md` contains a heading whose text is exactly `What works today` and a heading
    whose text is exactly `What does not exist yet`, each at level 2, 3 or 4.
-4. Under `What works today`, a bullet list of exactly these five bold keys, spelled
+4. Under `What works today`, a bullet list of exactly these six bold keys, spelled
    exactly: `Sign in`, `The expense feed`, `Adding an expense`, `Balances`,
-   `Install and open offline`. Each bullet is one or two lines of prose after the key.
-   Between the first bullet and the next heading there is nothing but bullets, their
-   continuation lines and blank lines. QA checks each bullet against the app, and each
-   states at least this much:
+   `Transfer drill-down`, `Install and open offline`. Each bullet is one or two lines of
+   prose after the key. Between the first bullet and the next heading there is nothing
+   but bullets, their continuation lines and blank lines. QA checks each bullet against
+   the app, and each states at least this much:
    * `Sign in`: create an account, sign in, sign out. An account that no member row is
      linked to is told so and shown no ledger.
    * `The expense feed`: every expense the group has recorded, newest first, with payer,
@@ -213,21 +213,53 @@ establish the replacement guard actually bites.
      split modes. It does not claim the resolver's weight mode, which the API takes and
      no screen offers.
    * `Balances`: each member's net position and the shortest list of payments that clears
-     the group, worked out on every read and never stored. Nothing on that screen is
-     tappable.
+     the group, worked out on every read and never stored. The net figures are read only;
+     the suggested payments are not, which the next bullet covers.
+
+     > **Amended 2026-09-07, after the first review of PR #59.** This sub-bullet
+     > previously ended "Nothing on that screen is tappable." True against `8651b9d`, and
+     > made false by #56, which turns a suggested payment carrying usable provenance into
+     > a disclosure button. The net rows are still inert, checked against
+     > `balancesNetRow` in `app/app.js`. Nothing in the suite would have prompted this
+     > edit: the guard fired on the `Transfer drill-down` bullet only, and this sentence
+     > sits in a different bullet, under a capability the guard still reads as working.
+     > It was found by reading the screen, and is fixed in both documents. It is a fair
+     > example of what these guards do not reach: they pin which capabilities are
+     > claimed, never what a bullet says about one.
+   * `Transfer drill-down`: a suggested payment opens on the debts it absorbs, from both
+     ends, and each of those debts opens in turn on the expenses and settlements behind
+     it. The debts arrive with the balances read; what is behind a debt is fetched on
+     that row's first expansion, over `GET /api/debts/{debtor}/{creditor}`. A payment
+     whose payload carries no usable provenance is drawn inert.
+
+     > **Added 2026-09-07, after the first review of PR #59.** This sub-bullet did not
+     > exist: the capability was criterion 6's, where it read "a suggested payment cannot
+     > be opened to see the debts and expenses behind it". See the amendment at the end
+     > of this criterion for why it moved.
    * `Install and open offline`: it installs to the home screen and the shell opens
      offline, on `localhost` or `127.0.0.1` only, and it says that the API is never
      cached, so offline the app opens and then reports that it cannot reach the server.
      An offline expense cannot be recorded.
+
+   > **Amended 2026-09-07, after the first review of PR #59.** This criterion previously
+   > named five keys and omitted `Transfer drill-down`, which criterion 6 placed in the
+   > second list. PR #56 shipped the drill-down while this branch was open, and this
+   > task's own guard, `test_nothing_the_documents_call_missing_is_in_the_shell`, is what
+   > caught both documents still saying it did not exist. The criterion was accurate
+   > against `8651b9d`; the world moved underneath it, which is the situation the guard
+   > exists to detect. That is the mechanism working, not a defect in the spec. The
+   > `Transfer drill-down` sub-bullet and the amended `Balances` sub-bullet above come
+   > with the key; criterion 6 loses it, criterion 7 loses its citation, and criterion 24
+   > inverts its evidence. The shape rule, the count of prose lines and the other five
+   > sub-bullets are untouched.
 5. A lead-in sentence before that list says that all of it needs a group created by
    `scripts/setup_group.py apply` and an account linked with `setup_group.py link`, and
    that signing up on its own shows the "nobody has linked you" notice and no ledger.
-6. Under `What does not exist yet`, a bullet list of exactly these five bold keys,
-   spelled exactly: `Transfer drill-down`, `Mark as paid`, `Receiver confirmation`,
+6. Under `What does not exist yet`, a bullet list of exactly these four bold keys,
+   spelled exactly: `Mark as paid`, `Receiver confirmation`,
    `The incompleteness signal`, `Expense correction`. Same shape rule as criterion 4, and
    each bullet states at least this much:
-   * `Transfer drill-down`: a suggested payment cannot be opened to see the debts and
-     expenses behind it. See criterion 8 for the half that does exist.
+
    * `Mark as paid`: nothing records that a payment happened.
    * `Receiver confirmation`: and so nothing confirms one, which means a debt that has
      been settled in real life stays on the list until somebody records the expense side
@@ -238,14 +270,57 @@ establish the replacement guard actually bites.
      nothing. The balances screen's standing note, that the figures come only from what
      was recorded, is the whole of what the app says about it today.
    * `Expense correction`: an expense cannot be edited or voided from any screen.
-7. Each of those five bullets contains exactly one citation of the form
-   `(backlog task N)`, with N being 13, 14, 15, 16 and 17 respectively. QA checks each
+
+   > **Amended 2026-09-07, after the first review of PR #59.** This criterion previously
+   > named five keys, opening with `Transfer drill-down`, whose sub-bullet read "a
+   > suggested payment cannot be opened to see the debts and expenses behind it. See
+   > criterion 8 for the half that does exist." Both are gone; the key and its bullet are
+   > criterion 4's now. PR #56 shipped the transfer drill-down while this branch was
+   > open, and this task's own guard,
+   > `test_nothing_the_documents_call_missing_is_in_the_shell`, is what caught both
+   > documents still saying it did not exist. The criterion was accurate against
+   > `8651b9d`; the world moved underneath it, which is the situation the guard exists to
+   > detect. That is the mechanism working, not a defect in the spec.
+7. Each of those four bullets contains exactly one citation of the form
+   `(backlog task N)`, with N being 14, 15, 16 and 17 respectively. QA checks each
    number against the matching `## N.` heading in `plans/backlog.md` and confirms the
    heading is about the capability the key names. No GitHub issue number appears in
    either list, in either document.
-8. The `Transfer drill-down` bullet says that the API can already answer what a debt is
-   made of and that no screen asks it. That is the one entry whose back end half exists,
-   and a bullet that omits it is inaccurate in the direction this task is about.
+
+   > **Amended 2026-09-07, after the first review of PR #59.** This criterion previously
+   > covered five bullets citing 13, 14, 15, 16 and 17. PR #56 shipped the transfer
+   > drill-down while this branch was open, and this task's own guard,
+   > `test_nothing_the_documents_call_missing_is_in_the_shell`, is what caught both
+   > documents still saying it did not exist; the criterion was accurate against
+   > `8651b9d`, and the world moved underneath it, which is the situation the guard
+   > exists to detect. That is the mechanism working, not a defect in the spec.
+   >
+   > Backlog task 13's citation goes with its bullet into `What works today`, where
+   > citations are neither required nor read: only the second list is citation-checked,
+   > by `test_both_documents_agree_on_what_does_not_exist_yet`. `## 13.` still stands in
+   > `plans/backlog.md`, and is now the record of a task that shipped.
+
+8. The `Transfer drill-down` bullet says that a screen asks the debts route, naming
+   `GET /api/debts/{debtor}/{creditor}`, and says when: the debts behind a payment arrive
+   with the balances read, and the entries behind a debt are fetched on that row's first
+   expansion. A bullet that leaves the route unnamed is inaccurate in the direction this
+   task is about, and so is one that still calls the capability missing.
+
+   > **Amended 2026-09-07, after the first review of PR #59.** PR #56 shipped the
+   > transfer drill-down while this branch was open, and this task's own guard,
+   > `test_nothing_the_documents_call_missing_is_in_the_shell`, is what caught both
+   > documents still saying it did not exist. The criterion was accurate against
+   > `8651b9d`; the world moved underneath it, which is the situation the guard exists to
+   > detect. That is the mechanism working, not a defect in the spec.
+   >
+   > This criterion previously read: "The `Transfer drill-down` bullet says that the API
+   > can already answer what a debt is made of and that no
+   > screen asks it. That is the one entry whose back end half exists, and a bullet that
+   > omits it is inaccurate in the direction this task is about." A screen asks it now,
+   > so the criterion is inverted rather than dropped: the route is still the thing the
+   > bullet has to name, and what changed is which half of the capability is missing,
+   > which is none of it.
+
 9. The `scripts/` bullet under `Where things live` names `watch-issues.sh` as well as the
    three Python commands, or says plainly that the enumeration covers the Python commands
    only. Today it names three files and four exist.
@@ -340,13 +415,38 @@ establish the replacement guard actually bites.
       `app/api.js`.
     * `Install and open offline`: `navigator.serviceWorker.register('sw.js')` in
       `app/app.js`, `var SHELL = [` in `app/sw.js`.
-    * `Transfer drill-down`: `.debt(` absent from `app/app.js`.
+    * `Transfer drill-down`: `api.debt(` present in `app/app.js`, and
+      `id="balances-drill-hint"` present in `app/index.html`.
     * `Mark as paid`, `Receiver confirmation`, `Expense correction`: no substring rule,
       and a reason naming `test_the_api_client_offers_exactly_the_named_calls` as the
       mechanism that covers them, because a client call is the only way any of them can
-      reach the server.
+      reach the server. Each reason states plainly that this is a **prompt** and not an
+      **interlock**: the surface test goes red and its message names both lists, but one
+      string added to `API_SURFACE` clears that red with both documents left stale, so
+      the failure message is the whole of the enforcement.
     * `The incompleteness signal`: no substring rule, and a reason saying plainly that
       nothing in the suite would catch this one and why.
+
+    > **Amended 2026-09-07, after the first review of PR #59.** The `Transfer drill-down`
+    > line previously read "`.debt(` absent from `app/app.js`", the one absence rule in
+    > this task with real teeth. PR #56 shipped the drill-down while this branch was
+    > open, that rule fired, and the pair inverts to a presence rule in `WORKS_TODAY`.
+    > The reviewer's suggestion is followed: the `app/app.js` needle inverts cleanly, and
+    > it is paired with the `app/index.html` id #56 added.
+    >
+    > The interlock and prompt sentence in the `Mark as paid` line is new too, and it
+    > carries a conclusion that has to be recorded here and not only in the literal,
+    > because a guard described as stronger than it is would be this issue's own defect
+    > one level up. **Nothing left in `NOT_YET` is an interlock.** `Transfer drill-down`
+    > was the only entry this task ever had one for, and it has now been spent: the
+    > capability shipped, the rule caught it, and the entry moved. For `Mark as paid`,
+    > `Receiver confirmation` and `Expense correction` the red is a prompt, cleared by
+    > one string; for `The incompleteness signal` there is nothing at all, which its own
+    > line has always said. So the whole of this task's enforcement should be read as a
+    > two-way pin between the two documents and the literal, plus a prompt for three
+    > capabilities and silence for a fourth. Restoring an interlock needs a substring a
+    > capability cannot arrive without, and for the four that remain no such substring is
+    > knowable in advance.
 25. Each of the five tests fails with prose rather than a bare assertion. QA reads all
     five messages while performing criteria 29 to 32 and confirms each says which file is
     wrong, what was expected, and what to do next: if the capability landed, move its
@@ -409,11 +509,18 @@ QA runs `git status` after each and records that the tree is clean.
 
 ### The suite and the diff
 
-35. `uv run python -m pytest` on a clean tree reports `2176 passed`, `0 failed`,
-    `0 skipped`, `0 xfailed`. That is master's 2172, minus the one deleted test, plus the
-    five added. If the implementer merged or split a test and the count differs, the
-    deviation and its count are recorded in this file under `## Deviations` and QA checks
-    the recorded number instead.
+35. `uv run python -m pytest` on a clean tree reports `2227 passed`, `0 failed`,
+    `0 skipped`, `0 xfailed`. That is master's 2223 at `70f41d3`, minus the one deleted
+    test, plus the five added. If the implementer merged or split a test and the count
+    differs, the deviation and its count are recorded in this file under
+    `## Deviations` and QA checks the recorded number instead.
+
+    > **Amended 2026-09-07, after the first review of PR #59.** This criterion previously
+    > read `2176 passed`, "master's 2172, minus the one deleted test, plus the five
+    > added", which was correct against `8651b9d`. The base has moved twice since, by #55
+    > and #56, and this branch was rebased onto `70f41d3` so that #56's drill-down would
+    > meet this task's guard. The arithmetic is unchanged; only the base is. No test was
+    > merged or split.
 36. `app/sw.js` is byte identical to `master`. `SHELL_DIGEST` does not move, because
     neither `CLAUDE.md` nor `README.md` is one of the nine precached files, and nothing
     under `app/` is changed by this task. Nobody needs to recompute anything, and
@@ -529,8 +636,9 @@ are defending is that the label and the code agree.
 
 Two capability lists in each of two documents, ten bullets between them, one line in
 `plans/spec.md`, one sentence in `plans/backlog.md`, one deleted test and five added
-ones, roughly ninety lines of Python counting the two literals and the failure messages. If it grows a helper module,
-a fixture, a second test file or a Markdown parser, it has gone wrong.
+ones, roughly ninety lines of Python counting the two literals and the failure
+messages. If it grows a helper module, a fixture, a second test file or a Markdown
+parser, it has gone wrong.
 
 The work that is not typing is criteria 29 to 34: six probes run against the real tree,
 each reverted, each quoted in the QA note. Without them this task has produced a guard
@@ -541,8 +649,9 @@ that is believed to work, which is the same category of thing as the test it rep
 The suite count is one of them now, and deviation 5 says why. `uv run python -m pytest`
 reports `2227 passed`, with nothing skipped and nothing xfailed; criterion 35 predicts
 `2176`, a figure computed against a `master` that has since moved twice. What follows is
-five places where a criterion's wording and the observed result differ. None of the
-criteria were changed; this is the record of what running them produced.
+five places where a criterion's wording and the observed result differ. Four of them
+changed no criterion and are the record of what running them produced. The fifth did
+change six, under an explicit instruction, and says so.
 
 1. **Criterion 30 turns one test red, not two.** The probe adds a sixth bullet,
    `**Recurring expenses**`, to `CLAUDE.md`'s first list only, so only
@@ -591,26 +700,50 @@ criteria were changed; this is the record of what running them produced.
    from `app/app.js`. #56 landed backlog task 13 and put it there. Rebasing onto
    `70f41d3` turned `test_nothing_the_documents_call_missing_is_in_the_shell` red, which
    is this task's guard doing the exact thing this task exists to make it do, so the
-   capability was moved rather than the rule weakened or deleted. What that costs,
-   itemised:
+   capability was moved rather than the rule weakened or deleted. Six criteria went false
+   in the process, and each is now amended in place. What changed:
 
-   * Criterion 4's five `What works today` keys are six, gaining `Transfer drill-down`,
-     and criterion 6's five are four. The ten keys across both lists are still ten.
-   * Criterion 6's `Transfer drill-down` sub-bullet and criterion 8 both require the
-     bullet to say that no screen asks the debts route. A screen asks it. Writing either
-     one now would be a document making a false claim about the app, which is the defect
-     this task was opened to remove.
-   * Criterion 7's citations are 14, 15, 16 and 17. Task 13's citation goes with its
-     bullet, because only the second list is citation-checked.
-   * Criterion 24's `Transfer drill-down` evidence inverts from `.debt(` absent from
+   * Criterion 4 named five `What works today` keys and now names six, gaining
+     `Transfer drill-down` and a sub-bullet for it. Criterion 6 named five and now names
+     four. The ten keys across both lists are still ten.
+   * Criterion 6's `Transfer drill-down` sub-bullet and criterion 8 both required the
+     bullet to say that no screen asks the debts route. A screen asks it. The sub-bullet
+     is gone with its key, and criterion 8 is inverted: the bullet must now name the
+     route and say when it is called. Writing either of the old ones today would be a
+     document making a false claim about the app, which is the defect this task exists to
+     remove.
+   * Criterion 7 cited 13, 14, 15, 16 and 17 and now cites 14, 15, 16 and 17. Task 13's
+     citation went with its bullet, because only the second list is citation-checked.
+   * Criterion 24's `Transfer drill-down` evidence inverted from `.debt(` absent from
      `app/app.js` to `api.debt(` present in it, paired with `id="balances-drill-hint"` in
      `app/index.html`, the hint #56 added. Nothing under `app/` was touched to make that
      true; `SHELL_DIGEST` is still `3b8ac94014fc`, the value `70f41d3` records.
-   * Criterion 4's `Balances` sub-bullet requires "Nothing on that screen is tappable".
-     A suggested payment carrying usable provenance is a disclosure button now, so both
-     `Balances` bullets say the net figures are read only and the payments are not. The
-     net rows are still inert.
-   * Criterion 35's `2176 passed` is `2227 passed`: `70f41d3` reports `2223`, and this
-     branch deletes one test and adds five.
+   * Criterion 4's `Balances` sub-bullet required "Nothing on that screen is tappable".
+     A suggested payment carrying usable provenance is a disclosure button now, so the
+     sub-bullet and both documents say the net figures are read only and the payments are
+     not. The net rows are still inert. Nothing in the suite would have prompted that
+     edit: it sits in a different bullet, under a capability the guard reads as working,
+     and it was found by reading the screen.
+   * Criterion 35 read `2176 passed` and now reads `2227 passed`: `70f41d3` reports
+     `2223`, and this branch deletes one test and adds five.
 
-   No criterion was edited to fit any of this.
+   **All six were amended on 2026-09-07, in place, each with a dated marker quoting the
+   wording it replaced.** That was escalated first and not done unilaterally. The task
+   file for a branch is authored on that branch, so an engineer editing the criteria
+   their own work is judged against removes the only independence the process has, and
+   the right default is to flag a false criterion and stop. The amendment was made only
+   after an explicit instruction to make it, and the markers exist so a reviewer can see
+   every original wording without reading the branch history.
+
+   The reason recorded in each marker is the same one: #56 shipped the drill-down while
+   this branch was open, and this task's own guard is what caught the documents still
+   calling it missing. The criteria were accurate when written. The world moved
+   underneath them, which is exactly the condition the guard exists to detect, so this is
+   the mechanism working rather than a defect in the spec.
+
+   Criterion 24's marker carries one thing that is not bookkeeping, and it is recorded
+   there rather than only in the literal because a guard described as stronger than it is
+   would be this issue's own defect one level up: **nothing left in `NOT_YET` is an
+   interlock.** `Transfer drill-down` was the only one and it has been spent. What
+   remains is a two-way pin between the two documents and the literal, a prompt for three
+   capabilities, and silence for a fourth.
