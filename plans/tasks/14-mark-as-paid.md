@@ -775,9 +775,23 @@ named is checkable by reading a file or running the suite.
     even when `awaiting_confirmation` is `true`. Task 13's criterion 12 is unchanged and
     unamended.
     (scenario: `a_transfer_row_without_provenance_offers_no_way_to_mark_it_paid`)
-43. An account with no member row draws no `Mark as paid` button on any row, while the pending
-    block still renders.
+43. An account with no member row draws no `Mark as paid` button on any row, because it never
+    reaches this screen at all; and a session view carrying a member this screen cannot
+    identify draws none either, while the pending block still renders.
     (scenario: `an_unlinked_account_is_offered_no_way_to_mark_anything_paid`)
+
+    > **Correction, 2026-09-07.** This criterion used to read "An account with no member row
+    > draws no `Mark as paid` button on any row, while the pending block still renders." Its
+    > second half is unreachable as stated, and the first half is true for a stronger reason
+    > than the one it gives. `app/app.js`'s `ledgerIsUp()` refuses a session view with no
+    > member, and boot raises the not-linked notice for one, so **an account with no member
+    > row never reaches the balances screen**: no row, no control and no pending block is
+    > drawn for it, and `balancesEntered()` asks for nothing. `balancesActingId()`'s null
+    > branch is still real and still does exactly what this criterion describes, but it is
+    > reached through a session view carrying a member with no `id` — which `ledgerIsUp()`
+    > admits, and which `app/app.js` already records as a case it handles. The scenario proves
+    > both halves: the notice case draws nothing at all, and the unidentifiable-member case
+    > renders the pending block, names nobody ` (you)`, and offers no control on any row.
 44. Two rows both payable by the acting member each carry their own button, their own status
     line and their own closure. Marking one changes nothing about the other.
     (scenario: `the_payer_can_mark_a_suggested_payment_as_paid`)
