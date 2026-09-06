@@ -1194,7 +1194,7 @@ WORKS_TODAY = {
 # still carries a reason naming what covers it instead, because an empty rule with no
 # explanation is a guard nobody can audit.
 #
-# Every reason says which of two strengths it has, and the two words are used strictly,
+# Every reason says which of three strengths it has, and the words are used strictly,
 # because reading a prompt as an interlock is exactly the mistake this section exists to
 # stop somebody making:
 #
@@ -1204,29 +1204,42 @@ WORKS_TODAY = {
 #   and writing a reason that is false, which is a deliberate edit and reads as one in
 #   a diff.
 #
-#   PROMPT. No `absent` rule. Something else goes red when the capability lands and its
-#   message says to move the bullets, but one string added to a literal clears that red
-#   while both documents stay stale, and that edit is textually indistinguishable from
-#   correct maintenance. The failure message is the whole of the enforcement.
+#   PROMPT. No `absent` rule. Some other test goes red on the obvious way of building
+#   the capability, and its message says to move the bullets. It is not a guarantee,
+#   for two measured reasons: one string added to a literal clears that red while both
+#   documents stay stale, and the red only comes at all if the capability is built the
+#   way the house style suggests. See the note on API_SURFACE below.
+#
+#   SILENCE. Neither. Nothing in this suite would notice the capability landing.
 #
 # Nothing below is an interlock. `Transfer drill-down` was the only one this section
 # ever had, and it has been spent: task 13 shipped, `.debt(` appeared in app/app.js
 # while both documents still called the capability missing, the rule fired, and the
-# entry moved to WORKS_TODAY. Adding an interlock needs a substring that a capability
-# cannot arrive without, and for the entries left that substring is not knowable in
-# advance.
+# entry moved to WORKS_TODAY.
+#
+# What API_SURFACE catches, measured rather than reasoned about, on 2026-09-07: it
+# compares the set of TOP-LEVEL KEYS of window.SplitwiseApi against a literal. A
+# capability arriving as a new key fires it. A capability arriving inside an existing
+# method does not. An expense-correction round trip added to the body of `addExpense`
+# was run against this suite's own parse and left the key set at fourteen, unchanged,
+# so test_the_api_client_offers_exactly_the_named_calls never fired. The three reasons
+# below that name that test describe the likely build, not a guarantee, and each says
+# so. Nothing here claims a capability cannot arrive without a new name.
 NOT_YET = {
     "Mark as paid": {
         "task": 14,
         "absent": (),
         "reason": (
-            "A PROMPT, not an interlock. Recording a payment is a round trip, and "
-            "app/api.js is the only file allowed to make one, so "
-            "test_the_api_client_offers_exactly_the_named_calls goes red the moment "
-            "the method appears, and its message names both lists in both documents. "
-            "That is where the enforcement stops: adding \"markPaid\" to API_SURFACE "
-            "turns the suite green again with this entry, and both bullets, untouched. "
-            "Whoever adds that string is the one who has to move them."
+            "A PROMPT, not an interlock, and only for the obvious build. Recording "
+            "a payment is a round trip, and app/api.js is the only file allowed to "
+            "make one. Written in house style it arrives as a new key on "
+            "window.SplitwiseApi, and "
+            "test_the_api_client_offers_exactly_the_named_calls goes red naming both "
+            "lists in both documents. Two things keep that short of a guarantee: "
+            "adding \"markPaid\" to API_SURFACE turns the suite green again with both "
+            "bullets untouched, and a round trip made from inside an existing method "
+            "adds no key, so the test never fires at all. Whoever builds this moves "
+            "the bullets, or nobody does."
         ),
     },
     "Receiver confirmation": {
@@ -1234,18 +1247,19 @@ NOT_YET = {
         "absent": (),
         "reason": (
             "A PROMPT, not an interlock, on the same terms as Mark as paid. "
-            "Confirming a settlement is a round trip too, so it cannot arrive without "
-            "a new name in API_SURFACE, which "
-            "test_the_api_client_offers_exactly_the_named_calls notices; and one "
-            "string in that set clears the red without either document moving. The "
-            "failure message is the whole of what holds this bullet honest."
+            "Confirming a settlement is a round trip too, so in house style it "
+            "arrives as a new name in API_SURFACE and "
+            "test_the_api_client_offers_exactly_the_named_calls notices. It does not "
+            "have to arrive that way, and one string in that set clears the red "
+            "without either document moving, so the failure message is the most this "
+            "entry offers and it is not promised."
         ),
     },
     "The incompleteness signal": {
         "task": 16,
         "absent": (),
         "reason": (
-            "NEITHER, and this is the honest end of the scale. Nothing in this suite "
+            "SILENCE, and this is the honest end of the scale. Nothing in this suite "
             "would catch this one, and pretending otherwise "
             "would be worse than saying so. Staleness can be computed on the client "
             "from the feed payload the app already fetches, adding no API method and "
@@ -1257,12 +1271,15 @@ NOT_YET = {
         "task": 17,
         "absent": (),
         "reason": (
-            "A PROMPT, not an interlock. Editing or voiding an expense appends an "
-            "event through the server, so it too has to add a name to API_SURFACE "
-            "first, and test_the_api_client_offers_exactly_the_named_calls fails when "
-            "it does. One string in that set is the whole cost of clearing that "
-            "failure with both documents left saying this cannot be done, so treat the "
-            "red as a reminder to move the bullets, not as a rule that makes you."
+            "A PROMPT on paper and, for the build that was actually tried, SILENCE. "
+            "Editing or voiding an expense appends an event through the server, so in "
+            "house style it adds a name to API_SURFACE and "
+            "test_the_api_client_offers_exactly_the_named_calls fails when it does. It "
+            "does not have to: a void route reached through the existing addExpense "
+            "key was run against this suite's own parse on 2026-09-07 and left the key "
+            "set unchanged at fourteen, so nothing fired. Treat a red here as a "
+            "reminder to move the bullets, and never treat its absence as evidence "
+            "that nothing landed."
         ),
     },
 }
@@ -1377,7 +1394,7 @@ def test_both_documents_agree_on_what_works_today() -> None:
             f"{sorted(keys - set(WORKS_TODAY)) or 'none'}\n"
             f"  recorded here but not claimed in {where}: "
             f"{sorted(set(WORKS_TODAY) - keys) or 'none'}\n"
-            "Both documents carry the same five keys. If the capability has landed, "
+            "Both documents carry the same keys. If the capability has landed, "
             "move its bullet from `What does not exist yet` to `What works today` in "
             "BOTH CLAUDE.md and README.md and move its entry from NOT_YET to "
             "WORKS_TODAY here, with evidence in app/ that must now be present. If it "
@@ -1399,7 +1416,7 @@ def test_both_documents_agree_on_what_does_not_exist_yet() -> None:
             f"{sorted(set(keys) - set(NOT_YET)) or 'none'}\n"
             f"  recorded here but not called missing in {where}: "
             f"{sorted(set(NOT_YET) - set(keys)) or 'none'}\n"
-            "Both documents carry the same five keys. If the capability has landed, "
+            "Both documents carry the same keys. If the capability has landed, "
             "move its bullet to `What works today` in BOTH CLAUDE.md and README.md and "
             "move its entry to WORKS_TODAY here. If it has not, the list it was taken "
             "out of is the honest place for it."
