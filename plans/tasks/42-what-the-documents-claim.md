@@ -250,8 +250,14 @@ establish the replacement guard actually bites.
    > exists to detect. That is the mechanism working, not a defect in the spec. The
    > `Transfer drill-down` sub-bullet and the amended `Balances` sub-bullet above come
    > with the key; criterion 6 loses it, criterion 7 loses its citation, and criterion 24
-   > inverts its evidence. The shape rule, the count of prose lines and the other five
-   > sub-bullets are untouched.
+   > inverts its evidence. The shape rule and the count of prose lines are untouched,
+   > and so are four of the six sub-bullets: `Sign in`, `The expense feed`,
+   > `Adding an expense` and `Install and open offline`. `Balances` is amended in place
+   > above, and `Transfer drill-down` is new.
+   >
+   > **Corrected 2026-09-07, after the second review of PR #59.** This sentence said
+   > "the other five sub-bullets are untouched". Six sub-bullets, one added and one
+   > amended, leaves four untouched, not five.
 5. A lead-in sentence before that list says that all of it needs a group created by
    `scripts/setup_group.py apply` and an account linked with `setup_group.py link`, and
    that signing up on its own shows the "nobody has linked you" notice and no ledger.
@@ -295,10 +301,20 @@ establish the replacement guard actually bites.
    > `8651b9d`, and the world moved underneath it, which is the situation the guard
    > exists to detect. That is the mechanism working, not a defect in the spec.
    >
-   > Backlog task 13's citation goes with its bullet into `What works today`, where
-   > citations are neither required nor read: only the second list is citation-checked,
-   > by `test_both_documents_agree_on_what_does_not_exist_yet`. `## 13.` still stands in
+   > Backlog task 13's citation was **dropped**, not moved. Only the second list is
+   > citation-checked, by `test_both_documents_agree_on_what_does_not_exist_yet`, so a
+   > citation in the first list is neither required nor read, and both `Transfer
+   > drill-down` bullets were written without one. `## 13.` still stands in
    > `plans/backlog.md`, and is now the record of a task that shipped.
+   >
+   > **Corrected 2026-09-07, after the second review of PR #59.** This paragraph said
+   > the citation "goes with its bullet into `What works today`". It does not: no
+   > citation exists in either file's first list, which `grep -n "backlog task 13"`
+   > confirms. The requirement in the criterion above was right; only this account of
+   > what happened to task 13's citation was wrong, and being wrong it concealed
+   > criterion 15's stale count of five, which is now amended too. A marker written to
+   > explain a correction is exactly as capable of being an unchecked claim as the
+   > thing it corrects.
 
 8. The `Transfer drill-down` bullet says that a screen asks the debts route, naming
    `GET /api/debts/{debtor}/{creditor}`, and says when: the debts behind a payment arrive
@@ -349,8 +365,17 @@ establish the replacement guard actually bites.
     what is built: the domain layer, the store, accounts and sessions, the group setup
     command, the HTTP API and all three screens.
 15. `README.md` carries the same two headings as criterion 3 and the same two lists, with
-    the same ten bold keys and the same five backlog citations. The prose differs from
+    the same ten bold keys and the same four backlog citations. The prose differs from
     `CLAUDE.md` freely; the keys and the numbers do not.
+
+    > **Amended 2026-09-07, after the second review of PR #59.** This criterion read
+    > "the same five backlog citations". Checked: both files carry `14`, `15`, `16`,
+    > `17` under `What does not exist yet` and no citation under `What works today`, and
+    > `grep -n "backlog task 13" CLAUDE.md README.md` returns nothing. Four, not five.
+    > Falsified by the same merge as criteria 4, 6, 7, 8, 24 and 35, by the same
+    > mechanism, and missed by the pass that amended those six. The ten keys are
+    > unaffected and were re-counted: six under the first heading, four under the
+    > second, in both files.
 16. `README.md`'s lists sit above `## Setup`, so a reader meets what the app does before
     how to install it.
 17. The rest of `README.md` is unchanged: `## Setup`, `## Set up the group`,
@@ -481,9 +506,17 @@ QA runs `git status` after each and records that the tree is clean.
     `test_both_documents_agree_on_what_does_not_exist_yet`. QA quotes both messages.
     Revert, and the suite is green again with the same passed count. **This is the
     criterion the task exists to satisfy: the guard catches a false claim.**
-30. **An invented capability turns the suite red.** In `CLAUDE.md` only, add a sixth
+30. **An invented capability turns the suite red.** In `CLAUDE.md` only, add a seventh
     bullet to the first list, `- **Recurring expenses** are entered once and repeat.`
-    The same two tests go red. Revert; green.
+    `test_both_documents_agree_on_what_works_today` goes red. Revert; green.
+
+    > **Amended 2026-09-07, after the second review of PR #59.** Two corrections, both
+    > to the description and neither to the probe. The bullet is a seventh now, not a
+    > sixth: criterion 4's first list gained `Transfer drill-down`. And "the same two
+    > tests go red" was already known to be wrong when this file was written, by
+    > deviation 1, which records that the probe touches the first list only so the
+    > second list's test has nothing to see. The criterion now says what deviation 1
+    > has said since the first run, so the two no longer contradict each other.
 31. **A capability arriving without the documents moving turns the suite red.** In
     `app/api.js`, add one method to the `window.SplitwiseApi` object, for instance
     `markPaid: function () { return call('POST', '/settlements', {}); },`. The suite goes
@@ -493,10 +526,30 @@ QA runs `git status` after each and records that the tree is clean.
     is precached, so any edit to it moves `SHELL_DIGEST`. QA records both failures, then
     `git checkout -- app/api.js` and confirms the suite is green and
     `git status app/` is clean.
-32. **A screen reaching for the drill-down turns the suite red.** In `app/app.js`, add
-    one line inside the balances block that calls `api.debt('a', 'b')`. The suite goes red
-    on `test_nothing_the_documents_call_missing_is_in_the_shell` (and on the digest test,
-    again expected). QA quotes the message, reverts, and confirms green and a clean tree.
+32. **A capability vanishing from the shell while the documents still promise it turns
+    the suite red.** In `app/app.js`, neutralise the one `api.debt(` call site in the
+    balances block. The suite goes red on
+    `test_every_capability_the_documents_claim_is_in_the_shell` (and on the digest test,
+    expected, because `app.js` is precached). QA quotes the message, reverts, and
+    confirms green and a clean tree.
+
+    > **Amended 2026-09-07, after the second review of PR #59.** This criterion read: "A
+    > screen reaching for the drill-down turns the suite red. In `app/app.js`, add one
+    > line inside the balances block that calls `api.debt('a', 'b')`. The suite goes red
+    > on `test_nothing_the_documents_call_missing_is_in_the_shell`." That probe can no
+    > longer produce that result. QA ran the old probe and reported that adding the call
+    > leaves the named test green and fires only the digest guard, which is what has to
+    > happen now that criterion 24 requires `api.debt(` to be **present**. The rule
+    > survives inverted, and the inverted probe is what this criterion now describes. I
+    > ran that one here before writing this: neutralising the single call site turns
+    > `test_every_capability_the_documents_claim_is_in_the_shell` and the digest test
+    > red, 2 failed and 133 passed in the doc suite, and the message names the
+    > capability, both documents and the missing substring. Reverted, tree clean,
+    > `SHELL_DIGEST` unmoved.
+    >
+    > This is the same falsification as criteria 4, 6, 7, 8, 15, 24 and 35, and reaches
+    > the criterion through this task's own amendment rather than through #56 directly:
+    > inverting criterion 24 is what made criterion 32 unrunnable.
 33. **The limit of the guard, demonstrated rather than assumed.** Add one false sentence
     to `README.md`'s free prose, outside both lists, for example a line under
     `## Run the app` saying "You can mark a payment as paid from the balances screen."
