@@ -1622,3 +1622,4 @@
 
   window.addEventListener('hashchange', balancesEntered);
 })();
+
