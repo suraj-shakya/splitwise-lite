@@ -6425,13 +6425,19 @@ def test_a_rejected_settlement_moves_no_balance_over_generated_ledgers(
         )
         receiver = linked_client(app, path, display_name=receiver_name)
 
+        # Snapshotted before the claim rather than between the claim and the answer,
+        # which is what makes this sensitive to the fold as well as to the endpoint. A
+        # pending claim moves nothing either, so with the guard in ``balances.py``
+        # present the two snapshots are the same Balances and this asserts no less
+        # than the other reading did; with that guard deleted, the claim alone moves a
+        # figure and this goes red, which is the third falsification criterion 38
+        # asks for and the reading between claim and answer could not see.
+        before = derived_balances(path, group.id)
+        payload_before = balances_of(payer)
         monkeypatch.setattr(web, "_now", lambda: at(15, index % 60))
         settlement_id = claim(
             payer, to_member_id=names[receiver_name], amount="7.25"
         )
-
-        before = derived_balances(path, group.id)
-        payload_before = balances_of(payer)
         monkeypatch.setattr(web, "_now", lambda: at(16, index % 60))
         assert decide(receiver, settlement_id, "rejected").status_code == 200
         after = derived_balances(path, group.id)
@@ -6444,13 +6450,10 @@ def test_a_rejected_settlement_moves_no_balance_over_generated_ledgers(
         payload_after = balances_of(payer)
         assert payload_after["currency"] == payload_before["currency"], index
         assert payload_after["net"] == payload_before["net"], index
-        # Every figure in the plan is where it was. ``awaiting_confirmation`` is the
-        # one thing a rejection moves, from true back to false, which is the rule
-        # criterion 32 states and is not a balance; task 14's own helper takes it out
-        # for the same reason it was written.
-        assert without_awaiting(payload_after["transfers"]) == without_awaiting(
-            payload_before["transfers"]
-        ), index
+        # Every key of the plan, ``awaiting_confirmation`` included: the claim was
+        # refused, so it marks no transfer as awaiting anybody and the plan is exactly
+        # what it was before anybody claimed anything.
+        assert payload_after["transfers"] == payload_before["transfers"], index
         checked += 1
     assert checked >= 50
 

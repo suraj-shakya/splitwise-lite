@@ -2106,3 +2106,78 @@ def test_the_figure_is_still_the_only_thing_that_refuses_to_wrap() -> None:
         if "white-space: nowrap" in body
     ]
     assert nowrap == [".balances-figure"]
+
+
+# --- Task 15: the receiver answers a claim ----------------------------------
+
+
+BALANCES_REJECTED_NOTE = (
+    "These were marked as paid and the person receiving the money did not confirm "
+    "them. They are not counted in the figures above, and whoever paid can mark the "
+    "payment again."
+)
+
+
+def test_the_rejected_block_ships_hidden_with_its_heading_note_and_empty_list() -> None:
+    # One wrapper with one hidden flag over the heading, the note and the list, for
+    # the reason task 14 gave: a bare "Not confirmed" over an empty list on an
+    # ordinary day is noise.
+    section = balances_section()
+    block = re.search(
+        r'<div\b[^>]*\bid="balances-rejected-block"[^>]*>(.*?)</div>', section, re.S
+    )
+    assert block is not None
+    assert "hidden" in balances_markup().find("div", id="balances-rejected-block")[0]
+    inside = block.group(1)
+    heading = re.search(r"<h2\b[^>]*>(.*?)</h2>", inside, re.S)
+    assert heading is not None
+    assert " ".join(heading.group(1).split()) == "Not confirmed"
+    note = re.search(r'<p class="balances-note">(.*?)</p>', inside, re.S)
+    assert note is not None
+    assert " ".join(note.group(1).split()) == BALANCES_REJECTED_NOTE
+    assert '<ul class="balances-list" id="balances-rejected"></ul>' in " ".join(
+        inside.split()
+    )
+
+
+def test_the_decision_line_ships_empty_and_announces_without_ever_hiding() -> None:
+    # A live region whose text changes while it is hidden announces nothing in several
+    # screen readers, so it is in the document from the start, empty, and is never
+    # given `hidden` in the markup or by the code. The app.js half is a ban, which is
+    # what PR #30 permits: one occurrence falsifies it.
+    section = balances_section()
+    line = balances_markup().find("p", id="balances-decision")[0]
+    assert "hidden" not in line
+    assert line["role"] == "status"
+    assert line["class"] == "balances-decision"
+    assert inner(section, "balances-decision", "p") == ""
+    source = (APP / "app.js").read_text(encoding="utf-8")
+    assert "decisionLine.hidden" not in source
+
+
+def test_the_two_things_task_fifteen_added_sit_in_the_stated_order() -> None:
+    # The outcome above every list a confirmation rebuilds, and the refused claims
+    # between the awaiting block and the suggestions, so the two things that explain
+    # why a payment is still suggested are read together.
+    section = balances_section()
+    assert (
+        section.index('id="balances-derived"')
+        < section.index('id="balances-decision"')
+        < section.index("Net positions")
+        < section.index('id="balances-pending-block"')
+        < section.index('id="balances-rejected-block"')
+        < section.index("Suggested payments")
+    )
+
+
+def test_the_two_additions_are_the_only_thing_task_fifteen_put_in_the_document() -> None:
+    # Every other section of the document is untouched: two elements go in, inside the
+    # balances section, and nothing else in index.html changes.
+    outside = markup().replace(balances_section(), "")
+    for owned in (
+        "balances-rejected",
+        "balances-decision",
+        "Not confirmed",
+        "did not confirm them",
+    ):
+        assert owned not in outside, owned
