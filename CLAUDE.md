@@ -27,6 +27,12 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
   row's first expansion, over `GET /api/debts/{debtor}/{creditor}`. A payment whose
   payload carries no usable provenance is drawn inert rather than as a control that
   answers nothing.
+- **Mark as paid**: the payer of a suggested payment records that they have made it, and
+  the claim shows to the whole group as awaiting confirmation. **No balance moves**: a
+  claim counts for nothing until the receiver confirms it, and nothing can confirm one
+  yet, so nothing recorded here clears a debt. Only the payer may mark a payment, and
+  only one claim per ordered pair at a time, so until the receiver answers that payer
+  cannot record a second payment to that person, a part payment included.
 - **Install and open offline**: it installs to the home screen and the shell opens
   offline, on `localhost` or `127.0.0.1` only. The API is never cached, so offline the
   app opens and then reports that it cannot reach the server, and an expense cannot be
@@ -41,11 +47,11 @@ and not recorded there turns the suite red, and so does editing this file and le
 capability and is recorded entry by entry in that literal. Read your entry's reason there
 before trusting the suite to catch you; none of it moves the bullet for you.
 
-- **Mark as paid** (backlog task 14): nothing records that a payment happened.
-- **Receiver confirmation** (backlog task 15): and so nothing confirms one, which means
-  a debt that has been settled in real life stays on the list until somebody records the
-  expense side of it. The two go together, because a balance moves only when the
-  receiver confirms.
+- **Receiver confirmation** (backlog task 15): a payment can be marked as paid, and
+  nothing answers it. The receiver sees the claim and has no way to confirm or reject it,
+  so a debt settled in real life stays on the list until somebody records the expense
+  side of it, and an unanswered claim blocks that pair. A balance moves only when the
+  receiver confirms, which is why marking on its own changes no figure.
 - **The incompleteness signal** (backlog task 16): nothing says how stale the ledger is
   or who has logged nothing. The balances screen's standing note, that the figures come
   only from what was recorded, is the whole of what the app says about it.

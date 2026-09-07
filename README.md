@@ -31,6 +31,12 @@ linked to a member row with `setup_group.py link`. Signing up on its own shows t
   entries behind a debt are fetched the first time you open that row, from
   `GET /api/debts/{debtor}/{creditor}`. A payment the server sends without usable
   provenance stays inert, because a control that answers nothing is worse than none.
+- **Mark as paid**: if a suggested payment is yours to make, say you have made it, and
+  the whole group sees it waiting on the person you paid. **It moves no figures**:
+  nothing is settled until they confirm, and nothing can confirm it yet, so the payment
+  stays on the list either way. You can mark only a payment you owe, and only one at a
+  time in each direction, so until they answer you cannot record another payment to that
+  person, which rules out recording half of what you owe.
 - **Install and open offline**: add it to the home screen and the shell opens with no
   network, on `localhost` or `127.0.0.1` only, the only two secure contexts here. The
   API is never cached, so offline you get the app and then a message that it cannot
@@ -43,11 +49,10 @@ and a test holds the two together, so the pair cannot drift apart. That is a nar
 guarantee than it looks: `CLAUDE.md` says what the suite does and does not notice when
 one of these is actually built.
 
-- **Mark as paid** (backlog task 14): there is no way to record that you have paid
-  somebody.
-- **Receiver confirmation** (backlog task 15): and nothing to confirm it with, so a debt
-  you settled in cash stays on the list until somebody enters the expense side of it.
-  The pair belongs together, because a balance moves only when the receiver confirms.
+- **Receiver confirmation** (backlog task 15): you can say you paid somebody, and they
+  have no way to answer. A debt you settled in cash stays on the list until somebody
+  enters the expense side of it, and a claim nobody answers blocks that pair for good. A
+  balance moves only when the receiver confirms, which is why marking changes nothing.
 - **The incompleteness signal** (backlog task 16): nothing tells you how stale the
   ledger is or who has stopped entering expenses. The note on the balances screen, that
   the figures come only from what was recorded, is all the app says about it.

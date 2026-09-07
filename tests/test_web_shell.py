@@ -1159,6 +1159,9 @@ API_SURFACE = {
     "addExpense",
     "balances",
     "debt",
+    # Task 14. The key that fired this section's `Mark as paid` prompt: it arrived, this
+    # test went red naming both documents, and the bullets moved.
+    "addSettlement",
 }
 
 # Capability key -> the (file under `app/`, substring) pairs that must all be PRESENT.
@@ -1182,6 +1185,16 @@ WORKS_TODAY = {
     "Transfer drill-down": (
         ("index.html", 'id="balances-drill-hint"'),
         ("app.js", "api.debt("),
+    ),
+    # Backlog task 14. Until it landed this key sat in NOT_YET as a PROMPT with no
+    # absent rule, and the prompt did what it said it would: `addSettlement` arrived on
+    # window.SplitwiseApi, test_the_api_client_offers_exactly_the_named_calls went red
+    # naming both documents, and that is what moved these bullets. The evidence is the
+    # block the payer's claim is drawn in and the call the screen makes, not the client
+    # key alone, which would prove only that the method exists unused.
+    "Mark as paid": (
+        ("index.html", 'id="balances-pending-block"'),
+        ("app.js", "api.addSettlement("),
     ),
     "Install and open offline": (
         ("app.js", "navigator.serviceWorker.register('sw.js')"),
@@ -1217,6 +1230,15 @@ WORKS_TODAY = {
 # while both documents still called the capability missing, the rule fired, and the
 # entry moved to WORKS_TODAY.
 #
+# One prompt has now been spent too, and it worked: `Mark as paid` was a PROMPT with no
+# absent rule, task 14 built it in house style, `addSettlement` arrived on
+# window.SplitwiseApi, test_the_api_client_offers_exactly_the_named_calls went red
+# naming both documents, and the bullets moved. One observation is not a guarantee, and
+# the reasons below still say what each entry is worth on its own terms: the two things
+# that keep a prompt short of a guarantee, a name added to API_SURFACE with the bullets
+# untouched and a round trip made from inside an existing method, were both open on that
+# build too and neither happened to be taken.
+#
 # What API_SURFACE catches, measured rather than reasoned about, on 2026-09-07: it
 # compares the set of TOP-LEVEL KEYS of window.SplitwiseApi against a literal. A
 # capability arriving as a new key fires it. A capability arriving inside an existing
@@ -1225,28 +1247,17 @@ WORKS_TODAY = {
 # so test_the_api_client_offers_exactly_the_named_calls never fired. The three reasons
 # below that name that test describe the likely build, not a guarantee, and each says
 # so. Nothing here claims a capability cannot arrive without a new name.
+#
+# Both measurements in this section were taken while the set held fourteen keys. Task 14
+# has since added `addSettlement` and it holds fifteen. The measurements are about what
+# the parse notices, not about the number, so they stand as taken.
 NOT_YET = {
-    "Mark as paid": {
-        "task": 14,
-        "absent": (),
-        "reason": (
-            "A PROMPT, not an interlock, and only for the obvious build. Recording "
-            "a payment is a round trip, and app/api.js is the only file allowed to "
-            "make one. Written in house style it arrives as a new key on "
-            "window.SplitwiseApi, and "
-            "test_the_api_client_offers_exactly_the_named_calls goes red naming both "
-            "lists in both documents. Two things keep that short of a guarantee: "
-            "adding \"markPaid\" to API_SURFACE turns the suite green again with both "
-            "bullets untouched, and a round trip made from inside an existing method "
-            "adds no key, so the test never fires at all. Whoever builds this moves "
-            "the bullets, or nobody does."
-        ),
-    },
     "Receiver confirmation": {
         "task": 15,
         "absent": (),
         "reason": (
-            "A PROMPT, not an interlock, on the same terms as Mark as paid. "
+            "A PROMPT, not an interlock, on the terms Mark as paid sat here on until "
+            "task 14 landed it. "
             "Confirming a settlement is a round trip too, so in house style it "
             "arrives as a new name in API_SURFACE and "
             "test_the_api_client_offers_exactly_the_named_calls notices. It does not "
