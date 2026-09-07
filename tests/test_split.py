@@ -262,7 +262,7 @@ def test_split_by_weight_rejects_a_negative_weight() -> None:
 
 
 def test_split_by_weight_rejects_weights_that_all_sum_to_zero() -> None:
-    with pytest.raises(InvalidSplit, match="zero"):
+    with pytest.raises(InvalidSplit, match=r"^weights sum to zero, so there is no share"):
         split_by_weight(1000, {ALI: 0, BO: 0}, currency=AUD)
 
 
@@ -398,7 +398,7 @@ def test_split_equally_rejects_an_empty_member_list() -> None:
 
 
 def test_split_equally_rejects_a_repeated_member() -> None:
-    with pytest.raises(InvalidSplit, match="more than once"):
+    with pytest.raises(InvalidSplit, match=r"^member_ids names a member more than once"):
         split_equally(1000, [ALI, BO, ALI], currency=AUD)
 
 
