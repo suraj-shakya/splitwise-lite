@@ -269,6 +269,19 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
     exception the same call can raise would match it; and the escape hatch, that a deliberate
     substring pin carries `# unanchored: <why>` on the `pytest.raises` call. A test asserts each
     element.
+
+    > **Corrected 2026-09-07, after the first review of PR #69.** The collision above is stated
+    > here in the present tense about live source — "`Money` says" — and the implemented message
+    > states it in the past tense with its provenance: "Measured on `7bf518c` (2026-09-07),
+    > `money.py:148` said ...". The elements the criterion requires are unchanged; only the tense
+    > and the date are added. The reason is rule (d)'s own defect: the claim was undated, present
+    > tense, and duplicated across this criterion, `.claude/rules/testing.md` rule (a) and
+    > `unanchored_pin_message`, while the only test on it asserts the substring against a message
+    > the same file builds. Were `money.py:148` reworded, three documents would become false and
+    > nothing would go red. Pinning it against live source is not available: criterion 2 forbids
+    > importing `splitwise_lite`, which is the right constraint, because the module must run when
+    > the package will not import. A date is what a claim that cannot be pinned carries instead.
+
 22. `test_every_message_pin_is_anchored_or_says_why` is parametrised over `TEST_SOURCES` with the
     POSIX path as the id, and reports every offending pin in that file in one failure.
 23. `test_the_pin_check_still_bites` is written in the shape of
@@ -636,10 +649,14 @@ thirteen pins was anchorable against the message its guard really prints, so no 
 escape hatch. The marker mechanism is exercised only by the synthetic sources in
 `test_the_pin_check_still_bites`, which is where its accept and refuse cases are pinned.
 
-**Count arithmetic.** 2343 on master, plus 49 added by `tests/test_suite_integrity.py`, equals
-**2392**, which is what the suite reports with 0 failed, 0 skipped and 0 xfailed. The pin work
-adds none and removes none. The 49 are **15 single tests plus 2 checks parametrised over 17 test
-modules** (2 x 17 = 34; 15 + 34 = 49):
+**Count arithmetic.** 2343 on master, plus 50 added by `tests/test_suite_integrity.py`, equals
+**2393**, which is what the suite reports with 0 failed, 0 skipped and 0 xfailed. The pin work
+adds none and removes none. The 50 are **16 single tests plus 2 checks parametrised over 17 test
+modules** (2 x 17 = 34; 16 + 34 = 50):
+
+*Was 49 and 2392 when this PR was opened. The fiftieth test is
+`test_the_duplicate_check_reports_three_bindings_as_one_finding`, added after review; see the
+review round below.*
 
 * Parametrised, 17 cases each, one per `*.py` file under `tests/` (16 modules on master plus
   `tests/test_suite_integrity.py` itself): `test_no_test_module_defines_a_name_twice`,
@@ -658,7 +675,48 @@ modules** (2 x 17 = 34; 15 + 34 = 49):
   `test_every_recorded_mutation_is_machine_readable`,
   `test_a_mutation_record_holds_no_prose_only_section`,
   `test_the_testing_rules_keep_the_three_they_had`,
-  `test_the_testing_rules_name_the_mechanisms_that_enforce_them`.
+  `test_the_testing_rules_name_the_mechanisms_that_enforce_them`,
+  `test_the_duplicate_check_reports_three_bindings_as_one_finding`.
+
+**The review round, and a fourth check that could not fail.** The first review of PR #69
+found one, in this module, and it is worth recording rather than quietly fixing, because it
+is the same defect as the three issues this task closes.
+
+`record_files()` returned `[]` when `plans/mutations/` was absent, so
+`test_every_recorded_mutation_is_machine_readable` and
+`test_a_mutation_record_holds_no_prose_only_section` both passed **green over nothing** with
+the directory deleted or the record file renamed. Verified by pointing `MUTATIONS` at a
+nonexistent path and calling both.
+`test_the_testing_rules_name_the_mechanisms_that_enforce_them` did not cover it, because it
+greps the literal string `plans/mutations/` out of the rules file and that string survives the
+directory it names, so rule (e) could have ended up naming a directory that was gone with the
+suite green — the outcome criterion 42 exists to prevent.
+
+The answer was already in this module 500 lines earlier, in
+`assert TEST_SOURCES, "TEST_SOURCES is empty, so both checks below check nothing."`, and
+`record_files()` now carries the same guard twice: the directory must exist, and it must hold
+at least one record file, README.md not counting as one. Both cases were re-probed after the
+fix and both go red.
+
+That a module written to refuse checks which report success without exercising what they name
+shipped one of its own, past an author who had just spent a day on exactly that failure mode,
+is the strongest argument in this PR for the reviewer being a second pair of eyes rather than a
+formality.
+
+**Two claims re-registered after review.** Rule (a) in `.claude/rules/testing.md` stated the
+`Money` collision in the present tense about live source, undated, and duplicated the claim into
+`unanchored_pin_message` and criterion 21, pinned only by a test asserting the substring against
+a message the same file builds. That is rule (d)'s own defect. All three now say
+"Measured on `7bf518c` (2026-09-07), `money.py:148` said ...", matching criterion 39's marker,
+which quotes its sha beside its measurement. `plans/mutations/65-message-pins.md` likewise now
+records the tree its messages were taken against, since a record quotes a measurement and a
+measurement carries its provenance.
+
+**The Size estimate was out by about three times.** That section budgets "roughly 250 lines" for
+`tests/test_suite_integrity.py`; it is 803 lines at `7bf518c` plus this review round. The excess
+is mostly the synthetic source
+constants and the two message-element tests that criteria 6 and 21 mandate, so it is spec-driven
+rather than sprawl, but anybody budgeting from that section should treat 250 as low.
 
 Because both parametrised checks are driven by `TESTS.rglob("*.py")`, this number moves on its
 own: a later task that adds one test module adds three tests, its own plus one case in each check.

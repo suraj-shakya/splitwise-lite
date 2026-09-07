@@ -20,9 +20,12 @@ exercising what it named.
   match. Lead with `^` and spell enough of the message that no other exception the same
   call can raise would match it. Scar: on PR #62 a test written to prove the currency is
   validated before the total stayed green with the guard deleted, and the first proposed
-  repair, `match="currency must be a Currency"`, had the same defect, because `Money`
-  says `Money currency must be a Currency, ...`, which contains the shorter sentence
-  from index 6. A deliberate substring pin carries `# unanchored: <why>`, and
+  repair, `match="currency must be a Currency"`, had the same defect. Measured on
+  `7bf518c` (2026-09-07), `money.py:148` said `Money currency must be a Currency, ...`,
+  which contained the shorter sentence from index 6, so the loose pattern was satisfied
+  by `Money`'s refusal rather than by the guard under test. If that wording has since
+  changed the collision is a different one, and the rule is unchanged, because `match=`
+  is still an `re.search`. A deliberate substring pin carries `# unanchored: <why>`, and
   `tests/test_suite_integrity.py` refuses one without a reason. The anchored form looks
   like `match=r"^currency must be a Currency"`.
 - **A test function defined twice in one module deletes the first one.** Python rebinds

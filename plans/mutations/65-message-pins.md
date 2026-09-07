@@ -6,7 +6,11 @@ Seven guard deletions covering all thirteen unanchored pins. Every run set
 is what the guard really prints, captured from a run against the unmutated tree, and
 it is what each anchored pattern was derived from.
 
-See `README.md` in this directory for the format and the recipe.
+Taken against `7bf518c` on 2026-09-07, on branch `task-hygiene`. A record quotes a
+measurement, so it carries the tree it was measured on: if an anchor below no longer
+matches exactly once, that is the tree to diff against rather than a defect in the
+record. The suite deliberately does not re-verify these anchors; see `README.md` in
+this directory for that reasoning, and for the format and the recipe.
 
 ## The weights-sum-to-zero refusal in split.py
 

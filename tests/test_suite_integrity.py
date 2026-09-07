@@ -122,6 +122,16 @@ def unparsable_message(where: str, exc: SyntaxError) -> str:
 # Module-level assignments are NOT checked. A rebound constant is visible where it is
 # written and deletes no collected case; a rebound `def` does. Including assignments
 # would add false positives for a failure of a different kind.
+#
+# Read that narrowly: it is a claim about assignment over assignment, not about the
+# whole category. One case IS uncovered and is knowingly left so. An assignment or an
+# import that lands on a name a `def` in the same module body already bound does delete
+# a collected test — `def test_a` then `test_a = None`, or `def helper` then
+# `from os.path import join as helper` — and neither is flagged here, because neither
+# is a FunctionDef, AsyncFunctionDef or ClassDef. Nothing in `tests/` looks like that
+# today. If it is ever worth closing, the cheap form is to flag only a binding that
+# collides with a `def` already made in the same module body, which has almost none of
+# the false-positive surface that checking assignments at large would.
 
 
 def module_definitions(source: str, where: str) -> list[tuple[str, int]]:
@@ -251,6 +261,19 @@ class Thing:
     pass
 """
 
+THREE_BINDINGS = """\
+def shadowed() -> None:
+    pass
+
+
+def shadowed() -> None:
+    pass
+
+
+def shadowed() -> None:
+    pass
+"""
+
 
 def test_the_duplicate_check_catches_a_duplicate_test() -> None:
     findings = duplicate_definitions(DUPLICATE_TEST, "<synthetic>")
@@ -281,6 +304,20 @@ def test_the_duplicate_check_leaves_a_nested_definition_alone() -> None:
     twice, so none of them is a finding.
     """
     assert duplicate_definitions(NESTED_ONLY, "<synthetic>") == []
+
+
+def test_the_duplicate_check_reports_three_bindings_as_one_finding() -> None:
+    """A name bound three times is one finding carrying three line numbers.
+
+    Not two findings, and not one finding naming only the first collision. The message
+    helper is fed three line numbers by its own test; this pins that the walk really
+    produces three, which nothing else asserted.
+    """
+    findings = duplicate_definitions(THREE_BINDINGS, "<synthetic>")
+    assert len(findings) == 1
+    name, lines = findings[0]
+    assert name == "shadowed"
+    assert lines == [1, 5, 9]
 
 
 def test_the_duplicate_check_looks_at_one_module_at_a_time() -> None:
@@ -350,6 +387,16 @@ def message_pins(source: str, where: str) -> list[tuple[int, int, str | None]]:
     The callee decides candidacy before any keyword is read, so ``re.match(...)`` is
     never a candidate in the first place rather than being excluded by a later test,
     and an assignment to a variable named ``match`` is not a keyword argument at all.
+
+    What that also excludes, so the next author does not read this as broader than it
+    is: ``excinfo.match(...)``, pytest's other pin idiom with identical ``re.search``
+    semantics, gets no check at all; nor does ``raises`` aliased to another name at
+    import, nor a ``match`` passed through ``**kwargs``, where the keyword's ``arg`` is
+    ``None``. All three have zero occurrences in ``tests/`` today. Matching on the bare
+    attribute name also means an unrelated ``foo.raises(X, match="y")`` would be treated
+    as a pin, which criterion 18 asks for, since the check must accept both
+    ``pytest.raises(...)`` and a bare ``raises(...)``; it errs toward flagging, which is
+    the safe direction.
     """
     tree = parsed(source, where)
     pins: list[tuple[int, int, str | None]] = []
@@ -430,10 +477,13 @@ def unanchored_pin_message(where: str, line: int, pattern: str | None) -> str:
         opening + "\n"
         "\n"
         "match= is an re.search, not a full match, so a pattern that matches a "
-        "superstring pins nothing. Money says "
-        "'Money currency must be a Currency, ...', which contains "
+        "superstring pins nothing. Measured on 7bf518c (2026-09-07), money.py:148 said "
+        "'Money currency must be a Currency, ...', which contained "
         "'currency must be a Currency' from index 6, so on PR #62 both the broken "
-        "test and its first proposed repair passed with the guard deleted.\n"
+        "test and its first proposed repair passed with the guard deleted. That "
+        "wording is quoted as it was on that date and is not re-read from source "
+        "here; if it has changed, the collision is a different one and this rule is "
+        "unchanged.\n"
         "\n"
         "The fix is a leading ^ plus enough of the message that no other exception "
         "the same call can raise would match it.\n"
@@ -509,6 +559,14 @@ def test_the_pin_check_still_bites() -> None:
     assert len(flagged) == 1
     assert flagged[0][2] is None
     # g. re.match is not a pin, in either of the two shapes test_web_shell.py holds.
+    #
+    # These two hold by construction and cannot fail under any mutation of this AST
+    # implementation: re.match passes its pattern positionally, so there is no match=
+    # keyword to find, and `match = re.match(...)` is an assignment rather than a
+    # keyword argument. They guard against a future rewrite that scans text or regexes
+    # instead of the tree, not against this one. The assertion that keeps this section
+    # from being vacuous today is the dict(match=...) one below, which is the only case
+    # here that goes red if the callee filter is dropped or reordered.
     assert message_pins(NOT_A_PIN_RE_MATCH, "<g1>") == []
     assert message_pins(NOT_A_PIN_ASSIGNED, "<g2>") == []
     assert unanchored_pins(NOT_A_PIN_RE_MATCH, "<g1>") == []
@@ -576,10 +634,29 @@ RESULTS = {"killed", "survived", "killed-for-the-wrong-reason"}
 
 
 def record_files() -> list[Path]:
-    """Every mutation record file, which is every markdown file but the README."""
-    if not MUTATIONS.is_dir():
-        return []
-    return sorted(p for p in MUTATIONS.glob("*.md") if p.name != "README.md")
+    """Every mutation record file, which is every markdown file but the README.
+
+    Refuses an empty answer, for the same reason ``TEST_SOURCES`` does: returning ``[]``
+    when the directory is gone would let both checks below pass green over nothing,
+    which is the shape of defect this whole module exists to refuse. The rules file
+    names this directory in rule (e), and
+    ``test_the_testing_rules_name_the_mechanisms_that_enforce_them`` cannot catch its
+    deletion, because that check greps the literal string out of the rules file and the
+    string survives the directory.
+    """
+    assert MUTATIONS.is_dir(), (
+        f"{posix(MUTATIONS)} does not exist, so both mutation checks below would "
+        "check nothing and pass. Rule (e) of .claude/rules/testing.md names that "
+        "directory as where a mutation is recorded; if it has moved, move the rule and "
+        "this constant with it rather than leaving a green suite behind."
+    )
+    found = sorted(p for p in MUTATIONS.glob("*.md") if p.name != "README.md")
+    assert found, (
+        f"{posix(MUTATIONS)} holds no record file, so both mutation checks below would "
+        "check nothing and pass. Every mutation claimed in a PR is recorded there, one "
+        "file per task or issue, and README.md alone is not a record."
+    )
+    return found
 
 
 def mutation_record_problems(record: object, seen: set[str]) -> list[str]:
