@@ -287,14 +287,14 @@ def test_events_that_is_not_iterable_raises_type_error() -> None:
 
 def test_an_element_that_is_not_a_ledger_event_raises_type_error_naming_it() -> None:
     not_an_event = {"total": 1000}
-    with pytest.raises(TypeError, match="dict"):
+    with pytest.raises(TypeError, match=r"^events may only contain ledger events, got dict"):
         derive_balances([not_an_event], group_id=GROUP, currency=AUD)
-    with pytest.raises(TypeError, match="NoneType"):
+    with pytest.raises(TypeError, match=r"^events may only contain ledger events, got NoneType"):
         settlement_states([None])
 
 
 def test_a_group_id_that_is_not_a_str_raises_type_error() -> None:
-    with pytest.raises(TypeError, match="int"):
+    with pytest.raises(TypeError, match=r"^group_id must be a str, got int"):
         derive_balances([], group_id=7, currency=AUD)
 
 
@@ -304,7 +304,7 @@ def test_an_empty_group_id_is_a_domain_error() -> None:
 
 
 def test_a_currency_that_is_not_a_currency_raises_type_error() -> None:
-    with pytest.raises(TypeError, match="str"):
+    with pytest.raises(TypeError, match=r"^currency must be a Currency, got str"):
         derive_balances([], group_id=GROUP, currency="AUD")
 
 
@@ -328,7 +328,7 @@ def test_a_foreign_settlement_is_rejected_too() -> None:
         amount=1000,
         group_id=OTHER_GROUP,
     )
-    with pytest.raises(InvalidLedger, match="s-foreign"):
+    with pytest.raises(InvalidLedger, match=r"^settlement 's-foreign' belongs to group 'group-holiday'"):
         derive_balances([foreign], group_id=GROUP, currency=AUD)
 
 
@@ -372,7 +372,7 @@ def test_a_repeated_expense_id_is_a_domain_error_naming_the_id() -> None:
         expense("e1", payer=ALI, total=1000, shares={BO: 1000}),
         expense("e1", payer=ALI, total=1000, shares={BO: 1000}, minute=1),
     ]
-    with pytest.raises(InvalidLedger, match="e1"):
+    with pytest.raises(InvalidLedger, match=r"^the same expense id appears twice in the ledger: 'e1'$"):
         derive_balances(events, group_id=GROUP, currency=AUD)
 
 
@@ -381,9 +381,9 @@ def test_a_repeated_settlement_id_is_a_domain_error_naming_the_id() -> None:
         settlement("s1", payer=BO, receiver=ALI, amount=1000),
         settlement("s1", payer=BO, receiver=ALI, amount=1000, minute=1),
     ]
-    with pytest.raises(InvalidLedger, match="s1"):
+    with pytest.raises(InvalidLedger, match=r"^the same settlement id appears twice in the ledger: 's1'$"):
         derive_balances(events, group_id=GROUP, currency=AUD)
-    with pytest.raises(InvalidLedger, match="s1"):
+    with pytest.raises(InvalidLedger, match=r"^the same settlement id appears twice in the ledger: 's1'$"):
         settlement_states(events)
 
 
@@ -393,7 +393,7 @@ def test_a_repeated_decision_id_is_a_domain_error_naming_the_id() -> None:
         decision("d1", settlement_id="s1", state=SettlementState.CONFIRMED, minute=1),
         decision("d1", settlement_id="s1", state=SettlementState.REJECTED, minute=2),
     ]
-    with pytest.raises(InvalidLedger, match="d1"):
+    with pytest.raises(InvalidLedger, match=r"^the same settlement decision id appears twice in the ledger: 'd1'$"):
         settlement_states(events)
 
 
@@ -409,9 +409,9 @@ def test_both_public_functions_refuse_a_log_that_double_counts_an_expense() -> N
         expense("e1", payer=ALI, total=1000, shares={BO: 1000}, minute=1),
         settlement("s1", payer=BO, receiver=ALI, amount=100, minute=2),
     ]
-    with pytest.raises(InvalidLedger, match="e1"):
+    with pytest.raises(InvalidLedger, match=r"^the same expense id appears twice in the ledger: 'e1'$"):
         derive_balances(events, group_id=GROUP, currency=AUD)
-    with pytest.raises(InvalidLedger, match="e1"):
+    with pytest.raises(InvalidLedger, match=r"^the same expense id appears twice in the ledger: 'e1'$"):
         settlement_states(events)
 
 
