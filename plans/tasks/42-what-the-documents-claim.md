@@ -17,13 +17,12 @@ two literals in `tests/test_web_shell.py`. Every sentence in this file that woul
 what the guard catches points there instead of paraphrasing it, and where a paraphrase
 existed it has been deleted rather than corrected.
 
-Four review rounds established the need. Round one found a hard-coded count above the
-lists; round two amended six criteria; round three swept and found six more, two of them
-inside round two's own correction notes; round four found three more, one of which
-falsified round three's closing claim that no copy of the guarantee survived. Each round
-corrected the copies it was shown and left the others standing. A guarantee restated in
-four places is four things that can go stale, and prose has no digest to notice when one
-of them does.
+Repeated review rounds established the need, each correcting the copies it was shown and
+leaving the rest standing, including copies inside the previous round's own correction
+notes. A guarantee restated in several places is several things that can go stale, and
+prose has no digest to notice when one of them does. The dated markers below record what
+each round changed; this paragraph deliberately does not tally them, because a
+hand-maintained count of the rounds is the same defect one level up.
 
 ## Why this task exists
 
