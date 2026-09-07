@@ -711,12 +711,230 @@ refuse a collision, so run that module before settling on one.
 
 ## Findings
 
-*Filled in by the implementer before the PR is opened, per criterion 48. It must cover: the
-three outcomes of criterion 27 with the exact commands and messages; the outcome of
-criterion 28 including the confirmation that task 13's existing blockquote does not trip
-the scan; the `SHELL_DIGEST` line pasted, before and after; the CI pass count from both
-legs and the arithmetic reaching 2485; and any row of the audit table above that turned out
-to be wrong when checked against the tree.*
+Filled in on 2026-09-07. Branch `task-58`, rebased twice: first onto `38ebc1e` (issue #19's
+end-to-end walk), then onto `c685cee` (issue #57's feed render path), which is what the
+"Two branches, one digest" section said would happen. #57 landed first and changed nothing
+under `app/`, so its merge did not move `SHELL_DIGEST` and this branch's recorded value
+survived the rebase unchanged.
+
+### Criterion 27a: the #56 defect in the form it can still take
+
+Appended to the balances block in `app/styles.css`:
+
+```css
+.balances-fake-line {
+  display: block;
+  font-size: 17px;
+  white-space: nowrap;
+}
+```
+
+`uv run python -m pytest tests/test_web_shell.py` → **3 failed, 143 passed**:
+
+* `test_nothing_in_the_shell_takes_the_break_rule_back`, first, with
+  `The selectors in app/styles.css refusing a wrap are ['.balances-fake-line', '.balances-figure', '.tab']. Exactly two are allowed, .balances-figure and .tab, because both hold text of fixed shape. Anything else carrying `white-space: nowrap` cannot use the inherited `overflow-wrap: anywhere`, because nowrap leaves it no soft wrap opportunity to take, which is the form the PR #56 defect can still take.`
+* `test_the_figure_is_still_the_only_thing_that_refuses_to_wrap`, with
+  `assert ['.balances-figure', '.balances-fake-line'] == ['.balances-figure']`
+* `test_the_recorded_digest_matches_the_files_it_covers`, which is not part of the
+  demonstration: it fires on **any** edit to a precached file and says nothing about
+  wrapping. It is listed here rather than filtered out, because a demonstration that
+  hides part of its own output is the thing this task is about.
+
+Removed; `146 passed`.
+
+One correction to the criterion was needed to get this result, and it is a real one. On the
+first run the message that fired named no selector: the `white-space` **count** assertion
+was written before the selector **equality**, so the reader got
+`declares white-space 3 times, with values ['nowrap', 'nowrap', 'nowrap']`, which does not
+say where to look. Both assertions fire on the same edit, so the equality now goes first
+and the count second, with a comment saying why. Criterion 27a is what caught that, which
+is the argument for demonstrating a check rather than reading it.
+
+### Criterion 27b: the #56 defect as literally written — **green, and correct**
+
+`.balances-fake-line` deleted, and three name-bearing classes in the #56 shape appended
+with no `overflow-wrap` of their own:
+
+```css
+.balances-fake-pending-line { display: block; font-size: 17px; }
+.balances-fake-decision     { margin: 0; font-size: 16px; }
+.balances-fake-rejected-line { display: block; font-size: 17px; }
+```
+
+`uv run python -m pytest tests/test_web_shell.py` → **1 failed, 145 passed**, and the one
+failure is `test_the_recorded_digest_matches_the_files_it_covers`, for the mechanical reason
+above. To leave no room for doubt that the module is otherwise green, the digest the test
+printed was pasted (`03cf37d5a0d4`, temporary) and the module re-run: **146 passed**. Both
+runs are recorded; the second is the answer to the criterion.
+
+**This green is correct, and it is not the old blindness.** All three classes inherit
+`overflow-wrap: anywhere` from `body`, so all three are protected, so there is nothing for
+a check to refuse. A suite that went red here would be asserting a requirement that no
+longer exists: that each text-bearing class carry its own copy of a declaration the root
+already provides. The requirement that replaced it is that the root declaration exists and
+that nothing takes it back, which is what 27a and 27c exercise. Anybody reading this green
+later should read it as *the class of defect is gone*, not as *the check cannot see it*.
+
+Both the three classes and the temporary digest were reverted with
+`git checkout app/styles.css app/sw.js`; `146 passed`.
+
+### Criterion 27c: deleting the declaration that makes 27b correct
+
+`overflow-wrap: anywhere` deleted from the `body` rule.
+`uv run python -m pytest tests/test_web_shell.py` → **2 failed, 144 passed**:
+
+* `test_one_declaration_lets_every_long_word_in_the_shell_break`, with
+  `Failed: no overflow-wrap declaration was found in app/styles.css.` followed by the
+  prose saying it must be declared exactly once, in the `body` rule, with the value
+  `anywhere`, and why each of those three is the requirement.
+* the digest test, again mechanically.
+
+Restored; `146 passed`. This is the honest version of "the check catches #56": the thing
+protecting those three classes is the root declaration, and the suite notices when it goes.
+
+### Criterion 28: the document check bites
+
+Added to `plans/tasks/12-balances-screen.md` as an ordinary criterion line, not a
+blockquote: ``- Demonstration for issue #58: `document.documentElement.scrollWidth === clientWidth`.``
+
+`uv run python -m pytest tests/test_suite_integrity.py` → **1 failed, 53 passed**, on
+`test_no_document_asks_for_the_measurement_that_cannot_fail`, with the finding opening
+`plans/tasks/12-balances-screen.md:394 names `documentElement`:`, the offending line quoted
+beneath it, the reason the comparison is constant in this shell, and the substitute
+`el.scrollWidth > el.clientWidth, over `.content` and every element inside it, and over each rendered row container`
+plus both caveats. The path is POSIX on Windows, via `posix()`.
+
+Exactly **one** finding, which is the confirmation the criterion asks for: task 13's
+existing note at `plans/tasks/13-transfer-drill-down.md:908` contains the same literal
+inside a `>` blockquote and does not trip the scan. Removed; `54 passed`.
+
+### `SHELL_DIGEST`
+
+Before: `var SHELL_DIGEST = '00e523e1e797';`
+After: `var SHELL_DIGEST = '97ceadab5f07';`
+
+Pasted verbatim from `test_the_recorded_digest_matches_the_files_it_covers`. `VERSION` stays
+`'v4'`. The value was re-checked after the rebase onto `c685cee` and is still correct, since
+#57 touched nothing under `app/`.
+
+### The count, and the arithmetic
+
+**The spec's 2485 is stale, and so is the 2481 it was computed from.** `master` moved twice
+while this task was in flight:
+
+| | count | why |
+|---|---|---|
+| `889399a`, the base the spec was written against | 2481 | |
+| `38ebc1e`, issue #19 | 2484 | +3: one end-to-end test, plus two suite-integrity ids, because that module derives its module list from the filesystem and a new test module arrives already covered |
+| `c685cee`, issue #57 | 2498 | +14 in the JavaScript half |
+
+So the arithmetic reaching this branch's number is **2498 − 1 + 3 + 2 = 2502**:
+
+* **−1** `test_every_line_that_carries_a_name_can_break_a_long_one`, deleted with
+  `CARRIES_A_NAME` (criterion 15).
+* **±0** `test_a_long_display_name_wraps_rather_than_being_cut_off` replaced by
+  `test_no_balances_rule_declares_a_break_of_its_own` (criterion 16). One out, one in.
+* **+3** the stylesheet checks (criteria 10 to 12).
+* **+2** the document scan and its message test (criteria 20 and 21). Not parametrised, on
+  purpose, so this arithmetic stays exact.
+
+`uv run python -m pytest --collect-only -q` on this branch: **2502**. Chunked runs, all with
+0 failed, 0 skipped, 0 xfailed:
+
+* `tests/test_web_shell.py` — 146 passed (144 + 3 − 1)
+* `tests/test_suite_integrity.py` — 54 passed (52 + 2)
+* `tests/test_shell_behaviour.py` — 172 passed, unchanged by this task
+
+CI, both legs, is the oracle for the total. **CI: to be recorded on the PR the moment both
+legs report.** The workflow triggers on `pull_request` and the available token cannot
+dispatch a `workflow_dispatch` run, so the CI number is not obtainable before the PR exists;
+criterion 48 asks for it before the PR is opened, which is not possible in that order. The
+arithmetic above is what CI is being reconciled against, and if CI reports anything other
+than 2502 the difference is chased before this is called ready.
+
+### The audit table, re-checked against the tree
+
+Every load-bearing row holds. Confirmed: `app/styles.css` carried exactly fifteen
+`overflow-wrap` declarations, at the fifteen lines listed, fourteen `break-word` and one
+`anywhere`; `.curtain-text` and `.curtain-error` had none; `display_name` is capped at
+**100** by `CHECK (length(display_name) BETWEEN 1 AND 100)` at `store.py:551` and `:578`,
+not 40, and `description` at **500** by `store.py:619`; `#gate-error` carries
+`class="curtain-error"` and `#notice-problem` carries `class="curtain-text"`; and the gate
+is `<div class="curtain gate" id="gate">`, a flex sibling of `<main>`, so neither
+`.balances-list` nor `.content` could ever have reached it.
+
+Three refinements, none of which changes a decision:
+
+1. **`.expense-when` is in the shared `anywhere` rule and the table omits it.** The rule at
+   `master`'s `app/styles.css:258-266` has six selectors, not the five the table lists. It
+   carries a formatted date, so it was bounded and correctly protected either way.
+2. **`.curtain-text` is on three elements, not one.** `#gate-lede`, `#notice-unlinked` and
+   `#notice-problem`. The table names only `#notice-problem`, which is the one that carries
+   the server's own sentence; the other two are fixed literals in the markup. The row's
+   conclusion, that the class renders unbounded server prose with no protection, is right.
+3. **Exactly one rule became empty**, `.balances-entry-effect`'s second rule, as criterion 3
+   predicted. Checked mechanically over the comment-stripped file rather than by eye.
+
+### Two forced wording choices, recorded
+
+1. **Criterion 4's comment cannot spell its two counter-examples with colons.** Criterion 1
+   asserts `re.findall(r"overflow-wrap:\s*([a-z-]+)", styles())` is exactly `["anywhere"]`
+   over the file *including comments*, and criterion 11 counts `white-space:` the same way.
+   A comment containing the literal `overflow-wrap: normal` or `white-space: nowrap` would
+   therefore fail the checks it is explaining. The comment names both mechanisms as
+   "`white-space` set to `nowrap`" and "`overflow-wrap` set back to `normal`", which carries
+   the substance criterion 4 asks for in the only spelling criterion 1 permits.
+2. **Criterion 6 and the `.balances-entry-effect` comment.** Criterion 3 deletes that rule
+   entirely, so the comment whose subject it was goes with it, while criterion 6 requires
+   "the reason a date is not shared with an effect line" to survive. Both are honoured by
+   folding the surviving content — that the effect sentence is the one of the two carrying a
+   name, that its box is 228px three levels in, and that the date is a fixed spelling with
+   nothing to break — into the comment on the rule the two now share, with the one clause
+   the deletion made false ("which is why the rule is not shared") replaced by why one rule
+   now covers both. The 258px and 228px measurements are preserved in criterion 35 as
+   criterion 7 requires, so neither is lost even if that comment is later trimmed.
+
+### One criterion could not be satisfied: criterion 23's "no per-file skip"
+
+**Criteria 20, 23 and 41 cannot all hold at once, and the collision is in this file.**
+
+Criterion 20 scans every `*.md` under `plans/` for the literal `documentElement` outside a
+blockquote. Criterion 41 requires this spec to be committed, under `plans/tasks/`. This
+spec names that literal on **nine** ordinary, non-blockquote lines above this section — 29,
+180, 263, 327, 421, 447, 481, 538 and 603 — because its criteria have to write out what is
+banned in order to ban it, and this section adds three more, for twelve in the file as
+committed. Three of the nine (263, 421, 603) name the bare identifier with no
+`document.` prefix and no old wording to quote, so no blockquote can hold them and no
+narrower pattern can miss them. Criterion 23 then forbids the one remaining resolution:
+"There is no allowlist, no per-file skip and no marker comment."
+
+The three ways out and why two are worse:
+
+* **Blockquote this file's own criteria.** Rewrites criteria 20 and 46 into something that
+  cannot state its own rule. Rejected: the criteria are not mine to change.
+* **Ship the scan red.** Fails criterion 32, and a red suite is not a mechanism.
+* **One scope exclusion, for the document that specifies the check.** Taken. It is
+  `SPECIFIES_THE_SCAN` in `tests/test_suite_integrity.py`, holding this file's path and
+  nothing else, and its comment states in full that it is a deviation from criterion 23,
+  why the three criteria collide, and that it is not a licence for a second entry.
+
+This is exactly the reason criterion 22 already gives for not scanning `tests/`: the check's
+own source and message must name the literal to work. The spec that *specifies* the check is
+in the same position, and the criteria did not anticipate it. The failure mode of the
+exclusion is loud rather than quiet: rename the file and the path stops matching, so the
+scan goes red naming the renamed file. **This needs a ruling rather than a reader's
+assumption, and it is flagged on the PR.**
+
+### Criteria 33 to 39: **not run**
+
+Recorded as **not run**, by that name, per criterion 40. Nothing in this project has ever
+been verified in a browser, no browser was opened for this task, and no verdict here rests
+on any of them. Criterion 39's positive control,
+`document.body.style.overflowWrap = 'normal'` in the console followed by a re-run of
+criterion 34's sweep, is written down and was read and understood, and it is also now
+recorded in `.claude/rules/testing.md`'s seventh rule so the next manual check inherits the
+habit rather than the blind spot. It was **not executed**. Recording any of 33 to 39 as
+"pass" would be the exact defect this task exists to remove.
 
 ## Size
 
