@@ -1539,7 +1539,7 @@ def test_the_amount_is_exactly_what_the_real_fold_derives_for_the_pair() -> None
         assert signed_sum(found) == derived.owed_between(debtor, creditor).cents
 
 
-def test_events_may_be_a_generator_and_is_consumed_exactly_once() -> None:
+def test_debt_sources_takes_a_generator_and_consumes_it_exactly_once() -> None:
     ledger = [
         expense("e1", payer=ALI, total=3000, shares=THIRDS),
         expense("e2", payer=BO, total=900, shares={ALI: 500, BO: 400}, minute=1),
