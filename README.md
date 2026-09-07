@@ -51,6 +51,15 @@ linked to a member row with `setup_group.py link`. Signing up on its own shows t
   network, on `localhost` or `127.0.0.1` only, the only two secure contexts here. The
   API is never cached, so offline you get the app and then a message that it cannot
   reach the server, and an expense cannot be recorded until you are back.
+- **The incompleteness signal**: the feed says how many whole days it has been since
+  anybody recorded anything, and the balances screen says that too and lists whoever has
+  entered no expense in the last seven days. A group that has recorded nothing says so in
+  its own words instead of showing a zero, and nobody is listed who has not been in the
+  group long enough to have entered anything. Both are worked out fresh on every read,
+  from what is in the ledger and the clock, and stored nowhere. **It moves no figure.**
+  It is not a notification either: nothing is sent to anybody, and you find it by opening
+  a screen. Whether it is prominent enough to do its job is a question about layout that
+  nothing here has ever checked in a real browser; issue #80 is open to check it.
 
 ## What does not exist yet
 
@@ -59,9 +68,6 @@ and a test holds the two together, so the pair cannot drift apart. That is a nar
 guarantee than it looks: `CLAUDE.md` says what the suite does and does not notice when
 one of these is actually built.
 
-- **The incompleteness signal** (backlog task 16): nothing tells you how stale the
-  ledger is or who has stopped entering expenses. The note on the balances screen, that
-  the figures come only from what was recorded, is all the app says about it.
 - **Expense correction** (backlog task 17): a wrong expense cannot be edited or voided
   from any screen.
 
