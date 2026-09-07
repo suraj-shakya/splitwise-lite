@@ -772,7 +772,12 @@ def acting_member(store: EventStore, *, group_id: str, user_id: str) -> Member:
     try:
         return store.get_member_for_user(group_id, user_id)
     except RecordNotFound as error:
+        # Neither id is named. This is a mapped 403 and no message this repo sends with
+        # a 4xx status carries an internal identifier; the person reading it holds
+        # neither id and can do nothing with either, while the operator who can act is
+        # told which command to run. ``group_id`` and ``user_id`` stay as parameters
+        # because the two store calls above still need them.
         raise MemberNotLinked(
-            f"no member of group {group_id!r} is linked to user {user_id!r}; an "
-            f"operator links a member with 'setup_group.py link'"
+            "no member of this group is linked to your account; an operator links a "
+            "member with 'setup_group.py link'"
         ) from error
