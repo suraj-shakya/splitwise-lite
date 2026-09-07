@@ -30,6 +30,51 @@ exercising what it named.
   is still an `re.search`. A deliberate substring pin carries `# unanchored: <why>`, and
   `tests/test_suite_integrity.py` refuses one without a reason. The anchored form looks
   like `match=r"^currency must be a Currency"`.
+
+  > **Corrected 2026-09-08 for issue #70**, per
+  > `plans/tasks/70-substring-assertions-on-exception-messages.md`. This rule used to stop
+  > there, and a reader finished it believing that anchoring a `match=` was the whole of
+  > it. Measured on `bea0da7`: the suite holds **16** real `match=` pins, every one of
+  > them anchored, against **101 occurrences** of `assert <needle> in str(<name>.value)`,
+  > on 100 lines across seven modules, plus everything asserted through the 27 lines that
+  > bind the message to a local first. The count is of occurrences and not of lines,
+  > because one line in `tests/test_simplify.py` carries two. So the rule as written
+  > covered the rarer form and read as covering the commoner one, which is a document
+  > reporting coverage it does not have: the same defect as a check reporting success
+  > without exercising what it names, one level up.
+
+  `assert "x" in str(exc.value)` is the same defect and not a milder one. For a pattern
+  with no metacharacters an `re.search` **is** a substring test, so that assertion and
+  `match="x"` are the same operation and the PR #62 collision applies to it unchanged.
+  Measured on `bea0da7` (2026-09-08), `money.py:246` raises `currency must be a Currency,
+  got ...` and `money.py:148` raises `Money currency must be a Currency, got ...`, so one
+  such assertion is satisfied by either of two live guards. A negative, `assert x not in
+  str(exc.value)`, is weaker still rather than safer: any message lacking the string
+  satisfies it, including one from an entirely different guard.
+
+  **The anchor goes on the block, not on each assertion.** A block routinely asserts
+  several fragments about one message and at most one of them can start it, so there is no
+  per-assertion form of this fix. Once one anchor has established which guard raised,
+  every fragment assertion beside it stops being a pin and becomes documentation, and none
+  of them has to change. Any one of these four anchors a block and they are the whole
+  accepted set: `match=r"^..."` on the `raises` call; `==` against the whole message;
+  `.startswith` on it; or `# unanchored: <why>` on the `with` statement, at the same
+  twenty-character floor. That is what `test_every_message_block_is_anchored_or_carried`
+  in `tests/test_suite_integrity.py` enforces, and it is the converse of the check above
+  rather than a second copy of it: `test_every_message_pin_is_anchored_or_says_why`
+  guarantees that any `match=` which exists is anchored, and this one guarantees that a
+  `match=` exists wherever a message is read. Counted as blocks rather than as assertions,
+  which is the unit the fix has, that population is **107**, computed by the check and not
+  by anybody's grep.
+
+  The blocks that were already loose when the check landed are carried in
+  `CARRIED_UNANCHORED_BLOCKS`, keyed by test module, enclosing definition name and count,
+  never by a line number or an ordinal, and totalled in one declared integer. **The
+  baseline may only shrink.** It is checked in both directions, so a carried entry that is
+  no longer unanchored is a failure naming it and an entry cannot outlive its subject, and
+  the last of issue #70's audit slices deletes it. Carrying a block is not anchoring one:
+  nothing in that baseline can fail for the reason its assertions name until its slice has
+  deleted the guard behind it and run.
 - **A test function defined twice in one module deletes the first one.** Python rebinds
   silently and pytest collects only what the module ends up holding. Scar: on PR #64
   four parametrised cases stopped running with the suite green, found only because

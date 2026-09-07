@@ -1997,6 +1997,13 @@ ENFORCING_MECHANISMS = (
     "PYTHONDONTWRITEBYTECODE",
     "re.search",
     'match=r"^',
+    # Issue #70's half of rule 1. Both names, because the rule makes a claim about each:
+    # that a check enforces the converse guarantee, and that the blocks which were
+    # already loose are carried somewhere with a total a reviewer can see. Renaming
+    # either without moving the rule would leave the rule naming something gone, which
+    # is the shape of defect every issue in this module is about.
+    "test_every_message_block_is_anchored_or_carried",
+    "CARRIED_UNANCHORED_BLOCKS",
 )
 
 
