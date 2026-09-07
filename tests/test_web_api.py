@@ -555,6 +555,8 @@ PUBLIC = {
     "NotAuthenticated",
     "CsrfFailed",
     "MalformedRequest",
+    "NotTheReceiver",
+    "SettlementAlreadyDecided",
     "SettlementAlreadyPending",
     "TooManyAttempts",
     "RateLimiter",
@@ -643,6 +645,7 @@ def test_the_module_docstring_records_every_decision_it_makes() -> None:
         "walking the raised exception's MRO",
         "Reading the ledger requires a member link",
         "A route is registered with its access policy",
+        "Only the receiver of a settlement may answer it",
     ):
         assert stated in text, stated
 
@@ -1578,6 +1581,9 @@ ERROR_ROWS = [
     (web.groups.MemberAlreadyLinked, 409, "member_already_linked"),
     (web.groups.UserAlreadyLinked, 409, "user_already_linked"),
     (web.SettlementAlreadyPending, 409, "settlement_already_pending"),
+    # Task 15's two, added by value beside the one they sit next to.
+    (web.NotTheReceiver, 403, "not_the_receiver"),
+    (web.SettlementAlreadyDecided, 409, "settlement_already_decided"),
     (web.TooManyAttempts, 429, "too_many_attempts"),
     (web.MalformedRequest, 400, "malformed_request"),
     (web.accounts.InvalidEmail, 400, "invalid_email"),
@@ -1909,6 +1915,7 @@ EXPENSE_BODY = {
 # The payer is never named here: the endpoint takes it from the acting member, so a
 # settlement body is exactly two keys.
 SETTLEMENT_BODY = {"to_member_id": "whoever", "amount": "12.50"}
+DECISION_BODY = {"decision": "confirmed"}
 
 # (method, path, body, the status with no cookies at all, the status with only the
 # CSRF gates met). The CSRF token is not a credential, so the second column is the
@@ -1924,6 +1931,13 @@ ENDPOINT_ROWS = [
     ("POST", "/api/expenses", EXPENSE_BODY, 403, 401),
     ("GET", "/api/balances", None, 401, 401),
     ("POST", "/api/settlements", SETTLEMENT_BODY, 403, 401),
+    (
+        "POST",
+        "/api/settlements/<settlement_id>/decision",
+        DECISION_BODY,
+        403,
+        401,
+    ),
     ("GET", "/api/debts/<debtor_id>/<creditor_id>", None, 401, 401),
 ]
 
@@ -2028,6 +2042,7 @@ def test_the_member_requirement_is_the_default_and_the_exemptions_are_named() ->
         "create_expense",
         "read_balances",
         "create_settlement",
+        "decide_settlement",
         "read_debt",
     }
     assert set(web._API_ACCESS) == anonymous | session | member
@@ -2200,6 +2215,12 @@ def test_the_route_tables_hold_exactly_the_routes_the_app_serves(app) -> None:
             web._Access.MEMBER,
         ),
         ("/api/settlements", "create_settlement", ("POST",), web._Access.MEMBER),
+        (
+            "/api/settlements/<settlement_id>/decision",
+            "decide_settlement",
+            ("POST",),
+            web._Access.MEMBER,
+        ),
     ]
     assert [
         (rule, endpoint, methods)
@@ -3238,6 +3259,8 @@ def test_a_settled_group_is_every_member_at_zero_and_no_transfers(
         "transfers": [],
         # Task 14. Nobody has claimed a payment, so nothing is awaiting anybody.
         "pending": [],
+        # Task 15. And nobody has refused one either.
+        "rejected": [],
     }
 
 
@@ -4835,7 +4858,7 @@ def test_the_balances_payload_gains_pending_and_nothing_else_at_the_top_level(
 ) -> None:
     signed = linked_client(app, seeded)
     body = balances_of(signed)
-    assert set(body) == {"currency", "net", "transfers", "pending"}
+    assert set(body) == {"currency", "net", "transfers", "pending", "rejected"}
     assert body["pending"] == []
 
 
@@ -4851,6 +4874,9 @@ def test_a_settled_group_reports_an_empty_pending_list(app, seeded: Path) -> Non
         ],
         "transfers": [],
         "pending": [],
+        # Task 15's list of its own, at its exact value rather than by loosening the
+        # equality to a subset.
+        "rejected": [],
     }
 
 
@@ -5392,3 +5418,1164 @@ def test_the_rule_is_held_by_one_lock_the_whole_module_shares() -> None:
     source = web_source()
     assert source.count("_SETTLEMENT_LOCK: Final = threading.Lock()") == 1
     assert "with _SETTLEMENT_LOCK:" in source
+
+
+# --- Task 15: the receiver answers a claim ----------------------------------
+#
+# The other half of the two-person rule. Task 14 built the half where nothing moves;
+# this is the half where something does, so every test below either pins who may move
+# it, or pins that exactly the claimed amount moved and nothing else did.
+
+
+def decision_path(settlement_id: str) -> str:
+    return f"/api/settlements/{quote(settlement_id, safe='')}/decision"
+
+
+def decide(client, settlement_id: str, decision: str):
+    """One ``POST /api/settlements/<id>/decision``, with the three CSRF gates met.
+
+    The decider is never named: the endpoint takes it from the acting member, which is
+    what stops one person both claiming and confirming a payment.
+    """
+    return post(client, decision_path(settlement_id), {"decision": decision})
+
+
+def claim(payer, *, to_member_id: str, amount: str) -> str:
+    """One claim through the endpoint, answered with the settlement id it recorded."""
+    response = mark_paid(payer, to_member_id=to_member_id, amount=amount)
+    assert response.status_code == 201, response.get_json()
+    return response.get_json()["settlement"]["id"]
+
+
+def stored_decisions(path: Path, settlement_id: str):
+    with open_store(path) as store:
+        return store.list_settlement_decisions(settlement_id)
+
+
+def state_of(path: Path, settlement_id: str):
+    from splitwise_lite.balances import settlement_states
+    from splitwise_lite.groups import resolve_sole_group
+
+    with open_store(path) as store:
+        group = resolve_sole_group(store)
+        return settlement_states(store.list_events(group.id))[settlement_id]
+
+
+def sam_and_ali(app, seeded: Path):
+    """The payer and the receiver, as two people on two devices have to be."""
+    payer = linked_client(app, seeded)
+    receiver = linked_client(app, seeded, display_name="Ali")
+    return payer, receiver
+
+
+# --- The route --------------------------------------------------------------
+
+
+def test_the_decision_row_is_the_only_place_the_endpoint_is_registered() -> None:
+    rows = [
+        route
+        for route in web._API_ROUTES
+        if route.rule == "/api/settlements/<settlement_id>/decision"
+    ]
+    assert len(rows) == 1
+    assert rows[0].endpoint == "decide_settlement"
+    assert rows[0].methods == ("POST",)
+    assert rows[0].access is web._Access.MEMBER
+    assert web._API_ACCESS["decide_settlement"] is web._Access.MEMBER
+
+
+def test_the_decision_route_must_be_declared_or_the_app_will_not_build(
+    app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Criterion 3, half one, following the two task 14 wrote for its own row: delete
+    # the row and the audit refuses to hand back an app that serves a rule no row
+    # declares.
+    without = tuple(
+        route for route in web._API_ROUTES if route.endpoint != "decide_settlement"
+    )
+    assert len(without) == len(web._API_ROUTES) - 1
+    monkeypatch.setattr(web, "_API_ROUTES", without)
+    with pytest.raises(web._RouteNotDeclared) as raised:
+        web._audit_routes(app)
+    assert "/api/settlements/<settlement_id>/decision" in str(raised.value)
+
+
+def test_a_decision_row_that_states_no_access_does_not_construct() -> None:
+    # Criterion 3, half two: ``access`` has no default, so a row that does not state
+    # what it requires is a TypeError rather than an endpoint that answers anybody.
+    with pytest.raises(TypeError):
+        web._ApiRoute(
+            "/api/settlements/<settlement_id>/decision",
+            "decide_settlement",
+            web._decide_settlement,
+            ("POST",),
+        )
+
+
+# --- The two answers --------------------------------------------------------
+
+
+def test_confirming_a_claim_answers_the_settlement_view_it_decided(
+    app, seeded: Path
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="6.00")
+    response = decide(receiver, settlement_id, "confirmed")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert set(body) == {"settlement"}
+    view = body["settlement"]
+    # The same seven keys ``_settlement_view`` has always sent: this task adds values,
+    # not keys.
+    assert set(view) == {
+        "id",
+        "from_member_id",
+        "to_member_id",
+        "amount",
+        "created_at",
+        "created_by",
+        "state",
+    }
+    assert view["state"] == "confirmed"
+    assert view["id"] == settlement_id
+    assert view["from_member_id"] == members["Sam"]
+    assert view["to_member_id"] == members["Ali"]
+    assert view["amount"] == "6.00"
+
+
+def test_rejecting_a_claim_changes_the_state_and_nothing_else_in_the_view(
+    app, seeded: Path
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    created = mark_paid(payer, to_member_id=members["Ali"], amount="6.00").get_json()[
+        "settlement"
+    ]
+    response = decide(receiver, created["id"], "rejected")
+    assert response.status_code == 200
+    view = response.get_json()["settlement"]
+    assert view["state"] == "rejected"
+    assert created["state"] == "pending"
+    # The other six keys are byte-identical to the view the settlement had while
+    # pending: a decision restates nothing about the settlement it decides.
+    assert {key: value for key, value in view.items() if key != "state"} == {
+        key: value for key, value in created.items() if key != "state"
+    }
+
+
+def test_the_answer_is_two_hundred_and_names_no_resource_it_created(
+    app, seeded: Path
+) -> None:
+    # 200 and not 201: the body names the settlement, and the settlement was not
+    # created here. A decision has no URL of its own to hand back.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = decide(receiver, settlement_id, "confirmed")
+    assert response.status_code == 200
+    assert "Location" not in response.headers
+
+
+def test_the_decision_wire_map_is_derived_from_the_state_map() -> None:
+    # One literal, one derivation: a renamed wire spelling moves both directions at
+    # once, and "pending" cannot be sent because it is not in the map.
+    from splitwise_lite.events import SettlementState
+
+    assert set(web._SETTLEMENT_DECISION_WIRE) == {"confirmed", "rejected"}
+    assert set(web._SETTLEMENT_DECISION_WIRE.values()) == {
+        state for state in SettlementState if state is not SettlementState.PENDING
+    }
+    for wire, state in web._SETTLEMENT_DECISION_WIRE.items():
+        assert web._SETTLEMENT_STATE_WIRE[state] == wire
+    assert "pending" not in web._SETTLEMENT_DECISION_WIRE
+    # Derived rather than typed out a second time, which is the whole point: the
+    # comprehension over _SETTLEMENT_STATE_WIRE is the definition, so a renamed wire
+    # spelling moves both directions at once.
+    assert "for state, wire in _SETTLEMENT_STATE_WIRE.items()" in web_source()
+
+
+def test_the_decision_carries_the_acting_member_the_server_clock_and_a_new_id(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    monkeypatch.setattr(web, "_now", lambda: at(16, 30))
+    assert decide(receiver, settlement_id, "confirmed").status_code == 200
+    stored = stored_decisions(seeded, settlement_id)
+    assert len(stored) == 1
+    assert stored[0].decided_by == members["Ali"]
+    assert stored[0].created_at == at(16, 30)
+    assert stored[0].id
+    assert stored[0].id != settlement_id
+
+
+# --- What the body may say --------------------------------------------------
+
+
+REFUSED_DECISION_BODIES = [
+    # A missing, extra or misspelled key.
+    ({}, "a missing key"),
+    ({"decision": "confirmed", "decided_by": "mem-1"}, "the decider named"),
+    ({"decision": "confirmed", "settlement_id": "s-1"}, "the settlement named twice"),
+    ({"decision": "confirmed", "id": "d-1"}, "a client supplied id"),
+    ({"decision": "confirmed", "created_at": "2026-09-05"}, "a client supplied time"),
+    ({"decision": "confirmed", "group_id": "g-1"}, "a group id"),
+    ({"decisions": "confirmed"}, "a misspelled key"),
+    # Not a JSON string.
+    ({"decision": 1}, "a number"),
+    ({"decision": True}, "a boolean"),
+    ({"decision": None}, "a null"),
+    ({"decision": ["confirmed"]}, "an array"),
+    # A string that is not one of the two.
+    ({"decision": "pending"}, "the absence of a decision"),
+    ({"decision": "CONFIRMED"}, "the domain spelling"),
+    ({"decision": "Confirmed"}, "a capitalised spelling"),
+    ({"decision": ""}, "an empty string"),
+    ({"decision": "maybe"}, "a word that is neither"),
+    ({"decision": " confirmed"}, "a padded spelling"),
+]
+
+
+@pytest.mark.parametrize(
+    "body,what",
+    REFUSED_DECISION_BODIES,
+    ids=[what for _body, what in REFUSED_DECISION_BODIES],
+)
+def test_a_decision_body_that_is_not_the_one_key_is_refused(
+    app, seeded: Path, body: dict, what: str
+) -> None:
+    # ``"pending"`` is a 400 and never a 500: ``SettlementDecisionEvent`` raises
+    # ``InvalidEvent`` for it, which is in neither ERROR_STATUS nor ERROR_CODE, so an
+    # escape would reach the client as a generic 500 with the reason in the log only.
+    from splitwise_lite.events import SettlementState
+
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = post(receiver, decision_path(settlement_id), body)
+    assert response.status_code == 400, (what, response.get_json())
+    assert response.get_json()["error"]["code"] == "malformed_request", what
+    # A refused request writes nothing, and the settlement is where it was.
+    assert stored_decisions(seeded, settlement_id) == ()
+    assert state_of(seeded, settlement_id) is SettlementState.PENDING
+
+
+def test_a_settlement_id_naming_nothing_in_this_group_is_not_found(
+    app, seeded: Path
+) -> None:
+    # 404 and not 400: a settlement id names a resource, and the honest answer for a
+    # resource that is not there is 404. A member id on the debts path is an argument
+    # to a query about the group, which is why that one is a 400.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = decide(receiver, "no-such-settlement", "confirmed")
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "record_not_found"
+    assert stored_decisions(seeded, settlement_id) == ()
+
+
+def test_a_settlement_id_from_another_ledger_is_not_found_and_stays_unanswered(
+    tmp_path: Path
+) -> None:
+    # The ledger this endpoint reads is ``list_events(group.id)``, so a settlement
+    # outside it does not exist as far as this request is concerned. Two stores rather
+    # than two groups in one, because an app over a store holding two groups answers
+    # 503 ``ambiguous_group`` to every request and could never reach this rule; the
+    # test below reaches it directly and says so.
+    elsewhere = tmp_path / "elsewhere.sqlite3"
+    seed_group(elsewhere)
+    other_app = web.create_app(
+        store_path=elsewhere, secure_cookies=False, scrypt_params=CHEAP
+    )
+    other_payer = linked_client(other_app, elsewhere)
+    other_names = by_name(other_payer)
+    theirs = claim(other_payer, to_member_id=other_names["Ali"], amount="4.00")
+
+    here = tmp_path / "here.sqlite3"
+    seed_group(here)
+    app = web.create_app(store_path=here, secure_cookies=False, scrypt_params=CHEAP)
+    receiver = linked_client(app, here, display_name="Ali")
+    response = decide(receiver, theirs, "confirmed")
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "record_not_found"
+    assert stored_decisions(elsewhere, theirs) == ()
+
+
+def test_a_settlement_in_a_second_group_of_one_store_is_not_found_either(
+    tmp_path: Path
+) -> None:
+    # The same rule over a genuinely multi-group store. It cannot be driven through a
+    # client: ``resolve_sole_group`` refuses to guess between two groups, so every
+    # request to such an app is 503 ``ambiguous_group`` before any view runs. The view
+    # is therefore called inside a request context with the group and the acting
+    # member pinned, which is the only way this ledger boundary is observable.
+    from splitwise_lite.events import GroupId, MemberId, SettlementEvent, SettlementId
+    from splitwise_lite.money import Currency
+    from splitwise_lite.store import Group, Member, RecordNotFound
+
+    path = tmp_path / "two-groups.sqlite3"
+    seed_group(path)
+    with open_store(path) as store:
+        # Straight through the store: ``apply_group_definition`` reconciles the sole
+        # group rather than adding a second one, which is the operator command working
+        # as designed.
+        store.add_group(
+            Group(
+                id="group-2",
+                name="Flat 4",
+                currency=Currency(CURRENCY),
+                created_at=at(8),
+            )
+        )
+        for index, display_name in enumerate(("Kit", "Cass")):
+            store.add_member(
+                Member(
+                    id=f"member-{index}",
+                    group_id="group-2",
+                    display_name=display_name,
+                    user_id=None,
+                    created_at=at(8),
+                )
+            )
+        store.append_settlement(
+            SettlementEvent(
+                id=SettlementId("elsewhere-1"),
+                group_id=GroupId("group-2"),
+                currency=Currency(CURRENCY),
+                from_member_id=MemberId("member-0"),
+                to_member_id=MemberId("member-1"),
+                amount_cents=500,
+                created_at=at(9),
+                created_by=MemberId("member-0"),
+            )
+        )
+        first = next(group for group in store.list_groups() if group.name == GROUP_NAME)
+        ali = next(
+            member
+            for member in store.list_members(first.id)
+            if member.display_name == "Ali"
+        )
+
+    app = web.create_app(store_path=path, secure_cookies=False, scrypt_params=CHEAP)
+    with app.test_request_context(
+        decision_path("elsewhere-1"), method="POST", json={"decision": "confirmed"}
+    ):
+        # ``web.flask`` rather than a second import of the framework into this file,
+        # which imports the domain layer and the app factory and nothing else.
+        web.flask.g.group = first
+        web.flask.g.member = ali
+        with pytest.raises(RecordNotFound):
+            web._decide_settlement("elsewhere-1")
+    assert stored_decisions(path, "elsewhere-1") == ()
+
+
+def test_only_the_receiver_may_answer_a_claim(app, seeded: Path) -> None:
+    # The payer being refused is not an oversight to be softened later: an endpoint
+    # that let the payer answer their own claim would be a withdrawal mechanism
+    # wearing a confirmation's clothes, and withdrawal is issue #66.
+    payer, _receiver = sam_and_ali(app, seeded)
+    third = linked_client(app, seeded, display_name="Jo")
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    refusals = []
+    for who in (payer, third):
+        response = decide(who, settlement_id, "confirmed")
+        assert response.status_code == 403
+        assert response.get_json()["error"]["code"] == "not_the_receiver"
+        refusals.append(response.get_json()["error"]["message"])
+    # The same sentence whether the caller is the payer or a third member, and it
+    # names no member id: there is nothing a second sentence would tell either of them
+    # that they could act on.
+    assert refusals[0] == refusals[1]
+    for member_id in members.values():
+        assert member_id not in refusals[0]
+    assert settlement_id not in refusals[0]
+    assert stored_decisions(seeded, settlement_id) == ()
+
+
+def test_the_receiver_check_runs_before_the_already_decided_check(
+    app, seeded: Path
+) -> None:
+    # The one case where the order of the checks is visible. "You may not answer this"
+    # is true regardless of what the ledger says about it.
+    payer, receiver = sam_and_ali(app, seeded)
+    third = linked_client(app, seeded, display_name="Jo")
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    assert decide(receiver, settlement_id, "confirmed").status_code == 200
+    response = decide(third, settlement_id, "rejected")
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "not_the_receiver"
+
+
+@pytest.mark.parametrize("second", ["confirmed", "rejected"])
+def test_a_second_decision_on_one_settlement_is_refused(
+    app, seeded: Path, second: str
+) -> None:
+    # The fold would ignore it and the log would carry an answer that can never take
+    # effect, whether or not it agrees with the first.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    assert decide(receiver, settlement_id, "confirmed").status_code == 200
+    response = decide(receiver, settlement_id, second)
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "settlement_already_decided"
+    assert len(stored_decisions(seeded, settlement_id)) == 1
+
+
+def test_the_earliest_decision_wins_in_the_states_and_in_the_fold(
+    app, seeded: Path
+) -> None:
+    # The domain rule, verified against ``balances.py`` rather than assumed, with two
+    # contradicting decisions appended straight through the store. The endpoint's 409
+    # is a separate claim and is proved separately, so the domain rule and the HTTP
+    # rule stay two things.
+    from splitwise_lite.balances import derive_balances, settlement_states
+    from splitwise_lite.events import (
+        GroupId,
+        SettlementDecisionEvent,
+        SettlementId,
+        SettlementState,
+    )
+    from splitwise_lite.groups import resolve_sole_group
+    from splitwise_lite.money import Currency
+
+    payer, _receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="5.00")
+    with open_store(seeded) as store:
+        group = resolve_sole_group(store)
+        for index, (decision, when) in enumerate(
+            ((SettlementState.REJECTED, at(13)), (SettlementState.CONFIRMED, at(14)))
+        ):
+            store.append_settlement_decision(
+                SettlementDecisionEvent(
+                    id=f"decision-{index}",
+                    settlement_id=SettlementId(settlement_id),
+                    decision=decision,
+                    decided_by=members["Ali"],
+                    created_at=when,
+                )
+            )
+        ledger = store.list_events(group.id)
+    assert settlement_states(ledger)[settlement_id] is SettlementState.REJECTED
+    derived = derive_balances(
+        ledger, group_id=GroupId(group.id), currency=Currency(CURRENCY)
+    )
+    without = derive_balances(
+        tuple(event for event in ledger if event.id != settlement_id),
+        group_id=GroupId(group.id),
+        currency=Currency(CURRENCY),
+    )
+    # The later CONFIRMED changed nothing: the fold agrees with the state.
+    assert derived == without
+
+
+# --- The gates --------------------------------------------------------------
+
+
+def test_the_decision_endpoint_refuses_a_caller_with_no_session(
+    app, seeded: Path
+) -> None:
+    payer, _receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = post(
+        app.test_client(), decision_path(settlement_id), {"decision": "confirmed"}
+    )
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "not_authenticated"
+
+
+def test_the_decision_endpoint_refuses_an_account_with_no_member_row(
+    app, seeded: Path
+) -> None:
+    payer, _receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    stranger = app.test_client()
+    signed_in(stranger, app, email="nobody@example.com")
+    response = decide(stranger, settlement_id, "confirmed")
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "member_not_linked"
+
+
+def test_the_decision_endpoint_refuses_a_request_with_no_csrf_header(
+    app, seeded: Path
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = receiver.post(
+        decision_path(settlement_id), json={"decision": "confirmed"}
+    )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "csrf_failed"
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+def test_the_decision_path_answers_no_other_state_changing_method(
+    app, seeded: Path, method: str
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = send(
+        receiver, method, decision_path(settlement_id), {"decision": "confirmed"}
+    )
+    assert response.status_code == 405
+    assert response.get_json()["error"]["code"] == "method_not_allowed"
+
+
+def test_a_get_on_the_decision_path_falls_to_the_shell_catch_all(
+    app, seeded: Path
+) -> None:
+    # Exactly as task 14's criterion 10 records for ``/api/settlements``.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    response = receiver.get(decision_path(settlement_id))
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "not_found"
+
+
+# --- The lock ---------------------------------------------------------------
+
+
+def test_the_pending_count_is_shared_by_passing_the_ledger_and_not_the_lock() -> None:
+    # ``_SETTLEMENT_LOCK`` is a ``threading.Lock`` and is not reentrant, so a helper
+    # that both counts and locks self-deadlocks silently: no exception, no log line,
+    # and every later request for the same rule hangs behind it. This is the check
+    # that stops one being written.
+    import ast
+    import inspect
+
+    source = web_source()
+    assert source.count("with _SETTLEMENT_LOCK:") == 2
+    holders = {
+        node.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef)
+        and "_SETTLEMENT_LOCK" in (ast.get_source_segment(source, node) or "")
+    }
+    assert holders == {"_create_settlement", "_decide_settlement"}
+    # The helper both of them call is handed a ledger and takes no lock.
+    counting = inspect.getsource(web._pending_claims)
+    assert "_SETTLEMENT_LOCK" not in counting
+    assert "acquire" not in counting
+    assert web._pending_claims.__code__.co_argcount == 4
+
+
+def test_the_pending_count_helper_counts_the_ordered_pairs_unanswered_claims(
+    app, seeded: Path
+) -> None:
+    from splitwise_lite.balances import settlement_states
+    from splitwise_lite.groups import resolve_sole_group
+
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    with open_store(seeded) as store:
+        group = resolve_sole_group(store)
+        ledger = store.list_events(group.id)
+    states = settlement_states(ledger)
+    assert web._pending_claims(ledger, states, members["Sam"], members["Ali"]) == 1
+    # Ordered: a claim the other way is a claim about a different transfer of money.
+    assert web._pending_claims(ledger, states, members["Ali"], members["Sam"]) == 0
+    assert decide(receiver, settlement_id, "rejected").status_code == 200
+    with open_store(seeded) as store:
+        ledger = store.list_events(group.id)
+    states = settlement_states(ledger)
+    assert web._pending_claims(ledger, states, members["Sam"], members["Ali"]) == 0
+
+
+def duplicate_claim(
+    path: Path, *, payer_id: str, receiver_id: str, settlement_id: str, hour: int
+) -> None:
+    """A second unanswered claim for one ordered pair, straight through the store.
+
+    One process cannot produce this through the endpoint: task 14's 409 refuses the
+    second claim, and ``_SETTLEMENT_LOCK`` makes that refusal exact within one
+    process. Two processes hold two locks and the window reopens, which is the
+    situation the confirm-side count exists for, so this fixture is fabricated here
+    and this docstring is why.
+    """
+    from splitwise_lite.events import GroupId, MemberId, SettlementEvent, SettlementId
+    from splitwise_lite.groups import resolve_sole_group
+    from splitwise_lite.money import Currency
+
+    with open_store(path) as store:
+        group = resolve_sole_group(store)
+        store.append_settlement(
+            SettlementEvent(
+                id=SettlementId(settlement_id),
+                group_id=GroupId(group.id),
+                currency=Currency(CURRENCY),
+                from_member_id=MemberId(payer_id),
+                to_member_id=MemberId(receiver_id),
+                amount_cents=100,
+                created_at=at(hour),
+                created_by=MemberId(payer_id),
+            )
+        )
+
+
+def test_confirming_is_refused_while_the_pair_carries_two_unanswered_claims(
+    app, seeded: Path
+) -> None:
+    # Confirming one of two identical unanswered claims would be the receiver guessing
+    # which payment they were paid, and confirming both clears the debt twice, which
+    # is the failure the whole arrangement exists to prevent.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    first = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    duplicate_claim(
+        seeded,
+        payer_id=members["Sam"],
+        receiver_id=members["Ali"],
+        settlement_id="duplicate-1",
+        hour=13,
+    )
+    response = decide(receiver, first, "confirmed")
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "settlement_already_pending"
+    assert stored_decisions(seeded, first) == ()
+    assert stored_decisions(seeded, "duplicate-1") == ()
+
+
+def test_rejecting_a_duplicate_claim_frees_the_pair_and_then_confirming_works(
+    app, seeded: Path
+) -> None:
+    # Rejecting is the recourse and is always allowed: the receiver rejects the
+    # duplicate, the pair drops back to one unanswered claim, and the real one can
+    # then be confirmed. A rule that blocked both answers would leave the pair stuck
+    # with no way out.
+    from splitwise_lite.events import SettlementState
+
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    first = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    duplicate_claim(
+        seeded,
+        payer_id=members["Sam"],
+        receiver_id=members["Ali"],
+        settlement_id="duplicate-1",
+        hour=13,
+    )
+    assert decide(receiver, "duplicate-1", "rejected").status_code == 200
+    assert state_of(seeded, "duplicate-1") is SettlementState.REJECTED
+    assert decide(receiver, first, "confirmed").status_code == 200
+    assert state_of(seeded, first) is SettlementState.CONFIRMED
+
+
+def test_two_decisions_at_once_answer_one_settlement_and_refuse_the_other(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Built exactly like task 14's
+    # ``test_two_marks_at_once_record_one_settlement_and_refuse_the_other``: the first
+    # request is stopped inside the rule at the moment it has read the ledger, and the
+    # second is sent while it is stopped there. Nothing here depends on the scheduler,
+    # no socket is bound, and every wait is bounded by ``INTERLEAVE_GRACE``.
+    import threading
+
+    from splitwise_lite import balances as balances_module
+
+    payer = linked_client(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    first = linked_client(app, seeded, display_name="Ali")
+    second = app.test_client()
+    assert log_in(second, email="ali@example.com").status_code == 200
+
+    inside = threading.Event()
+    finished = threading.Event()
+    reads = 0
+    counting = threading.Lock()
+    real_states = balances_module.settlement_states
+
+    def stop_the_first_read_inside_the_rule(ledger):
+        nonlocal reads
+        states = real_states(ledger)
+        with counting:
+            reads += 1
+            stop = reads == 1
+        if stop:
+            inside.set()
+            finished.wait(timeout=INTERLEAVE_GRACE)
+        return states
+
+    monkeypatch.setattr(
+        balances_module, "settlement_states", stop_the_first_read_inside_the_rule
+    )
+    answers: dict[str, int] = {}
+
+    def answer(name, client, decision):
+        answers[name] = decide(client, settlement_id, decision).status_code
+
+    def second_answer():
+        # If the rule never reaches the read this test is about, say so rather than
+        # passing on a premise that has gone.
+        assert inside.wait(timeout=INTERLEAVE_GRACE * 5), "the rule never read"
+        answer("second", second, "rejected")
+        finished.set()
+
+    runner = threading.Thread(target=second_answer, name="second-decision")
+    runner.start()
+    try:
+        answer("first", first, "confirmed")
+    finally:
+        finished.set()
+        runner.join(timeout=INTERLEAVE_GRACE * 5)
+    assert not runner.is_alive()
+    assert sorted(answers.values()) == [200, 409], answers
+    assert len(stored_decisions(seeded, settlement_id)) == 1
+
+
+# --- What the balances payload gained ---------------------------------------
+
+
+def test_the_balances_payload_gains_rejected_and_nothing_else_at_the_top_level(
+    app, seeded: Path
+) -> None:
+    signed = linked_client(app, seeded)
+    body = balances_of(signed)
+    assert set(body) == {"currency", "net", "transfers", "pending", "rejected"}
+    assert body["rejected"] == []
+
+
+def test_a_rejected_claim_is_in_the_rejected_list_and_not_in_pending(
+    app, seeded: Path
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="6.00")
+    assert decide(receiver, settlement_id, "rejected").status_code == 200
+    body = balances_of(payer)
+    assert body["pending"] == []
+    assert [row["id"] for row in body["rejected"]] == [settlement_id]
+    row = body["rejected"][0]
+    assert set(row) == {
+        "id",
+        "from_member_id",
+        "to_member_id",
+        "amount",
+        "created_at",
+        "created_by",
+        "state",
+    }
+    assert row["state"] == "rejected"
+    assert row["amount"] == "6.00"
+
+
+def test_a_confirmed_claim_appears_in_neither_list(app, seeded: Path) -> None:
+    # It has moved the figures, and it is in the drill-down through ``debt_sources``.
+    # A third list would be an activity feed, which nothing asks for.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="6.00")
+    assert decide(receiver, settlement_id, "confirmed").status_code == 200
+    body = balances_of(payer)
+    assert body["pending"] == []
+    assert body["rejected"] == []
+
+
+def test_the_rejected_list_ascends_by_created_at_then_id(app, seeded: Path) -> None:
+    # Two rejected settlements sharing a timestamp, so the id tiebreak is what the
+    # order rests on. Nothing in web.py sorts: the list is filtered out of the events
+    # ``_read_balances`` has already read, and ``list_events`` is ordered.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    for settlement_id in ("s-b", "s-a"):
+        duplicate_claim(
+            seeded,
+            payer_id=members["Sam"],
+            receiver_id=members["Ali"],
+            settlement_id=settlement_id,
+            hour=13,
+        )
+    assert decide(receiver, "s-b", "rejected").status_code == 200
+    assert decide(receiver, "s-a", "rejected").status_code == 200
+    assert [row["id"] for row in balances_of(payer)["rejected"]] == ["s-a", "s-b"]
+
+
+def test_a_rejected_claim_marks_no_transfer_as_awaiting_confirmation(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``awaiting_confirmation`` needed no refinement: it is computed from unanswered
+    # claims only, and a rejected claim must not mark a transfer as awaiting anybody.
+    sam = linked_client(app, seeded)
+    jo = linked_client(app, seeded, display_name="Jo")
+    members = by_name(sam)
+    seed_three_expenses(sam, members, monkeypatch)
+    # Jo owes Sam, so this claim is the one the suggested transfer is about.
+    settlement_id = claim(jo, to_member_id=members["Sam"], amount="1.00")
+    while_pending = balances_of(sam)
+    assert [
+        transfer["awaiting_confirmation"] for transfer in while_pending["transfers"]
+    ] == [True]
+    assert decide(sam, settlement_id, "rejected").status_code == 200
+    body = balances_of(sam)
+    assert body["transfers"]
+    for transfer in body["transfers"]:
+        assert set(transfer) == {
+            "from_member_id",
+            "to_member_id",
+            "amount",
+            "payer_debts",
+            "receiver_credits",
+            "awaiting_confirmation",
+        }
+        assert transfer["awaiting_confirmation"] is False
+
+
+def test_a_pending_and_a_rejected_claim_for_one_pair_are_both_reported(
+    app, seeded: Path
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    first = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    assert decide(receiver, first, "rejected").status_code == 200
+    second = claim(payer, to_member_id=members["Ali"], amount="2.00")
+    body = balances_of(payer)
+    assert [row["id"] for row in body["pending"]] == [second]
+    assert [row["id"] for row in body["rejected"]] == [first]
+
+
+@pytest.mark.parametrize("decision", ["confirmed", "rejected"])
+def test_the_feed_says_nothing_at_all_about_a_decision(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch, decision: str
+) -> None:
+    # A settlement decision is not an expense.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    seed_three_expenses(payer, members, monkeypatch)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    before = payer.get("/api/expenses").get_data(as_text=True)
+    assert decide(receiver, settlement_id, decision).status_code == 200
+    assert payer.get("/api/expenses").get_data(as_text=True) == before
+
+
+def test_a_confirmation_adds_one_settlement_entry_to_the_drill_down(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``debt_sources`` lists confirmed settlements only.
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    seed_three_expenses(payer, members, monkeypatch)
+    before = read_debt(payer, members["Sam"], members["Ali"]).get_json()["entries"]
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    assert decide(receiver, settlement_id, "confirmed").status_code == 200
+    after = read_debt(payer, members["Sam"], members["Ali"]).get_json()["entries"]
+    added = [entry for entry in after if entry not in before]
+    assert len(added) == 1
+    assert added[0]["kind"] == "settlement"
+    assert added[0]["amount"] == "1.00"
+    assert added[0]["id"] == settlement_id
+
+
+def test_a_rejection_leaves_every_drill_down_byte_identical(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    seed_three_expenses(payer, members, monkeypatch)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    pairs = list(itertools.permutations(["Sam", "Ali", "Jo"], 2))
+    before = {
+        pair: read_debt(payer, members[pair[0]], members[pair[1]]).get_data(
+            as_text=True
+        )
+        for pair in pairs
+    }
+    assert decide(receiver, settlement_id, "rejected").status_code == 200
+    for pair in pairs:
+        after = read_debt(payer, members[pair[0]], members[pair[1]]).get_data(
+            as_text=True
+        )
+        assert after == before[pair], pair
+
+
+# --- What moves and what does not -------------------------------------------
+
+
+GENERATED_ROSTER = ("Sam", "Ali", "Jo", "Kit", "Cass")
+
+
+def a_receiver_with_no_unanswered_claim(payload: dict, names: dict, acting: str) -> str:
+    """The display name of a member the acting member may still claim a payment to."""
+    blocked = {
+        row["to_member_id"]
+        for row in payload["pending"]
+        if row["from_member_id"] == acting
+    }
+    for name in GENERATED_ROSTER[1:]:
+        if names[name] not in blocked:
+            return name
+    raise AssertionError("every pair from the acting member was already pending")
+
+
+def test_a_confirmed_settlement_moves_exactly_the_amount_over_generated_ledgers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim this task rests on, over ledgers nobody hand-picked.
+
+    Confirming moves the payer up by exactly the claimed amount, the receiver down by
+    exactly the same, nobody else at all, and the pairwise debt the other way by the
+    same figure.
+
+    Falsifiable, and the falsification has been run: making ``_decide_settlement``
+    append ``REJECTED`` whatever the body said turns this red. A criterion that still
+    passes under its own mutation has not been met.
+    """
+    import random
+
+    from splitwise_lite.events import MemberId
+    from splitwise_lite.groups import resolve_sole_group
+
+    rng = random.Random(LEDGER_SEED)
+    checked = 0
+    for index in range(GENERATED_LEDGERS):
+        path = tmp_path / f"ledger-{index}.sqlite3"
+        seed_group(path, members=GENERATED_ROSTER)
+        app = web.create_app(
+            store_path=path, secure_cookies=False, scrypt_params=CHEAP
+        )
+        payer = linked_client(app, path)
+        with open_store(path) as store:
+            group = resolve_sole_group(store)
+            member_ids = [member.id for member in store.list_members(group.id)]
+            generate_ledger(store, group.id, member_ids, rng, rng.randint(0, 20))
+        names = by_name(payer)
+        acting = names["Sam"]
+        receiver_name = a_receiver_with_no_unanswered_claim(
+            balances_of(payer), names, acting
+        )
+        to_member_id = names[receiver_name]
+        receiver = linked_client(app, path, display_name=receiver_name)
+
+        monkeypatch.setattr(web, "_now", lambda: at(15, index % 60))
+        settlement_id = claim(payer, to_member_id=to_member_id, amount="7.25")
+        amount_cents = 725
+
+        before = derived_balances(path, group.id)
+        monkeypatch.setattr(web, "_now", lambda: at(16, index % 60))
+        assert decide(receiver, settlement_id, "confirmed").status_code == 200
+        after = derived_balances(path, group.id)
+
+        assert (
+            after.net_for(MemberId(acting)).cents
+            == before.net_for(MemberId(acting)).cents + amount_cents
+        ), index
+        assert (
+            after.net_for(MemberId(to_member_id)).cents
+            == before.net_for(MemberId(to_member_id)).cents - amount_cents
+        ), index
+        for member_id in member_ids:
+            if member_id in (acting, to_member_id):
+                continue
+            assert (
+                after.net_for(MemberId(member_id)).cents
+                == before.net_for(MemberId(member_id)).cents
+            ), (index, member_id)
+        assert (
+            after.owed_between(MemberId(to_member_id), MemberId(acting)).cents
+            == before.owed_between(MemberId(to_member_id), MemberId(acting)).cents
+            + amount_cents
+        ), index
+        assert after != before, index
+        checked += 1
+    assert checked >= 50
+
+
+def test_a_rejected_settlement_moves_no_balance_over_generated_ledgers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mirror image, and the one that catches a fold that stopped checking.
+
+    Falsifiable, and the falsification has been run twice: making
+    ``_decide_settlement`` append ``CONFIRMED`` whatever the body said turns this red,
+    and so does deleting
+    ``if states[settlement.id] is not SettlementState.CONFIRMED: continue`` from
+    ``src/splitwise_lite/balances.py``.
+    """
+    import random
+
+    from splitwise_lite.groups import resolve_sole_group
+
+    rng = random.Random(LEDGER_SEED)
+    checked = 0
+    for index in range(GENERATED_LEDGERS):
+        path = tmp_path / f"ledger-{index}.sqlite3"
+        seed_group(path, members=GENERATED_ROSTER)
+        app = web.create_app(
+            store_path=path, secure_cookies=False, scrypt_params=CHEAP
+        )
+        payer = linked_client(app, path)
+        with open_store(path) as store:
+            group = resolve_sole_group(store)
+            member_ids = [member.id for member in store.list_members(group.id)]
+            generate_ledger(store, group.id, member_ids, rng, rng.randint(0, 20))
+        names = by_name(payer)
+        receiver_name = a_receiver_with_no_unanswered_claim(
+            balances_of(payer), names, names["Sam"]
+        )
+        receiver = linked_client(app, path, display_name=receiver_name)
+
+        # Snapshotted before the claim rather than between the claim and the answer,
+        # which is what makes this sensitive to the fold as well as to the endpoint. A
+        # pending claim moves nothing either, so with the guard in ``balances.py``
+        # present the two snapshots are the same Balances and this asserts no less
+        # than the other reading did; with that guard deleted, the claim alone moves a
+        # figure and this goes red, which is the third falsification criterion 38
+        # asks for and the reading between claim and answer could not see.
+        before = derived_balances(path, group.id)
+        payload_before = balances_of(payer)
+        monkeypatch.setattr(web, "_now", lambda: at(15, index % 60))
+        settlement_id = claim(
+            payer, to_member_id=names[receiver_name], amount="7.25"
+        )
+        monkeypatch.setattr(web, "_now", lambda: at(16, index % 60))
+        assert decide(receiver, settlement_id, "rejected").status_code == 200
+        after = derived_balances(path, group.id)
+
+        # Balances has value equality over net and pairwise both, so one == is the
+        # whole claim; the two below say which half moved when it fails.
+        assert after == before, index
+        assert list(after.net.items()) == list(before.net.items()), index
+        assert list(after.pairwise.items()) == list(before.pairwise.items()), index
+        payload_after = balances_of(payer)
+        assert payload_after["currency"] == payload_before["currency"], index
+        assert payload_after["net"] == payload_before["net"], index
+        # Every key of the plan, ``awaiting_confirmation`` included: the claim was
+        # refused, so it marks no transfer as awaiting anybody and the plan is exactly
+        # what it was before anybody claimed anything.
+        assert payload_after["transfers"] == payload_before["transfers"], index
+        checked += 1
+    assert checked >= 50
+
+
+@pytest.mark.parametrize("decision", ["confirmed", "rejected"])
+def test_the_decision_the_endpoint_recorded_is_real_and_not_discarded(
+    app, seeded: Path, decision: str
+) -> None:
+    # The companion to the two above: whatever moved or did not move, the decision the
+    # request asked for is in the log and is the state the fold reports.
+    from splitwise_lite.events import SettlementState
+
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="3.00")
+    assert stored_decisions(seeded, settlement_id) == ()
+    assert decide(receiver, settlement_id, decision).status_code == 200
+    assert len(stored_decisions(seeded, settlement_id)) == 1
+    assert state_of(seeded, settlement_id) is (
+        SettlementState.CONFIRMED
+        if decision == "confirmed"
+        else SettlementState.REJECTED
+    )
+
+
+def test_a_confirmation_larger_than_the_debt_is_accepted_and_flips_the_pair(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ``balances.py`` refuses to validate a settlement against the pairwise debt it
+    # appears to clear, and states that a settlement larger than the debt flips the
+    # pair. The receiver is the check, and the receiver has just checked.
+    from splitwise_lite.events import MemberId
+    from splitwise_lite.groups import resolve_sole_group
+
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    seed_three_expenses(payer, members, monkeypatch)
+    settlement_id = claim(payer, to_member_id=members["Ali"], amount="900.00")
+    assert decide(receiver, settlement_id, "confirmed").status_code == 200
+    with open_store(seeded) as store:
+        group = resolve_sole_group(store)
+    after = derived_balances(seeded, group.id)
+    # The pair now runs the other way: Ali owes Sam.
+    assert (
+        after.owed_between(MemberId(members["Ali"]), MemberId(members["Sam"])).cents > 0
+    )
+
+
+# --- Two users never see different balances ---------------------------------
+
+
+def balances_bytes(client) -> str:
+    return client.get("/api/balances").get_data(as_text=True)
+
+
+def test_two_members_read_the_same_balances_bytes_through_every_state(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Balances are a pure function of one ledger and the payload carries nothing about
+    # who asked, so two members must read the same bytes at every state the ledger
+    # passes through.
+    payer, receiver = sam_and_ali(app, seeded)
+    third = linked_client(app, seeded, display_name="Jo")
+    members = by_name(payer)
+    seed_three_expenses(payer, members, monkeypatch)
+
+    fresh = balances_bytes(payer)
+    assert fresh == balances_bytes(receiver)
+
+    first = claim(payer, to_member_id=members["Ali"], amount="2.00")
+    pending = balances_bytes(payer)
+    assert pending == balances_bytes(receiver)
+
+    assert decide(receiver, first, "confirmed").status_code == 200
+    confirmed = balances_bytes(payer)
+    assert confirmed == balances_bytes(receiver)
+    # Byte equality across readers cannot be satisfied by an endpoint that does
+    # nothing: the figures actually moved between the two reads.
+    assert confirmed != pending
+
+    second = claim(payer, to_member_id=members["Jo"], amount="1.00")
+    assert decide(third, second, "rejected").status_code == 200
+    rejected = balances_bytes(payer)
+    assert rejected == balances_bytes(receiver)
+
+
+def test_a_third_member_reads_the_same_balances_bytes_as_both_parties(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Jo is party to neither the payment nor the decision, which is what makes this a
+    # statement about the group rather than about the two people involved.
+    payer, receiver = sam_and_ali(app, seeded)
+    third = linked_client(app, seeded, display_name="Jo")
+    members = by_name(payer)
+    seed_three_expenses(payer, members, monkeypatch)
+    everyone = (payer, receiver, third)
+
+    def read_all() -> list[str]:
+        return [balances_bytes(client) for client in everyone]
+
+    fresh = read_all()
+    assert fresh[0] == fresh[1] == fresh[2]
+
+    first = claim(payer, to_member_id=members["Ali"], amount="2.00")
+    pending = read_all()
+    assert pending[0] == pending[1] == pending[2]
+
+    assert decide(receiver, first, "confirmed").status_code == 200
+    confirmed = read_all()
+    assert confirmed[0] == confirmed[1] == confirmed[2]
+    assert confirmed[0] != pending[0]
+
+    second = claim(payer, to_member_id=members["Jo"], amount="1.00")
+    assert decide(third, second, "rejected").status_code == 200
+    rejected = read_all()
+    assert rejected[0] == rejected[1] == rejected[2]
+
+
+def test_reading_balances_looks_at_nothing_about_the_acting_member() -> None:
+    # The three payloads above are equal by construction rather than by coincidence.
+    import inspect
+
+    source = inspect.getsource(web._read_balances)
+    assert "flask.g.member" not in source
+    assert "flask.g.group" in source

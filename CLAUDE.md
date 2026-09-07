@@ -33,6 +33,18 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
   yet, so nothing recorded here clears a debt. Only the payer may mark a payment, and
   only one claim per ordered pair at a time, so until the receiver answers that payer
   cannot record a second payment to that person, a part payment included.
+- **Receiver confirmation**: the person a payment was marked as paid to confirms it or
+  rejects it, from the claim on the balances screen. Confirming admits the settlement
+  into the fold, so the debt clears and every phone in the flat reads the same new
+  figures on its next read; rejecting moves no figure and leaves the claim visible under
+  `Not confirmed`, which frees the ordered pair so the payer can mark the payment again.
+  Four things it does not do. Only the receiver may answer, the payer included, so a
+  claim whose receiver has no member row linked to an account can be answered by nobody
+  and blocks that pair until `setup_group.py link` is run. An answer cannot be undone:
+  events are append-only and a second decision on one settlement is refused. The payer
+  cannot withdraw a claim the receiver has not answered, which is issue #66 and is
+  deliberately still open. And nobody is told: people find claims and answers by opening
+  the app.
 - **Install and open offline**: it installs to the home screen and the shell opens
   offline, on `localhost` or `127.0.0.1` only. The API is never cached, so offline the
   app opens and then reports that it cannot reach the server, and an expense cannot be
@@ -47,11 +59,6 @@ and not recorded there turns the suite red, and so does editing this file and le
 capability and is recorded entry by entry in that literal. Read your entry's reason there
 before trusting the suite to catch you; none of it moves the bullet for you.
 
-- **Receiver confirmation** (backlog task 15): a payment can be marked as paid, and
-  nothing answers it. The receiver sees the claim and has no way to confirm or reject it,
-  so a debt settled in real life stays on the list until somebody records the expense
-  side of it, and an unanswered claim blocks that pair. A balance moves only when the
-  receiver confirms, which is why marking on its own changes no figure.
 - **The incompleteness signal** (backlog task 16): nothing says how stale the ledger is
   or who has logged nothing. The balances screen's standing note, that the figures come
   only from what was recorded, is the whole of what the app says about it.

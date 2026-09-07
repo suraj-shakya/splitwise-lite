@@ -1571,6 +1571,29 @@
      what makes the server's 409 a race guard rather than the normal path. */
   var BALANCES_AWAITING = 'Marked as paid, and not confirmed yet.';
 
+  /* Task 15's sentences, composed here for the reason every sentence above is: they
+     belong to a row or to one act, and neither can live in markup. The two headings
+     and the note over the rejected list are fixed prose in index.html, where a Python
+     test pins them.
+
+     `Neither answer can be undone.` sits inside the action region rather than in that
+     fixed prose, because it has to be read at the moment the decision is made rather
+     than at the top of a list the reader did not know would ask them anything, and
+     because the payer and third members are shown no controls and need no warning
+     about them. The cost, stated: a receiver with three claims on screen reads it
+     three times. */
+  var BALANCES_CONFIRM = 'Confirm';
+  var BALANCES_REJECT = 'Reject';
+  var BALANCES_UNDONE = 'Neither answer can be undone.';
+  var BALANCES_ANSWERING = 'Answering this payment.';
+  /* One sentence for every one of api.js's six kinds, and never error.say. Every
+     refusal this endpoint can produce describes a body the person did not type, a
+     settlement they cannot see from here, or a rule about who they are, and this
+     screen renders no member id and no settlement id as visible text. Imprecise when
+     the true answer is that another device answered first, and never wrong in the
+     dangerous direction: it never claims something was recorded that was not. */
+  var BALANCES_NOT_ANSWERED = 'That was not answered.';
+
   /* Every detail region needs an id for its button's aria-controls. It comes from a
      sequence number and never from the two member ids: task 12 decided the renderer
      does not assume a pair appears at most once, and two rows naming one pair must
@@ -1591,6 +1614,16 @@
      heading, the note and the list are shown together or not at all. */
   var pendingBlock = document.getElementById('balances-pending-block');
   var pendingList = document.getElementById('balances-pending');
+  /* Task 15, on the same terms: one wrapper carrying the hidden flag over a heading,
+     a note and a list. */
+  var rejectedBlock = document.getElementById('balances-rejected-block');
+  var rejectedList = document.getElementById('balances-rejected');
+  /* What the last answer did. Above every list, because a confirmation rebuilds them
+     all and the sentence explaining why the screen just changed has to be readable
+     before the thing it changed. Never given `hidden`, and never emptied by
+     balancesClear(), because the re-read an answer fires runs through balancesClear()
+     and would wipe the sentence it had just written. */
+  var decisionLine = document.getElementById('balances-decision');
 
   /* Which attempt is allowed to draw. Bumped whenever one starts, so an answer from
      a visit the user has already left is discarded rather than drawn over the newer
@@ -1625,6 +1658,12 @@
        worked out just now.", or survives into a read that no longer carries it. */
     balancesEmpty(pendingList);
     pendingBlock.hidden = true;
+    /* And the refused claims with them, so nothing from a previous visit sits beside
+       a failure message. #balances-decision is deliberately not touched here: this
+       runs inside the re-read an answer fires, and clearing it would wipe the outcome
+       that read is there to show. */
+    balancesEmpty(rejectedList);
+    rejectedBlock.hidden = true;
   }
 
   function balancesRegionId() {
@@ -2095,13 +2134,13 @@
     return detail;
   }
 
-  function balancesValidPending(view) {
-    /* Exactly the fields a pending row renders, every one of them a string, and the
-       state by one strict equality against 'pending'. Strict, because task 15 widens
-       this list with decided settlements, and a looser test would let this screen
-       label a rejected claim as awaiting somebody. A row that fails is left out and
-       the rest of the list still renders: one unreadable row must not hide a real
-       claim. */
+  function balancesValidSettlement(view, state) {
+    /* Exactly the fields either list renders, every one of them a string, and the
+       state by one strict equality against the string the caller expects. One
+       validator for both lists, taking the expected state, because a looser test
+       would let this screen label a refused claim as awaiting somebody. A row that
+       fails is left out and the rest of the list still renders: one unreadable row
+       must not hide a real claim. */
     return (
       view !== null &&
       typeof view === 'object' &&
@@ -2110,29 +2149,16 @@
       balancesIsText(view.to_member_id) &&
       balancesIsText(view.amount) &&
       balancesIsText(view.created_at) &&
-      view.state === 'pending'
+      view.state === state
     );
   }
 
-  function balancesPendingRow(view, names, actingId) {
-    /* The one function that takes one pending view and returns one row. Two children,
-       a line and a date, so task 15 can append its confirm and reject controls as a
-       third without unpicking either, exactly as this task appended a third to a
-       transfer row. */
-    var row = document.createElement('li');
-    row.className = 'balances-pending';
-    /* Attributes only, never rendered as text. No settlement id and no member id is
-       ever visible on this screen, in any state; task 15 finds the claim to answer
-       through these three. */
-    row.setAttribute('data-settlement', view.id);
-    row.setAttribute('data-from', view.from_member_id);
-    row.setAttribute('data-to', view.to_member_id);
-
+  function balancesClaimLine(view, names, actingId, className, tail) {
     /* The same sentence on every phone, differing only in where ` (you)` falls, which
-       is task 12's rule: a row that means different things depending on who is
-       holding the phone is worse than a list of names. */
+       is task 12's rule. Both lists build their line here, so the two cannot drift
+       apart in anything but the tail. */
     var line = document.createElement('span');
-    line.className = 'balances-pending-line';
+    line.className = className;
     line.appendChild(
       document.createTextNode(
         balancesName(view.from_member_id, names, actingId) + ' marked '
@@ -2141,10 +2167,29 @@
     line.appendChild(balancesFigure(view.amount));
     line.appendChild(
       document.createTextNode(
-        ' as paid to ' + balancesName(view.to_member_id, names, actingId) + '.'
+        ' as paid to ' + balancesName(view.to_member_id, names, actingId) + tail
       )
     );
-    row.appendChild(line);
+    return line;
+  }
+
+  function balancesPendingRow(view, names, actingId) {
+    /* The one function that takes one pending view and returns one row. Two children,
+       a line and a date, and a third only on the phone of the person the payment was
+       made to: task 15 appends its confirm and reject controls without unpicking
+       either, exactly as task 14 appended a third to a transfer row. */
+    var row = document.createElement('li');
+    row.className = 'balances-pending';
+    /* Attributes only, never rendered as text. No settlement id and no member id is
+       ever visible on this screen, in any state; the answer finds the claim through
+       these three. */
+    row.setAttribute('data-settlement', view.id);
+    row.setAttribute('data-from', view.from_member_id);
+    row.setAttribute('data-to', view.to_member_id);
+
+    row.appendChild(
+      balancesClaimLine(view, names, actingId, 'balances-pending-line', '.')
+    );
 
     /* feedDate rather than a second parser: one ledger has one date spelling, and
        nothing here derives anything from it. How long a claim has been waiting is
@@ -2156,6 +2201,13 @@
     );
     stamp.setAttribute('datetime', view.created_at);
     row.appendChild(stamp);
+
+    /* Only the person owed the money is offered the answer, so nobody is shown a
+       control they could not use and the payer is offered none on their own claim.
+       An account nobody has linked has no acting id at all, so no row matches. */
+    if (actingId && view.to_member_id === actingId) {
+      row.appendChild(balancesAnswerRegion(view, names, actingId));
+    }
     return row;
   }
 
@@ -2163,7 +2215,7 @@
     /* The one place anything is put into this list, so the row a read draws and the
        row a fresh 201 appends cannot drift apart. Revealing the block here is what
        makes "shown only when at least one row was rendered" true by construction. */
-    if (!balancesValidPending(view)) {
+    if (!balancesValidSettlement(view, 'pending')) {
       return false;
     }
     pendingList.appendChild(balancesPendingRow(view, names, actingId));
@@ -2183,6 +2235,223 @@
     }
     for (var index = 0; index < rows.length; index += 1) {
       balancesPendingAdd(rows[index], names, actingId);
+    }
+  }
+
+
+  function balancesAnswerRegion(view, names, actingId) {
+    /* The third child of a pending row, present only on the phone of the person the
+       payment was made to. Appended rather than inserted, so childNodes[0] is still
+       the line and childNodes[1] is still the date, and a row with no third child is
+       byte for byte what task 14 rendered. A rejected row never gets one: nobody can
+       act on it from here, and the payer's next act is `Mark as paid` on the transfer
+       row, which is already there. */
+    var region = document.createElement('div');
+    region.className = 'balances-answer';
+    var payer = balancesName(view.from_member_id, names, actingId);
+    var receiver = balancesName(view.to_member_id, names, actingId);
+    /* Named once and reused by both accessible names, so the two cannot disagree
+       about which payment they are offering to answer. */
+    var claim = payer + ' marked ' + view.amount + ' as paid to ' + receiver;
+
+    region.appendChild(balancesText('p', 'balances-answer-note', BALANCES_UNDONE));
+
+    var confirm = balancesAnswerButton(
+      'balances-confirm-button',
+      BALANCES_CONFIRM,
+      claim
+    );
+    var reject = balancesAnswerButton(
+      'balances-reject-button',
+      BALANCES_REJECT,
+      claim
+    );
+    region.appendChild(confirm);
+    region.appendChild(reject);
+
+    /* In the document from the start and never hidden, because a live region whose
+       text changed while it was hidden announces nothing in several screen readers.
+       It ships empty and its rule gives it no height, so it takes no space until
+       there is something to say. */
+    var status = document.createElement('p');
+    status.className = 'balances-answer-status';
+    status.setAttribute('role', 'status');
+    status.textContent = '';
+    region.appendChild(status);
+
+    /* One flag for the row and not one per button, so Confirm followed by Reject
+       before the first answer comes back still sends one request. It lives in this
+       row's own closure, so two claims addressed to the same person each have their
+       own and answering one changes nothing about the other. The flag is the real
+       guard and `disabled` is set beside it for the browser: a handler dispatched
+       straight at the listener never consults the attribute, so a guard living only
+       there would be asserted nowhere. */
+    var answering = false;
+
+    function answer(decision, opening, tail) {
+      return function () {
+        /* The same question the feed retry, the add retry, both disclosure handlers
+           and the mark handler ask, through the same shared helper rather than a
+           sixth copy of it. Behind a curtain nothing is asked, nothing is disabled
+           and nothing is written. */
+        if (!ledgerIsUp()) {
+          return;
+        }
+        if (answering) {
+          return;
+        }
+        answering = true;
+        confirm.disabled = true;
+        reject.disabled = true;
+        /* Task 12's sequence number, captured before the request. Without it an
+           answer arriving after the person left and came back would fire a second
+           pair of reads over a screen that had already rebuilt, and leave a sentence
+           about an act on a screen nobody is looking at. */
+        var attempt = balancesAttempt;
+        /* At most one act's outcome is ever on screen, and it is always the most
+           recent one. */
+        decisionLine.textContent = '';
+        /* Written before the request goes out, so the announcement is already on
+           screen at the moment the call is made rather than after it comes back. */
+        region.setAttribute('aria-busy', 'true');
+        status.textContent = BALANCES_ANSWERING;
+        api.decideSettlement(view.id, decision).then(
+          function () {
+            region.removeAttribute('aria-busy');
+            if (attempt !== balancesAttempt) {
+              /* The person left and came back. A newer read owns the screen, and a
+                 sentence written now would describe a screen that is gone. */
+              return;
+            }
+            /* The sentence first and the re-read second, because the decision is
+               recorded either way: a re-read that fails must not swallow the only
+               statement that the answer was accepted. */
+            balancesSay(opening, view.amount, payer, receiver, tail);
+            /* And this task does re-read, where task 14 did not. A confirmation moves
+               the net positions, the transfer plan, `pending` and
+               `awaiting_confirmation` all at once, and a rejection moves the claim
+               from one list to the other and unblocks the pair. Nothing narrower than
+               a re-read is honest, and this screen may compute none of it itself. */
+            balancesLoad();
+          },
+          function () {
+            region.removeAttribute('aria-busy');
+            /* Nothing was kept, so pressing again sends a fresh request. */
+            answering = false;
+            confirm.disabled = false;
+            reject.disabled = false;
+            /* One sentence, for every one of the six kinds, into this row and nowhere
+               else: #balances-decision stays empty, #balances-error stays hidden, the
+               net list and both blocks are untouched, an open drill-down stays open
+               and no re-read is fired. */
+            status.textContent = BALANCES_NOT_ANSWERED;
+          }
+        );
+      };
+    }
+
+    confirm.addEventListener(
+      'click',
+      answer(
+        'confirmed',
+        'Confirmed. The payment of ',
+        ' is now counted in the figures below.'
+      )
+    );
+    reject.addEventListener(
+      'click',
+      answer(
+        'rejected',
+        'Not confirmed. The payment of ',
+        ' is not counted, and it can be marked as paid again.'
+      )
+    );
+    return region;
+  }
+
+  function balancesAnswerButton(className, label, claim) {
+    /* A real button, so Enter and Space work with no key handler, the focus order is
+       right with nothing written to put it there, and no role is needed. The visible
+       label first and then the payment, so somebody listing the buttons on a screen
+       with three claims hears six different names and each visible label is contained
+       in its accessible one. Two buttons per row is exactly why the labels cannot be
+       the visible text alone. */
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.appendChild(document.createTextNode(label));
+    button.setAttribute('aria-label', label + ': ' + claim);
+    return button;
+  }
+
+  function balancesSay(opening, amount, payer, receiver, tail) {
+    /* The outcome of one act, at the top of the screen, rebuilt as text so the amount
+       keeps its own element and stays whole when the sentence wraps. Emptied first,
+       so a second act never reads as two. */
+    while (decisionLine.firstChild) {
+      decisionLine.removeChild(decisionLine.firstChild);
+    }
+    decisionLine.appendChild(document.createTextNode(opening));
+    decisionLine.appendChild(balancesFigure(amount));
+    decisionLine.appendChild(
+      document.createTextNode(' from ' + payer + ' to ' + receiver + tail)
+    );
+  }
+
+  function balancesRejectedRow(view, names, actingId) {
+    /* Two children, a line and a date, and never a third: nobody can act on a refused
+       claim from this screen. */
+    var row = document.createElement('li');
+    row.className = 'balances-rejected';
+    /* Attributes only, never rendered as text. No settlement id and no member id is
+       ever visible on this screen, in any state. */
+    row.setAttribute('data-settlement', view.id);
+    row.setAttribute('data-from', view.from_member_id);
+    row.setAttribute('data-to', view.to_member_id);
+    row.appendChild(
+      balancesClaimLine(
+        view,
+        names,
+        actingId,
+        'balances-rejected-line',
+        ', and it was not confirmed.'
+      )
+    );
+    /* feedDate rather than a second parser: one ledger has one date spelling, and
+       nothing here derives anything from it. */
+    var stamp = balancesText(
+      'time',
+      'balances-rejected-date',
+      feedDate(view.created_at)
+    );
+    stamp.setAttribute('datetime', view.created_at);
+    row.appendChild(stamp);
+    return row;
+  }
+
+  function balancesRejectedAdd(view, names, actingId) {
+    /* The one place anything is put into this list, so revealing the block here makes
+       "shown only when at least one row was rendered" true by construction. */
+    if (!balancesValidSettlement(view, 'rejected')) {
+      return false;
+    }
+    rejectedList.appendChild(balancesRejectedRow(view, names, actingId));
+    rejectedList.hidden = false;
+    rejectedBlock.hidden = false;
+    return true;
+  }
+
+  function balancesRejectedFill(rows, names, actingId) {
+    /* In the order the array arrived, which the server sends oldest first. Nothing
+       here sorts, reverses or filters by anything but readability, and an absent or
+       non-array `rejected` is an older server, which is a screen without the block
+       rather than a broken one. Never capped or aged out: a screen that hides part of
+       the ledger is the worse failure. */
+    if (!Array.isArray(rows)) {
+      return;
+    }
+    for (var index = 0; index < rows.length; index += 1) {
+      balancesRejectedAdd(rows[index], names, actingId);
     }
   }
 
@@ -2435,6 +2704,10 @@
        confirmed is showing two true things at once, and hiding either would be the
        screen deciding one of them does not count. */
     balancesPendingFill(figures.pending, names, actingId);
+    /* Rendered on the same terms and for the same reason: a refused claim is part of
+       the ledger, whatever the transfer list says, and hiding it would tell the payer
+       nothing when the payer is the only person who can act next. */
+    balancesRejectedFill(figures.rejected, names, actingId);
 
     balancesFill(transferList, transfers, balancesTransferRow, names, actingId);
     /* Shown only when at least one rendered row is a control that really opens. An
@@ -2498,6 +2771,10 @@
     if (!ledgerIsUp() || window.location.hash !== BALANCES_ROUTE) {
       return;
     }
+    /* The one place besides a press that empties it. What an answer did belongs to
+       the visit it happened in, and a sentence about an act two visits ago is a
+       sentence about a screen that is gone. */
+    decisionLine.textContent = '';
     balancesLoad();
   }
 

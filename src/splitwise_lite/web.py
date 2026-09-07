@@ -80,6 +80,16 @@ check-then-act, so it is decided under a module-level lock, and the recorded gap
 limiter's: one process is exact, two processes hold two locks and the rule goes back to
 being best effort. :data:`_SETTLEMENT_LOCK` states the whole of it.
 
+**Only the receiver of a settlement may answer it**, and a settlement may be answered
+once. The decider is the acting member, taken from the session and never from the body,
+so anybody else is 403 ``not_the_receiver``, and that includes the payer: an endpoint
+that let the payer answer their own claim would be a withdrawal mechanism wearing a
+confirmation's clothes. A second decision is 409 ``settlement_already_decided`` rather
+than an append, because ``balances.py`` applies earliest-decision-wins and the log would
+otherwise carry an answer that can never take effect. Confirming is refused while the
+ordered pair carries more than one unanswered claim; rejecting is always allowed,
+because rejecting is the recourse that clears a duplicate.
+
 Money crosses the wire only as a ``format_amount`` string, never as a number and never
 as cents, so the front end is handed nothing it could do arithmetic on. ``parse_amount``
 is the only route from a request body back to cents.
@@ -125,7 +135,9 @@ __all__ = [
     "CsrfFailed",
     "MalformedRequest",
     "NotAuthenticated",
+    "NotTheReceiver",
     "RateLimiter",
+    "SettlementAlreadyDecided",
     "SettlementAlreadyPending",
     "TooManyAttempts",
     "WebError",
@@ -170,6 +182,38 @@ class MalformedRequest(WebError):
     """
 
 
+class NotTheReceiver(WebError):
+    """Somebody who is not this settlement's receiver tried to answer it.
+
+    403 rather than 404: the settlement is in this group's ledger and the caller may
+    already read the whole of it, so pretending it is not there would be a lie about
+    something they can see. The payer is refused by this too, and that is the rule
+    rather than an oversight: payer-creates plus receiver-confirms is what makes a
+    settlement need two people, and an endpoint that let the payer answer their own
+    claim would be a withdrawal mechanism wearing a confirmation's clothes.
+    Withdrawing a claim is issue #66 and is not this.
+
+    The message names no member id and is the same sentence whether the caller is the
+    payer or a third member: there is nothing a second sentence would tell either of
+    them that they could act on.
+    """
+
+
+class SettlementAlreadyDecided(WebError):
+    """This settlement already carries an answer, and answers are not revisited.
+
+    409 rather than 400: the body parsed and named a real settlement, and the request
+    disagrees with the state of the ledger rather than with a rule about its shape.
+
+    Appending the second answer instead would be worse than refusing it.
+    ``balances._decided_states`` keeps the earliest decision per settlement id, so a
+    later one changes no figure, and the log would carry an answer that can never take
+    effect. It is a race guard and not the normal path: the screen offers no control on
+    a settlement that is not pending, so reaching this needs a second device or a
+    second tap against an answer that was lost in flight.
+    """
+
+
 class SettlementAlreadyPending(WebError):
     """This payer already has a claim to this receiver that nobody has answered.
 
@@ -184,6 +228,14 @@ class SettlementAlreadyPending(WebError):
     lock and no constraint, so a second worker could accept what this one refuses.
     :data:`_SETTLEMENT_LOCK` records what that costs and what issue #16 should do
     about it.
+
+    Task 15 raises this a second time, from the other end and for the same reason: a
+    confirmation is refused while the ordered pair carries more than one unanswered
+    claim, because confirming one of two identical claims would be the receiver
+    guessing which payment they were paid, and confirming both would clear the debt
+    twice. It is the same situation seen from the other side and deserves the same
+    code. Rejecting is never refused for it, because rejecting is the recourse: it
+    drops the pair back to one unanswered claim, which can then be confirmed.
     """
 
 
@@ -380,6 +432,7 @@ ERROR_STATUS: Final[dict[type[BaseException], int]] = {
     accounts.AuthenticationFailed: 401,
     CsrfFailed: 403,
     groups.MemberNotLinked: 403,
+    NotTheReceiver: 403,
     store.RecordNotFound: 404,
     accounts.EmailAlreadyRegistered: 409,
     store.DuplicateRecord: 409,
@@ -388,6 +441,7 @@ ERROR_STATUS: Final[dict[type[BaseException], int]] = {
     groups.MemberAlreadyLinked: 409,
     groups.UserAlreadyLinked: 409,
     SettlementAlreadyPending: 409,
+    SettlementAlreadyDecided: 409,
     TooManyAttempts: 429,
     MalformedRequest: 400,
     accounts.InvalidEmail: 400,
@@ -424,6 +478,7 @@ ERROR_CODE: Final[dict[type[BaseException], str]] = {
     accounts.AuthenticationFailed: "authentication_failed",
     CsrfFailed: "csrf_failed",
     groups.MemberNotLinked: "member_not_linked",
+    NotTheReceiver: "not_the_receiver",
     store.RecordNotFound: "record_not_found",
     accounts.EmailAlreadyRegistered: "email_already_registered",
     store.DuplicateRecord: "duplicate_record",
@@ -432,6 +487,7 @@ ERROR_CODE: Final[dict[type[BaseException], str]] = {
     groups.MemberAlreadyLinked: "member_already_linked",
     groups.UserAlreadyLinked: "user_already_linked",
     SettlementAlreadyPending: "settlement_already_pending",
+    SettlementAlreadyDecided: "settlement_already_decided",
     TooManyAttempts: "too_many_attempts",
     MalformedRequest: "malformed_request",
     accounts.InvalidEmail: "invalid_email",
@@ -1063,6 +1119,25 @@ than adding a field beside them.
 """
 
 
+_SETTLEMENT_DECISION_WIRE: Final[dict[str, events.SettlementState]] = {
+    wire: state
+    for state, wire in _SETTLEMENT_STATE_WIRE.items()
+    if state is not events.SettlementState.PENDING
+}
+"""The two answers a decision body may carry, read back to the domain.
+
+Derived from :data:`_SETTLEMENT_STATE_WIRE` rather than written a second time: one
+literal and one derivation, so a renamed wire spelling moves both directions at once
+and the two can never disagree about how a state is spelled.
+
+``PENDING`` is dropped, which is what makes ``{"decision": "pending"}`` a 400 rather
+than a 500: it is not a decision, it is the absence of one, and
+``SettlementDecisionEvent.__post_init__`` raises ``InvalidEvent`` for it, which is in
+neither :data:`ERROR_STATUS` nor :data:`ERROR_CODE`. The constructor stays as the
+backstop it is; this map is what refuses it first.
+"""
+
+
 def _settlement_view(
     settlement: events.SettlementEvent, state: events.SettlementState
 ) -> dict[str, Any]:
@@ -1445,13 +1520,24 @@ def _read_balances() -> flask.Response:
     longest is the one that needs chasing; it also lets the screen append a freshly
     created settlement to the end of the list and be exactly right.
 
+    ``rejected`` carries every settlement in the group the receiver refused, oldest
+    first, filtered out of the same ``ledger``: one snapshot, one instant and one
+    ordering rule for both lists. It is a list of its own rather than a widening of
+    ``pending`` because the shipped screen compares ``state`` against ``'pending'`` by
+    one strict equality and would silently drop a rejected claim, and because
+    ``awaiting_confirmation`` is computed from unanswered claims and a refused one must
+    mark no transfer as awaiting anybody. A confirmed settlement is in neither list: it
+    has moved the figures, and it is in the drill-down through ``debt_sources``.
+
     ``awaiting_confirmation`` on each transfer is computed here, from ids, for the
     same reason ``covers_whole_debt`` and ``direction`` are: what counts as a match is
-    a product rule, task 15 refines it when rejected settlements join the list, and it
-    must live in one place. The amount is deliberately no part of the match, so a
-    claim of 5.00 marks a 9.00 row: the row says a payment is marked and unconfirmed
-    and never that this figure has been paid, and the claimed figure is in ``pending``
-    where it can be read against the suggestion.
+    a product rule and it must live in one place. This docstring used to predict that
+    task 15 would refine it when rejected settlements joined the list; they joined a
+    list of their own instead, so the match is unchanged and none was needed. The
+    amount is deliberately no part of the match, so a claim of 5.00 marks a 9.00 row:
+    the row says a payment is marked and unconfirmed and never that this figure has
+    been paid, and the claimed figure is in ``pending`` where it can be read against
+    the suggestion.
 
     None of this moves a figure. ``derive_balances`` folds confirmed settlements only,
     so a pending claim changes ``net``, ``transfers`` and every ``payer_debts`` row not
@@ -1476,6 +1562,18 @@ def _read_balances() -> flask.Response:
         if isinstance(recorded, events.SettlementEvent)
         and states[recorded.id] is events.SettlementState.PENDING
     ]
+    # The same one snapshot, filtered a second way. Nothing is sorted here: the
+    # events arrive in ``ordering_key`` order, so this ascends by ``(created_at, id)``
+    # with the oldest first, exactly as ``pending`` does.
+    rejected = [
+        recorded
+        for recorded in ledger
+        if isinstance(recorded, events.SettlementEvent)
+        and states[recorded.id] is events.SettlementState.REJECTED
+    ]
+    # From the unanswered claims only. A rejected claim marks no transfer as awaiting
+    # anybody, which is what two lists buy and one list would have made every consumer
+    # re-derive.
     awaiting = {
         (settlement.from_member_id, settlement.to_member_id)
         for settlement in pending
@@ -1523,6 +1621,10 @@ def _read_balances() -> flask.Response:
                 _settlement_view(settlement, events.SettlementState.PENDING)
                 for settlement in pending
             ],
+            "rejected": [
+                _settlement_view(settlement, events.SettlementState.REJECTED)
+                for settlement in rejected
+            ],
         },
         200,
     )
@@ -1569,7 +1671,46 @@ restatement of what is already true; under two it is the only thing standing bet
 duplicated claim and a debt cleared twice. Sharing the lock is deliberate: two locks
 for one invariant is one lock too many. Share the counting the way the paragraph above
 says, by passing the ledger rather than by taking the lock in two places.
+
+**Issue #16 did that.** :func:`_decide_settlement` takes this lock across its own
+ledger read, every check that depends on ledger state and its own append, and counts
+the pair's unanswered claims inside it through :func:`_pending_claims`, which is handed
+the ledger and takes nothing. Confirming is refused ``settlement_already_pending`` when
+that count is above one; rejecting is never refused for it, because rejecting is the
+only way a receiver can clear a duplicate and then answer the real claim. The lock is
+therefore taken in exactly two places in this module, once per endpoint, and a test
+reads this file and says so.
 """
+
+
+def _pending_claims(
+    ledger: tuple[events.LedgerEvent, ...],
+    states: dict[events.SettlementId, events.SettlementState],
+    payer_id: str,
+    receiver_id: str,
+) -> int:
+    """How many unanswered claims this ordered pair carries in ``ledger``.
+
+    Handed a ledger and a states map, and taking no lock at all. That is the whole of
+    the shape the module lock asks for, in its own docstring: both endpoints call this
+    from inside their own ``with`` block, and a helper that both counted and locked
+    would take a non-reentrant lock twice on one thread and hang that request for good,
+    with no exception and no log line. The name of that lock is deliberately absent
+    from here, so "no helper handed a ledger mentions it" stays a plain source read.
+
+    The pair is ordered, because a claim each way is two claims about two different
+    transfers of money and both may be true, and the amount is no part of it, because
+    two claims for different amounts in one direction is still the ambiguity this
+    exists to catch.
+    """
+    return sum(
+        1
+        for recorded in ledger
+        if isinstance(recorded, events.SettlementEvent)
+        and recorded.from_member_id == payer_id
+        and recorded.to_member_id == receiver_id
+        and states[recorded.id] is events.SettlementState.PENDING
+    )
 
 
 def _create_settlement() -> flask.Response:
@@ -1647,17 +1788,13 @@ def _create_settlement() -> flask.Response:
     with _SETTLEMENT_LOCK:
         ledger = _store().list_events(group.id)
         states = balances.settlement_states(ledger)
-        for existing in ledger:
-            if (
-                isinstance(existing, events.SettlementEvent)
-                and existing.from_member_id == acting.id
-                and existing.to_member_id == to_member_id
-                and states[existing.id] is events.SettlementState.PENDING
-            ):
-                raise SettlementAlreadyPending(
-                    "a payment to that person is already marked as paid and is "
-                    "waiting for them to confirm it; there can be only one at a time"
-                )
+        # The count :func:`_decide_settlement` shares, by being handed the ledger this
+        # block already read rather than by taking the lock a second time.
+        if _pending_claims(ledger, states, acting.id, to_member_id):
+            raise SettlementAlreadyPending(
+                "a payment to that person is already marked as paid and is "
+                "waiting for them to confirm it; there can be only one at a time"
+            )
 
         settlement = events.SettlementEvent(
             id=events.SettlementId(events.new_id()),
@@ -1679,6 +1816,135 @@ def _create_settlement() -> flask.Response:
         },
         201,
     )
+
+
+def _decide_settlement(settlement_id: str) -> flask.Response:
+    """``POST /api/settlements/<settlement_id>/decision``: the receiver answers.
+
+    One appended ``SettlementDecisionEvent`` and nothing else. Confirming admits the
+    settlement into the balance fold and the debt clears; rejecting moves no figure and
+    leaves the claim visible with its state changed, which frees the ordered pair so
+    the payer can mark the payment again.
+
+    **The decider is the acting member and is never named in the body.** ``decided_by``
+    comes from ``flask.g.member``, exactly as ``from_member_id`` does one endpoint up,
+    and ``_require_keys`` refuses a body naming it.
+
+    **Only the receiver may answer.** Anybody else is ``NotTheReceiver``, and that
+    includes the payer: payer-creates plus receiver-confirms is what makes a settlement
+    need two people, and one rule without the other is worth nothing. Letting the payer
+    answer would be a withdrawal mechanism wearing a confirmation's clothes, and
+    withdrawing a claim is issue #66. The consequence, stated rather than discovered: a
+    claim whose receiver is an unlinked member can be answered by nobody and blocks
+    that pair until ``setup_group.py link`` is run, which is the mirror of task 14's
+    accepted gap and is accepted for the same reason.
+
+    **The amount is never re-checked against anything.** ``balances.py`` refuses to
+    validate a settlement against the pairwise debt it appears to clear, and states
+    that a settlement larger than the debt flips the pair. The receiver is the check,
+    and the receiver has just checked.
+
+    An unknown ``settlement_id`` is ``RecordNotFound`` and so a 404, where an unknown
+    member on the debts path is a 400: a member id there is an argument to a query
+    about the group, while a settlement id here names a resource, and the honest answer
+    for a resource that is not there is 404. A settlement belonging to another group is
+    the same 404, because the ledger this reads is this group's.
+
+    A settlement that already carries a decision is ``SettlementAlreadyDecided`` rather
+    than a second append: ``balances._decided_states`` keeps the earliest decision, so
+    a later one changes no figure and the log would carry an answer that can never take
+    effect.
+
+    The answer is **200 and not 201**. The body names the settlement, and the
+    settlement was not created here; a decision has no URL of its own to hand back. It
+    carries no balances either: the screen re-reads through the endpoint it already
+    has, and a second shape of balances payload would be a second builder to keep in
+    step with :func:`_read_balances`.
+
+    The body alone is validated before the lock is taken. Everything that depends on
+    ledger state, the read included, happens inside it, for the reason
+    :data:`_SETTLEMENT_LOCK` gives: a check in one transaction and an append in another
+    is a rule two threaded requests walk straight through.
+    """
+    payload = _json_object()
+    what = "a settlement decision body"
+    _require_keys(payload, ("decision",), what)
+    wire = _require_str(payload, "decision", what)
+    if wire not in _SETTLEMENT_DECISION_WIRE:
+        # Refused here rather than left to ``SettlementDecisionEvent``, which raises
+        # ``InvalidEvent`` for ``PENDING`` and would reach the client as a generic 500
+        # with the real reason in the log only.
+        raise MalformedRequest(
+            f"{what} key 'decision' must be one of "
+            f"{sorted(_SETTLEMENT_DECISION_WIRE)}, and 'pending' is not a decision"
+        )
+    decision = _SETTLEMENT_DECISION_WIRE[wire]
+
+    group = flask.g.group
+    acting = flask.g.member
+    with _SETTLEMENT_LOCK:
+        ledger = _store().list_events(group.id)
+        # The settlements and their decisions loaded together, which is what
+        # ``SettlementDecisionEvent`` carrying no ``group_id`` requires of whoever
+        # reads it, and the same function ``derive_balances`` reaches.
+        states = balances.settlement_states(ledger)
+        settlement = next(
+            (
+                recorded
+                for recorded in ledger
+                if isinstance(recorded, events.SettlementEvent)
+                and recorded.id == settlement_id
+            ),
+            None,
+        )
+        if settlement is None:
+            raise store.RecordNotFound(
+                f"no settlement in this group with that id: {settlement_id!r}"
+            )
+        # The receiver check runs before the state check, because "you may not answer
+        # this" is true regardless of what the ledger says about the claim.
+        if settlement.to_member_id != acting.id:
+            raise NotTheReceiver(
+                "only the person the payment was made to can answer it; a payment "
+                "cannot be confirmed or rejected by whoever marked it as paid"
+            )
+        if states[settlement.id] is not events.SettlementState.PENDING:
+            raise SettlementAlreadyDecided(
+                "that payment has already been answered, and an answer cannot be "
+                "taken back"
+            )
+        if (
+            decision is events.SettlementState.CONFIRMED
+            and _pending_claims(
+                ledger,
+                states,
+                settlement.from_member_id,
+                settlement.to_member_id,
+            )
+            > 1
+        ):
+            # Unreachable in one process, where task 14's 409 keeps the count at one.
+            # Across two it is the only thing between a duplicated claim and a debt
+            # cleared twice, and it fails closed on the answer that moves money and
+            # open on the one that does not: rejecting is the recourse.
+            raise SettlementAlreadyPending(
+                "there is more than one payment from that person waiting for an "
+                "answer, so confirming one of them would be a guess; reject the one "
+                "that is not real and then confirm the one that is"
+            )
+
+        _store().append_settlement_decision(
+            events.SettlementDecisionEvent(
+                id=events.new_id(),
+                settlement_id=events.SettlementId(settlement.id),
+                decision=decision,
+                decided_by=events.MemberId(acting.id),
+                created_at=_now(),
+            )
+        )
+    # The only decision this settlement carries, so the state it derives to is the one
+    # just appended and no second fold is needed to find it.
+    return _json_response({"settlement": _settlement_view(settlement, decision)}, 200)
 
 
 def _read_debt(debtor_id: str, creditor_id: str) -> flask.Response:
@@ -1932,6 +2198,16 @@ _API_ROUTES: Final[tuple[_ApiRoute, ...]] = (
         "/api/settlements",
         "create_settlement",
         _create_settlement,
+        ("POST",),
+        _Access.MEMBER,
+    ),
+    # Task 15, appended on the same terms as the row above it. The access is not
+    # optional and this row is the whole of the registration: CSRF, the session check
+    # and the member check all follow from it.
+    _ApiRoute(
+        "/api/settlements/<settlement_id>/decision",
+        "decide_settlement",
+        _decide_settlement,
         ("POST",),
         _Access.MEMBER,
     ),

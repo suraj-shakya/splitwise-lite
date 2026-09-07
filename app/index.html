@@ -242,6 +242,15 @@
       the recorded expenses each time this screen opens, and are never stored. An
       expense nobody recorded is not in them.</p>
 
+    <!-- Task 15. What an answer to a claim did, written here before the re-read that
+         rebuilds every list below it, so the sentence explaining why the screen just
+         changed is readable before the thing it changed and a screen reader user
+         reading from the top meets it first. It ships empty, is never given `hidden`
+         because a live region whose text changes while it is hidden announces nothing
+         in several screen readers, and its rule gives it no height, so it takes no
+         space until there is something to say. -->
+    <p class="balances-decision" id="balances-decision" role="status"></p>
+
     <h2 class="balances-heading">Net positions</h2>
     <!-- The currency is named once, above the list, and never repeated per row: at
          320px a code on every line is noise. The code is filled in from the
@@ -264,6 +273,19 @@
         counted in the figures above, and they stay in the suggested payments below, until
         the person receiving the money confirms.</p>
       <ul class="balances-list" id="balances-pending"></ul>
+    </div>
+
+    <!-- Task 15, on the same terms as the block above it: one wrapper with one hidden
+         flag, because a bare "Not confirmed" over an empty list on an ordinary day is
+         noise. Below the awaiting block and above the suggestions, so the two things
+         that explain why a payment is still suggested are read together and both point
+         down at the list they are about. -->
+    <div id="balances-rejected-block" hidden>
+      <h2 class="balances-heading">Not confirmed</h2>
+      <p class="balances-note">These were marked as paid and the person receiving the money did
+        not confirm them. They are not counted in the figures above, and whoever paid can mark
+        the payment again.</p>
+      <ul class="balances-list" id="balances-rejected"></ul>
     </div>
 
     <h2 class="balances-heading">Suggested payments</h2>

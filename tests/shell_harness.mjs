@@ -5626,7 +5626,15 @@ const SCENARIOS = [
           figures: figuresIn(row),
           marks: page
             .el('balances-transfers')
-            .querySelectorAll('.balances-mark-button').length
+            .querySelectorAll('.balances-mark-button').length,
+          /* Task 15. The rows are still identical for everybody; the offer of the
+             answer is the one thing that differs by reader, and it is an offer rather
+             than information. So this reading is 3 children and two accessible names
+             on the receiver's phone and 2 children and none on the other two. */
+          answers: row
+            .querySelectorAll('.balances-confirm-button')
+            .concat(row.querySelectorAll('.balances-reject-button'))
+            .map((button) => button.getAttribute('aria-label'))
         };
       };
 
@@ -5654,7 +5662,8 @@ const SCENARIOS = [
         to: 'mem-2',
         figures: ['600.00'],
         /* Nobody is offered a control on a payment somebody has already claimed. */
-        marks: 0
+        marks: 0,
+        answers: []
       };
       page.same(
         payer,
@@ -5663,7 +5672,15 @@ const SCENARIOS = [
       );
       page.same(
         receiver,
-        Object.assign({}, shape, { line: 'Sam marked 600.00 as paid to Ali (you).' }),
+        Object.assign({}, shape, {
+          line: 'Sam marked 600.00 as paid to Ali (you).',
+          /* Task 15's third child, on this phone only. */
+          children: 3,
+          answers: [
+            'Confirm: Sam marked 600.00 as paid to Ali (you)',
+            'Reject: Sam marked 600.00 as paid to Ali (you)'
+          ]
+        }),
         'the receiver’s phone'
       );
       page.same(
@@ -6121,6 +6138,1036 @@ const SCENARIOS = [
       );
       page.expectRequests(BALANCES_ENTRY);
     }
+  },
+
+  {
+    /* The receiver is offered the answer, on their own claim and on nobody else's.
+       Two claims addressed to Ali, so each row has its own controls, its own status
+       line and its own closure, and answering one changes nothing about the other
+       before the re-read. Drawing the controls asks for nothing: the first press is
+       the first request after entry, and the two reads after it are the re-read. */
+    name: 'the_receiver_can_confirm_a_payment_that_was_marked_as_paid',
+    async run(page) {
+      const claimed = '2026-09-05T09:00:00.000000+00:00';
+      const later = '2026-09-05T10:00:00.000000+00:00';
+      const first = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', true)],
+        pending: [
+          settlementView('set-1', 'mem-1', 'mem-2', '600.00', claimed),
+          settlementView('set-2', 'mem-3', 'mem-2', '150.00', later)
+        ],
+        rejected: []
+      };
+      const after = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [],
+        pending: [settlementView('set-2', 'mem-3', 'mem-2', '150.00', later)],
+        rejected: []
+      };
+      await onAnswerableClaim(page, [ok(first), ok(after)]);
+      page.same(page.requests, BALANCES_ENTRY, 'requests on entering the route');
+
+      const rows = pendingRows(page);
+      page.is(rows.length, 2, 'pending rows');
+      page.is(rows[0].childNodes.length, 3, 'children of the first row');
+      page.is(rows[1].childNodes.length, 3, 'children of the second row');
+      /* The first two children still mean what task 14 made them mean. */
+      page.is(
+        rows[0].childNodes[0].textContent,
+        'Sam marked 600.00 as paid to Ali (you).',
+        'the line'
+      );
+      page.is(rows[0].childNodes[1].tagName, 'TIME', 'the date');
+
+      const region = answerIn(rows[0]);
+      page.is(region.className, 'balances-answer', 'the third child');
+      page.is(region.childNodes.length, 4, 'children of the action region');
+      page.is(
+        region.childNodes[0].textContent,
+        'Neither answer can be undone.',
+        'the note'
+      );
+      page.is(region.childNodes[1], confirmIn(rows[0]), 'the confirm control');
+      page.is(region.childNodes[2], rejectIn(rows[0]), 'the reject control');
+      page.is(region.childNodes[3], answerStatusIn(rows[0]), 'the status line');
+      page.is(region.childNodes[3].getAttribute('role'), 'status', 'the live region');
+      page.is(region.childNodes[3].textContent, '', 'the status line before');
+      page.is(confirmIn(rows[0]).type, 'button', 'the confirm control is a button');
+      page.is(rejectIn(rows[0]).type, 'button', 'the reject control is a button');
+      page.is(confirmIn(rows[0]).textContent, 'Confirm', 'the visible label');
+      page.is(rejectIn(rows[0]).textContent, 'Reject', 'the visible label');
+
+      /* Four different accessible names for two claims on one screen, each beginning
+         with its own visible label. */
+      page.same(
+        [
+          confirmIn(rows[0]).getAttribute('aria-label'),
+          rejectIn(rows[0]).getAttribute('aria-label'),
+          confirmIn(rows[1]).getAttribute('aria-label'),
+          rejectIn(rows[1]).getAttribute('aria-label')
+        ],
+        [
+          'Confirm: Sam marked 600.00 as paid to Ali (you)',
+          'Reject: Sam marked 600.00 as paid to Ali (you)',
+          'Confirm: Cass marked 150.00 as paid to Ali (you)',
+          'Reject: Cass marked 150.00 as paid to Ali (you)'
+        ],
+        'the four accessible names'
+      );
+
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', claimed) })
+      );
+      await page.dispatch(confirmIn(rows[0]), 'click');
+
+      /* The screen is rebuilt from the second read, and the other claim is still
+         there because that read still carries it. */
+      page.is(pendingRows(page).length, 1, 'pending rows after the re-read');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Cass marked 150.00 as paid to Ali (you).',
+        'the claim the second read still carries'
+      );
+      page.is(transferRows(page).length, 0, 'transfer rows after the re-read');
+      page.is(
+        page.el('balances-decision').textContent,
+        'Confirmed. The payment of 600.00 from Sam to Ali (you) is now counted in ' +
+          'the figures below.',
+        'what the answer did'
+      );
+      /* Answering changes no route, pushes and replaces no history entry, and moves
+         no focus. */
+      page.is(page.hash, '#/balances', 'the hash');
+      page.same(page.pushStates, [], 'history entries pushed');
+      page.same(page.replaceStates, [], 'history entries replaced');
+      page.is(page.focused, null, 'focus');
+
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* The other answer. Nothing moves, and the claim is in the block of its own with
+       its state changed rather than gone: the payer is the only person who can act
+       next, and a screen that dropped the row would tell them nothing. */
+    name: 'the_receiver_can_reject_a_payment_that_was_marked_as_paid',
+    async run(page) {
+      const claimed = '2026-09-05T09:00:00.000000+00:00';
+      const first = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', true)],
+        pending: [settlementView('set-1', 'mem-1', 'mem-2', '600.00', claimed)],
+        rejected: []
+      };
+      const after = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+        pending: [],
+        rejected: [rejectedView('set-1', 'mem-1', 'mem-2', '600.00', claimed)]
+      };
+      await onAnswerableClaim(page, [ok(first), ok(after)]);
+      page.is(page.el('balances-rejected-block').hidden, true, 'the rejected block');
+
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: rejectedView('set-1', 'mem-1', 'mem-2', '600.00', claimed) })
+      );
+      await page.dispatch(rejectIn(pendingRows(page)[0]), 'click');
+
+      page.is(pendingRows(page).length, 0, 'pending rows after the re-read');
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.is(page.el('balances-rejected-block').hidden, false, 'the rejected block');
+      page.is(rejectedRows(page).length, 1, 'rejected rows');
+      page.is(
+        rejectedRows(page)[0].childNodes[0].textContent,
+        'Sam marked 600.00 as paid to Ali (you), and it was not confirmed.',
+        'the refused claim'
+      );
+      page.is(
+        page.el('balances-decision').textContent,
+        'Not confirmed. The payment of 600.00 from Sam to Ali (you) is not counted, ' +
+          'and it can be marked as paid again.',
+        'what the answer did'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          REJECT_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* The live region is written to before the request goes out, not after it comes
+       back. page.onRequest sees the page as it was at the moment fetch was called,
+       which is the only moment that state exists. */
+    name: 'confirming_a_payment_announces_it_before_and_after_the_request',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures), ok(figures)]);
+      const row = pendingRows(page)[0];
+      const region = answerIn(row);
+      const confirm = confirmIn(row);
+      const reject = rejectIn(row);
+      const status = answerStatusIn(row);
+
+      let seen = null;
+      page.onRequest('POST', '/settlements/set-1/decision', () => {
+        seen = {
+          busy: region.getAttribute('aria-busy'),
+          said: status.textContent,
+          confirmDisabled: confirm.disabled,
+          rejectDisabled: reject.disabled,
+          decision: page.el('balances-decision').textContent
+        };
+      });
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      );
+
+      await page.dispatch(confirm, 'click');
+      page.same(
+        seen,
+        {
+          busy: 'true',
+          said: 'Answering this payment.',
+          confirmDisabled: true,
+          rejectDisabled: true,
+          decision: ''
+        },
+        'the row at the moment the request went out'
+      );
+      /* The row that carried it is gone with the rebuild, so aria-busy is asserted on
+         the region the press held, which is exactly the node that had it. */
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy once it settled');
+      page.ok(
+        page.el('balances-decision').textContent.indexOf('Confirmed. ') === 0,
+        'the outcome once it settled'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* A confirmation moves the net positions, the transfer plan and both lists at
+       once, so nothing narrower than a re-read is honest and the whole screen comes
+       from the second read. Neutralise the line that leaves #balances-decision alone
+       in balancesClear() and this goes red, because the re-read would wipe the
+       sentence it had just written. */
+    name: 'confirming_a_payment_reads_the_figures_again_and_says_what_changed',
+    async run(page) {
+      const before = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', true)],
+        pending: [settlementView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)],
+        rejected: []
+      };
+      const after = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: [],
+        pending: [],
+        rejected: []
+      };
+      await onAnswerableClaim(page, [ok(before), ok(after)]);
+      page.is(
+        page.el('balances-net').childNodes[0].textContent,
+        'Sam owes 600.00',
+        'the net list on the first read'
+      );
+
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      );
+      await page.dispatch(confirmIn(pendingRows(page)[0]), 'click');
+
+      /* Everything the second read said, and nothing the first one did. */
+      page.same(
+        page.el('balances-net').childNodes.map((row) => row.textContent),
+        ['Sam is settled up', 'Ali (you) is settled up', 'Cass is settled up'],
+        'the net list after the re-read'
+      );
+      page.is(transferRows(page).length, 0, 'transfer rows');
+      page.is(page.el('balances-none').hidden, false, 'the nothing-to-settle message');
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.is(page.el('balances-rejected-block').hidden, true, 'the rejected block');
+      page.is(
+        page.el('balances-decision').textContent,
+        'Confirmed. The payment of 600.00 from Sam to Ali (you) is now counted in ' +
+          'the figures below.',
+        'what the answer did, surviving the rebuild'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* The sentence is written before the re-read is started rather than after it
+       finishes, because the decision is recorded either way: a re-read that fails
+       must not swallow the only statement that the answer was accepted. */
+    name: 'an_answer_whose_refresh_fails_still_says_the_answer_was_recorded',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures), serverError()]);
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      );
+      await page.dispatch(confirmIn(pendingRows(page)[0]), 'click');
+
+      page.is(page.el('balances-error').hidden, false, 'the failure message');
+      page.is(page.el('balances-net').childNodes.length, 0, 'the net list');
+      page.is(pendingRows(page).length, 0, 'pending rows');
+      page.is(rejectedRows(page).length, 0, 'rejected rows');
+      page.is(
+        page.el('balances-decision').textContent,
+        'Confirmed. The payment of 600.00 from Sam to Ali (you) is now counted in ' +
+          'the figures below.',
+        'the answer still says it was recorded'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* Two taps, one answer. The second is dispatched straight at the listener while
+       the first request is in flight, which is the only way the closure flag can be
+       told apart from the disabled attribute: nothing here consults disabled, so a
+       guard living only in the attribute would be asserted nowhere. */
+    name: 'tapping_confirm_twice_answers_one_settlement',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures), ok(figures)]);
+      const confirm = confirmIn(pendingRows(page)[0]);
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      );
+      let again = true;
+      page.onRequest('POST', '/settlements/set-1/decision', () => {
+        if (!again) {
+          /* Once only. A screen without the flag would recurse rather than fail with
+             a readable request list. */
+          return;
+        }
+        again = false;
+        (confirm.listeners.click || []).forEach((handler) => handler({ type: 'click' }));
+      });
+
+      await page.dispatch(confirm, 'click');
+      page.is(again, false, 'the second tap ran while the first was in flight');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* One flag for the row and not one per button: Reject pressed while Confirm is in
+       flight sends nothing, because the two answers are one act and the second would
+       be a second decision on a settlement that already has one. */
+    name: 'tapping_reject_after_confirm_sends_one_answer',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures), ok(figures)]);
+      const row = pendingRows(page)[0];
+      const confirm = confirmIn(row);
+      const reject = rejectIn(row);
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      );
+      let again = true;
+      page.onRequest('POST', '/settlements/set-1/decision', () => {
+        if (!again) {
+          return;
+        }
+        again = false;
+        (reject.listeners.click || []).forEach((handler) => handler({ type: 'click' }));
+      });
+
+      await page.dispatch(confirm, 'click');
+      page.is(again, false, 'the reject tap ran while the confirm was in flight');
+      page.ok(
+        page.el('balances-decision').textContent.indexOf('Confirmed. ') === 0,
+        'the outcome is the answer that was sent'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* One fixed sentence for every one of api.js's six kinds, into the row that asked
+       and nowhere else, and nothing was kept, so it can be tried again. The server's
+       own words describe a rule about who the caller is, which this screen never
+       shows, and this asserts that sentence is absent character for character. */
+    name: 'an_answer_that_will_not_record_says_so_and_can_be_tried_again',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures), ok(figures)]);
+      const row = pendingRows(page)[0];
+      const region = answerIn(row);
+      const confirm = confirmIn(row);
+      const reject = rejectIn(row);
+      const status = answerStatusIn(row);
+      const transfer = transferRows(page)[0];
+      const disclosure = transfer.childNodes[0];
+      const detail = regionFor(page, disclosure);
+      /* Opened first, so "an open drill-down stays open" is about this state and not
+         about a region that was never open. */
+      await page.dispatch(disclosure, 'click');
+
+      page.respondInOrder('POST', '/settlements/set-1/decision', [
+        failure(403, CODES.notTheReceiver, NOT_THE_RECEIVER),
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      ]);
+
+      await page.dispatch(confirm, 'click');
+      appIsUp(page, 'after a refused answer');
+      page.is(status.textContent, 'That was not answered.', 'the row that asked');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy after a refusal');
+      /* Nothing was kept, so both controls come back rather than staying dead. */
+      page.is(confirm.disabled, false, 'the confirm control after a refusal');
+      page.is(reject.disabled, false, 'the reject control after a refusal');
+      /* And nothing else on the screen moved. */
+      page.is(page.el('balances-decision').textContent, '', '#balances-decision');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.is(page.el('balances-net').childNodes.length, 3, 'the net list');
+      page.is(pendingRows(page).length, 1, 'pending rows');
+      page.is(page.el('balances-rejected-block').hidden, true, 'the rejected block');
+      page.is(disclosure.getAttribute('aria-expanded'), 'true', 'the open payment');
+      page.is(detail.hidden, false, 'the open region');
+      const shown = page.el('screen-balances').textContent;
+      page.ok(
+        shown.indexOf(NOT_THE_RECEIVER) === -1,
+        'the server sentence is nowhere on the screen'
+      );
+      page.ok(shown.indexOf('mem-') === -1, 'no member id is rendered as text');
+      page.ok(shown.indexOf('set-') === -1, 'no settlement id is rendered as text');
+
+      /* A fresh request, because nothing was kept, and this time the re-read runs. */
+      await page.dispatch(confirm, 'click');
+      page.ok(
+        page.el('balances-decision').textContent.indexOf('Confirmed. ') === 0,
+        'the outcome after trying again'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* Nobody is offered a control they could not use, and that includes the payer on
+       their own claim: an endpoint that let the payer answer would be a withdrawal
+       mechanism wearing a confirmation's clothes. The row is byte for byte what task
+       14 rendered. */
+    name: 'the_payer_is_offered_no_way_to_answer_their_own_claim',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures)], A_MEMBER);
+      const row = pendingRows(page)[0];
+      page.is(row.childNodes.length, 2, 'children of the pending row');
+      page.is(answerIn(row), null, 'the third child');
+      page.is(confirmIn(row), null, 'a confirm control on the payer’s own claim');
+      page.is(rejectIn(row), null, 'a reject control on the payer’s own claim');
+      page.is(
+        row.childNodes[0].textContent,
+        'Sam (you) marked 600.00 as paid to Ali.',
+        'the row'
+      );
+      page.is(
+        page.query('.balances-confirm-button').length,
+        0,
+        'controls anywhere in the document'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* A third member sees the same row and no controls at all: the offer of the
+       action is the only thing that differs by reader, and it is an offer rather than
+       information. */
+    name: 'a_third_member_is_offered_no_way_to_answer_someone_elses_claim',
+    async run(page) {
+      const figures = oneClaimAwaiting();
+      await onAnswerableClaim(page, [ok(figures)], A_THIRD_MEMBER);
+      const row = pendingRows(page)[0];
+      page.is(row.childNodes.length, 2, 'children of the pending row');
+      page.is(answerIn(row), null, 'the third child');
+      page.is(
+        row.childNodes[0].textContent,
+        'Sam marked 600.00 as paid to Ali.',
+        'the row'
+      );
+      page.is(
+        page.query('.balances-reject-button').length,
+        0,
+        'controls anywhere in the document'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* One ledger read off three phones says the same thing, and the refused claim
+       differs only in where ` (you)` falls. The three phones are one page signing out
+       and back in, which is the only way this harness can put three people in front
+       of one fixture. */
+    name: 'everyone_sees_the_same_rejected_payment',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+        pending: [],
+        rejected: [rejectedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)]
+      };
+      page.respondInOrder('GET', '/session', [
+        ok(A_MEMBER),
+        ok(A_SECOND_MEMBER),
+        ok(A_THIRD_MEMBER)
+      ]);
+      page.respondInOrder('POST', '/session', [
+        ok(A_SECOND_MEMBER),
+        ok(A_THIRD_MEMBER)
+      ]);
+      page.respond('DELETE', '/session', noContent());
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok(figures));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const read = () => {
+        const row = rejectedRows(page)[0];
+        return {
+          rows: rejectedRows(page).length,
+          hidden: page.el('balances-rejected-block').hidden,
+          line: row.childNodes[0].textContent,
+          date: row.childNodes[1].textContent,
+          claimed: row.childNodes[1].getAttribute('datetime'),
+          children: row.childNodes.length,
+          settlement: row.getAttribute('data-settlement'),
+          from: row.getAttribute('data-from'),
+          to: row.getAttribute('data-to'),
+          figures: figuresIn(row),
+          /* Nobody is offered anything on a claim that has already been answered,
+             the person who answered it included. */
+          answers:
+            page.query('.balances-confirm-button').length +
+            page.query('.balances-reject-button').length
+        };
+      };
+
+      const payer = read();
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after the payer signs out');
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'after the receiver signs in');
+      const receiver = read();
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after the receiver signs out');
+      await signIn(page, 'cass@example.com', 'letmein');
+      appIsUp(page, 'after a third member signs in');
+      const third = read();
+
+      const shape = {
+        rows: 1,
+        hidden: false,
+        line: '',
+        date: spelledDate(CLAIMED),
+        claimed: CLAIMED,
+        children: 2,
+        settlement: 'set-1',
+        from: 'mem-1',
+        to: 'mem-2',
+        figures: ['600.00'],
+        answers: 0
+      };
+      page.same(
+        payer,
+        Object.assign({}, shape, {
+          line: 'Sam (you) marked 600.00 as paid to Ali, and it was not confirmed.'
+        }),
+        'the payer’s phone'
+      );
+      page.same(
+        receiver,
+        Object.assign({}, shape, {
+          line: 'Sam marked 600.00 as paid to Ali (you), and it was not confirmed.'
+        }),
+        'the receiver’s phone'
+      );
+      page.same(
+        third,
+        Object.assign({}, shape, {
+          line: 'Sam marked 600.00 as paid to Ali, and it was not confirmed.'
+        }),
+        'a third member’s phone'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: THIRD_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* A rejection frees the ordered pair, so the transfer row stops saying a payment
+       is awaiting anybody and offers the payer the control again. Both facts come
+       from the server: `awaiting_confirmation` is false and the claim is in the other
+       list, and this screen derives neither. */
+    name: 'a_rejected_payment_can_be_marked_as_paid_again',
+    async run(page) {
+      const figures = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+        pending: [],
+        rejected: [rejectedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)]
+      };
+      await onAnswerableClaim(page, [ok(figures)], A_MEMBER);
+      const row = transferRows(page)[0];
+      page.is(awaitingLineIn(row), null, 'the awaiting sentence');
+      const mark = markButtonIn(row);
+      page.ok(mark !== null, 'the payer is offered the control again');
+      page.is(
+        mark.getAttribute('aria-label'),
+        'Mark as paid: Sam (you) pays Ali 600.00',
+        'the accessible name'
+      );
+      page.is(rejectedRows(page).length, 1, 'rejected rows');
+      page.is(
+        rejectedRows(page)[0].childNodes[0].textContent,
+        'Sam (you) marked 600.00 as paid to Ali, and it was not confirmed.',
+        'the refused claim'
+      );
+
+      page.respond(
+        'POST',
+        '/settlements',
+        created({
+          settlement: settlementView('set-2', 'mem-1', 'mem-2', '600.00', LATER)
+        })
+      );
+      await page.dispatch(mark, 'click');
+      page.is(pendingRows(page).length, 1, 'pending rows after marking it again');
+      /* The refused claim is still there: it is part of the ledger and nothing
+         removed it. */
+      page.is(rejectedRows(page).length, 1, 'rejected rows after marking it again');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          {
+            method: 'POST',
+            path: '/settlements',
+            body: '{"to_member_id":"mem-2","amount":"600.00"}'
+          }
+        ])
+      );
+    }
+  },
+
+  {
+    /* One unreadable row must not hide a real one, and the state is matched by one
+       strict equality, so a confirmed or pending view in this list is left out rather
+       than drawn under the wrong heading. */
+    name: 'a_rejected_row_the_screen_cannot_read_is_left_out_rather_than_guessed_at',
+    async run(page) {
+      const figures = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [],
+        pending: [],
+        rejected: [
+          rejectedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED),
+          null,
+          'not an object',
+          { id: 'set-2', from_member_id: 'mem-1', to_member_id: 'mem-2' },
+          {
+            id: 'set-3',
+            from_member_id: 'mem-1',
+            to_member_id: 'mem-2',
+            amount: 600,
+            created_at: CLAIMED,
+            created_by: 'mem-1',
+            state: 'rejected'
+          },
+          /* A real settlement in the wrong list: the state is not the one this list
+             renders, so it is left out rather than labelled as refused. */
+          settlementView('set-4', 'mem-1', 'mem-2', '600.00', CLAIMED),
+          confirmedView('set-5', 'mem-1', 'mem-2', '600.00', CLAIMED),
+          rejectedView('set-6', 'mem-3', 'mem-2', '150.00', LATER)
+        ]
+      };
+      await onAnswerableClaim(page, [ok(figures)], A_MEMBER);
+      page.is(rejectedRows(page).length, 2, 'rejected rows');
+      page.same(
+        rejectedRows(page).map((row) => row.getAttribute('data-settlement')),
+        ['set-1', 'set-6'],
+        'the rows the screen could read, in the order they arrived'
+      );
+      page.is(page.el('balances-rejected-block').hidden, false, 'the rejected block');
+      const shown = page.el('screen-balances').textContent;
+      page.ok(shown.indexOf('set-') === -1, 'no settlement id is rendered as text');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* Behind a curtain nothing is asked, nothing is disabled and nothing is written,
+       through the same shared helper every other control on this screen calls. The
+       401 raises the gate over the whole frame, and the controls are still in the
+       document underneath it. */
+    name: 'answering_a_payment_behind_a_curtain_asks_for_nothing',
+    async run(page) {
+      await onAnswerableClaim(page, [ok(oneClaimAwaiting())]);
+      const row = pendingRows(page)[0];
+      const region = answerIn(row);
+      const confirm = confirmIn(row);
+      const reject = rejectIn(row);
+      const status = answerStatusIn(row);
+      page.respond('DELETE', '/session', noContent());
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+
+      /* Both controls, because both go through the same guard and neither may write
+         anything from behind a curtain. */
+      await page.dispatch(confirm, 'click');
+      await page.dispatch(reject, 'click');
+      page.is(status.textContent, '', 'the status line behind a curtain');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy behind a curtain');
+      page.is(confirm.disabled, false, 'the confirm control behind a curtain');
+      page.is(reject.disabled, false, 'the reject control behind a curtain');
+      page.is(page.el('balances-decision').textContent, '', '#balances-decision');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([{ method: 'DELETE', path: '/session', body: NO_BODY }])
+      );
+    }
+  },
+
+  {
+    /* Two halves, both true and neither what a reader would guess, exactly as task
+       14's unlinked scenario records them. An account with no member row never
+       reaches this screen at all: ledgerIsUp() refuses a session view carrying no
+       member and boot raises the not-linked notice, so nothing is drawn and nothing
+       is asked. The null acting id balancesActingId() guards against is reached
+       instead through a session view carrying a member this screen cannot identify,
+       and there both blocks still render, because they are information, while no row
+       matches and no control is drawn anywhere. */
+    name: 'an_unlinked_account_is_offered_no_way_to_answer_anything',
+    async run(page) {
+      const figures = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [],
+        pending: [settlementView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)],
+        rejected: [rejectedView('set-2', 'mem-3', 'mem-2', '150.00', LATER)]
+      };
+      page.respondInOrder('GET', '/session', [
+        ok(NO_MEMBER),
+        ok({
+          account: A_SECOND_MEMBER.account,
+          group: A_SECOND_MEMBER.group,
+          /* Linked, and unidentifiable: ledgerIsUp() admits it and
+             balancesActingId() cannot get an id out of it. */
+          member: { display_name: 'Ali' }
+        })
+      ]);
+      page.respond('POST', '/session', ok(A_SECOND_MEMBER));
+      page.respond('DELETE', '/session', noContent());
+      page.respond('GET', '/members', ok(ANSWER_ROSTER));
+      page.respond('GET', '/balances', ok(figures));
+      page.startAt('#/balances');
+      await page.boot();
+
+      noticeIsUp(page, 'unlinked', 'an account nobody has linked', true);
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.is(page.el('balances-rejected-block').hidden, true, 'the rejected block');
+      page.is(
+        page.query('.balances-confirm-button').length +
+          page.query('.balances-reject-button').length,
+        0,
+        'controls anywhere in the document'
+      );
+
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'with a member this screen cannot identify');
+      /* The information is still shown, and no name carries ` (you)` anywhere,
+         because no row matches. */
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.is(page.el('balances-rejected-block').hidden, false, 'the rejected block');
+      page.is(pendingRows(page)[0].childNodes.length, 2, 'children of the claim');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Sam marked 600.00 as paid to Ali.',
+        'the claim, with no name carrying (you)'
+      );
+      page.is(
+        rejectedRows(page)[0].childNodes[0].textContent,
+        'Cass marked 150.00 as paid to Ali, and it was not confirmed.',
+        'the refused claim'
+      );
+      page.is(
+        page.query('.balances-confirm-button').length +
+          page.query('.balances-reject-button').length,
+        0,
+        'controls for a member nobody can identify'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* Nothing survives a navigation. The whole screen is rebuilt from the second
+       read, no row survives from before it, and the outcome of the last answer goes
+       with them. Neutralise the line in balancesClear() that empties this list and
+       this goes red. */
+    name: 'leaving_the_balances_screen_and_returning_clears_the_rejected_list',
+    async run(page) {
+      const first = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [],
+        pending: [settlementView('set-2', 'mem-1', 'mem-2', '20.00', LATER)],
+        rejected: [rejectedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)]
+      };
+      /* The refused claim was still there in the first read; the second is a ledger
+         that no longer carries either row. */
+      const second = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [],
+        pending: [],
+        rejected: []
+      };
+      await onAnswerableClaim(page, [ok(first), ok(second), ok(second)]);
+      const was = rejectedRows(page)[0];
+      page.is(rejectedRows(page).length, 1, 'rejected rows on the first read');
+      page.is(page.el('balances-rejected-block').hidden, false, 'the rejected block');
+
+      /* An answer first, so the sentence it writes is on screen when the person
+         leaves and its clearing is what this asserts. */
+      page.respond(
+        'POST',
+        '/settlements/set-2/decision',
+        ok({ settlement: rejectedView('set-2', 'mem-1', 'mem-2', '20.00', LATER) })
+      );
+      await page.dispatch(rejectIn(pendingRows(page)[0]), 'click');
+      page.ok(
+        page.el('balances-decision').textContent.indexOf('Not confirmed. ') === 0,
+        'the outcome before leaving'
+      );
+
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      page.is(rejectedRows(page).length, 0, 'rejected rows on the third read');
+      page.is(page.el('balances-rejected-block').hidden, true, 'the rejected block');
+      page.ok(
+        rejectedRows(page).indexOf(was) === -1,
+        'no row survived from the first read'
+      );
+      page.is(page.el('balances-decision').textContent, '', '#balances-decision');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          {
+            method: 'POST',
+            path: '/settlements/set-2/decision',
+            body: '{"decision":"rejected"}'
+          },
+          'GET /api/members',
+          'GET /api/balances',
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* The group moves away from zero. Both readings are correct and the screen states
+       the new one rather than reconciling them: `No payments needed` is replaced by a
+       real transfer list on the re-read, and the pending block goes. */
+    name: 'confirming_the_last_claim_in_a_settled_group_reads_the_figures_again',
+    async run(page) {
+      const before = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: [],
+        pending: [settlementView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)],
+        rejected: []
+      };
+      const after = {
+        currency: 'AUD',
+        net: ANSWER_NET,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+        pending: [],
+        rejected: []
+      };
+      await onAnswerableClaim(page, [ok(before), ok(after)]);
+      page.is(page.el('balances-none').hidden, false, 'the settled-up message');
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+
+      page.respond(
+        'POST',
+        '/settlements/set-1/decision',
+        ok({ settlement: confirmedView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED) })
+      );
+      await page.dispatch(confirmIn(pendingRows(page)[0]), 'click');
+
+      page.is(page.el('balances-none').hidden, true, 'the settled-up message');
+      page.is(transferRows(page).length, 1, 'transfer rows after the re-read');
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.is(
+        page.el('balances-decision').textContent,
+        'Confirmed. The payment of 600.00 from Sam to Ali (you) is now counted in ' +
+          'the figures below.',
+        'what the answer did'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          CONFIRM_SET_ONE,
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* The path is built from one id, and the id is encoded, because a settlement id
+       is whatever the server minted and a path segment is a path segment. The fixture
+       carries a space, a percent sign and a hash, and the declared request list holds
+       the exact encoded path, in the style the debts route is pinned in. The fixture
+       is a local rather than a module constant, following task 12a's note. */
+    name: 'the_api_client_builds_a_decision_path_from_a_settlement_id',
+    async run(page) {
+      screensLoad(page);
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond(
+        'POST',
+        '/settlements/a%20b%25c%23d/decision',
+        ok({ settlement: confirmedView('a b%c#d', 'mem-1', 'mem-2', '5.50', CLAIMED) })
+      );
+      await page.boot();
+      page.global(
+        'window.answered = null;' +
+          "window.SplitwiseApi.decideSettlement('a b%c#d', 'confirmed').then(" +
+          '  function (view) {' +
+          '    window.answered = view;' +
+          '  }' +
+          ');'
+      );
+      /* settle() drives nothing and drains what is already in flight: this scenario
+         starts a request through the client rather than through an affordance. */
+      await page.settle();
+      page.is(page.global('window.answered.settlement.state'), 'confirmed', 'state');
+      page.is(page.global('window.answered.settlement.amount'), '5.50', 'amount');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/expenses',
+        'GET /api/members',
+        {
+          method: 'POST',
+          path: '/settlements/a%20b%25c%23d/decision',
+          body: '{"decision":"confirmed"}'
+        }
+      ]);
+    }
   }
 ];
 
@@ -6552,6 +7599,120 @@ function markStatusIn(row) {
 
 function awaitingLineIn(row) {
   return onlyOne(row, '.balances-awaiting');
+}
+
+
+/* --- Task 15: the receiver answers a claim --------------------------------------
+
+   Below SCENARIOS for the reason tasks 43, 13 and 14 put their blocks there: this
+   task appends to this file and edits one scenario of it, and module evaluation
+   reaches these long before main() runs, which is all a scenario body needs. What is
+   shared here is the reaching and the two exact wire bodies, not the data: every
+   fixture stays local to its own scenario, following task 12a's note. */
+
+/* Two instants, so a fixture with two claims has an order the date spelling can be
+   read against. */
+const CLAIMED = '2026-09-05T09:00:00.000000+00:00';
+const LATER = '2026-09-05T10:00:00.000000+00:00';
+
+/* The roster these scenarios read names against, and the net positions of a group
+   where Sam owes Ali the whole of it. */
+const ANSWER_ROSTER = {
+  members: [
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-3', display_name: 'Cass' }
+  ]
+};
+const ANSWER_NET = [
+  { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+  { member_id: 'mem-2', amount: '600.00', direction: 'owed' },
+  { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+];
+
+/* The same seven keys, in the two states a decision produces. Separate builders
+   rather than a state argument threaded through every call, so a fixture reads as
+   what it is at a glance. */
+function confirmedView(id, fromId, toId, amount, when) {
+  return Object.assign(settlementView(id, fromId, toId, amount, when), {
+    state: 'confirmed'
+  });
+}
+
+function rejectedView(id, fromId, toId, amount, when) {
+  return Object.assign(settlementView(id, fromId, toId, amount, when), {
+    state: 'rejected'
+  });
+}
+
+/* The exact bodies app/api.js puts on the wire, key order included, spelled out
+   rather than rebuilt from what the scenario typed: a body asserted against a copy of
+   the code that built it asserts nothing. */
+const CONFIRM_SET_ONE = {
+  method: 'POST',
+  path: '/settlements/set-1/decision',
+  body: '{"decision":"confirmed"}'
+};
+const REJECT_SET_ONE = {
+  method: 'POST',
+  path: '/settlements/set-1/decision',
+  body: '{"decision":"rejected"}'
+};
+
+/* The sentence _decide_settlement composes for somebody who is not the receiver. It
+   describes a rule about who the caller is, which is nothing a flatmate can act on,
+   so it is the one this screen may never render, and a scenario asserts it is absent
+   from the screen character for character. */
+const NOT_THE_RECEIVER =
+  'only the person the payment was made to can answer it; a payment cannot be ' +
+  'confirmed or rejected by whoever marked it as paid';
+
+/* The commonest fixture: Ali is acting, Sam has claimed 600.00 to Ali, and the
+   suggestion for that pair says so. */
+function oneClaimAwaiting() {
+  return {
+    currency: 'AUD',
+    net: ANSWER_NET,
+    transfers: [payableTransfer('mem-1', 'mem-2', '600.00', true)],
+    pending: [settlementView('set-1', 'mem-1', 'mem-2', '600.00', CLAIMED)],
+    rejected: []
+  };
+}
+
+/* Boot on the balances route as somebody other than Sam, which onBalances cannot do:
+   it answers GET /session with A_MEMBER, and the person who may answer a claim is by
+   definition not the person who made it. `reads` is the ordered list of answers
+   GET /api/balances gets, because a confirmation reads again. */
+async function onAnswerableClaim(page, reads, session) {
+  page.respond('GET', '/session', ok(session || A_SECOND_MEMBER));
+  page.respond('GET', '/expenses', ok(EMPTY_FEED));
+  page.respond('GET', '/members', ok(ANSWER_ROSTER));
+  page.respond('GET', '/debts/mem-1/mem-2', ok(oneEntryDebt('mem-1', 'mem-2')));
+  page.respondInOrder('GET', '/balances', reads);
+  page.startAt('#/balances');
+  await page.boot();
+}
+
+function rejectedRows(page) {
+  return page.el('balances-rejected').childNodes;
+}
+
+/* The third child of a pending row, or null when it has none. Read by position rather
+   than by class, so a row that grew a fourth child fails rather than passing. */
+function answerIn(row) {
+  return row.childNodes.length === 3 ? row.childNodes[2] : null;
+}
+
+function confirmIn(row) {
+  return onlyOne(row, '.balances-confirm-button');
+}
+
+function rejectIn(row) {
+  return onlyOne(row, '.balances-reject-button');
+}
+
+function answerStatusIn(row) {
+  return onlyOne(row, '.balances-answer-status');
 }
 
 
