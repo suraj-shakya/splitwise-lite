@@ -70,6 +70,16 @@ policy is refused there rather than waved through, which covers the route regist
 after the factory returned. ``MEMBER`` is what a new endpoint gets unless somebody
 argues otherwise.
 
+**The payer of a settlement is the acting member**, taken from the session and never
+from the body, and at most one settlement per ordered pair may be pending at a time.
+Payer-creates plus receiver-confirms is what makes a settlement need two people: if
+either end could create one, the receiver could create and confirm it and a debt would
+clear with the payer never having touched the app. A pending settlement moves no
+balance, so recording one changes no figure this API reports. The one-pending rule is
+check-then-act, so it is decided under a module-level lock, and the recorded gap is the
+limiter's: one process is exact, two processes hold two locks and the rule goes back to
+being best effort. :data:`_SETTLEMENT_LOCK` states the whole of it.
+
 Money crosses the wire only as a ``format_amount`` string, never as a number and never
 as cents, so the front end is handed nothing it could do arithmetic on. ``parse_amount``
 is the only route from a request body back to cents.
@@ -116,6 +126,7 @@ __all__ = [
     "MalformedRequest",
     "NotAuthenticated",
     "RateLimiter",
+    "SettlementAlreadyPending",
     "TooManyAttempts",
     "WebError",
     "create_app",
@@ -156,6 +167,23 @@ class MalformedRequest(WebError):
 
     Carries the offending key by name, never its value, so no message can quote a
     password back into a log or a response.
+    """
+
+
+class SettlementAlreadyPending(WebError):
+    """This payer already has a claim to this receiver that nobody has answered.
+
+    409 rather than 400: the body parsed and named a real member, and the request
+    disagrees with the state of the ledger rather than with a rule about its shape.
+    At most one settlement per ordered pair may be pending, because two pending
+    claims for one payment become two confirmations in task 15 and clear the debt
+    twice, which reads as settled and is the worse of the two failures.
+
+    The refusal is only as reliable as the lock it is decided under. Within this
+    process :data:`_SETTLEMENT_LOCK` makes it exact; across two processes there is no
+    lock and no constraint, so a second worker could accept what this one refuses.
+    :data:`_SETTLEMENT_LOCK` records what that costs and what issue #16 should do
+    about it.
     """
 
 
@@ -359,6 +387,7 @@ ERROR_STATUS: Final[dict[type[BaseException], int]] = {
     groups.GroupMismatch: 409,
     groups.MemberAlreadyLinked: 409,
     groups.UserAlreadyLinked: 409,
+    SettlementAlreadyPending: 409,
     TooManyAttempts: 429,
     MalformedRequest: 400,
     accounts.InvalidEmail: 400,
@@ -402,6 +431,7 @@ ERROR_CODE: Final[dict[type[BaseException], str]] = {
     groups.GroupMismatch: "group_mismatch",
     groups.MemberAlreadyLinked: "member_already_linked",
     groups.UserAlreadyLinked: "user_already_linked",
+    SettlementAlreadyPending: "settlement_already_pending",
     TooManyAttempts: "too_many_attempts",
     MalformedRequest: "malformed_request",
     accounts.InvalidEmail: "invalid_email",
@@ -1017,6 +1047,55 @@ def _debt_entry_view(entry: balances.DebtEntry) -> dict[str, Any]:
     }
 
 
+_SETTLEMENT_STATE_WIRE: Final[dict[events.SettlementState, str]] = {
+    events.SettlementState.PENDING: "pending",
+    events.SettlementState.CONFIRMED: "confirmed",
+    events.SettlementState.REJECTED: "rejected",
+}
+"""The wire spelling of every ``SettlementState``, on the same terms as
+:data:`_ENTRY_KIND_WIRE`: an explicit map rather than the enum's own values, so
+renaming a domain member cannot silently rename a JSON value the front end branches
+on. Exhaustive over the enum, and a test says so.
+
+Only ``pending`` is reachable today, because this task appends no decision. The other
+two are here so that task 15 adds values a client already knows how to read rather
+than adding a field beside them.
+"""
+
+
+def _settlement_view(
+    settlement: events.SettlementEvent, state: events.SettlementState
+) -> dict[str, Any]:
+    """One claimed payment and its derived state, in the seven keys the wire carries.
+
+    The same builder serves the 201 from :func:`_create_settlement` and every row of
+    the balances payload's ``pending`` array, so the screen has one shape to read and
+    not two.
+
+    ``state`` is passed in rather than derived here: it comes from
+    ``balances.settlement_states`` over the whole ledger, which is the code path
+    ``derive_balances`` reaches as well, so a rendered state and a balance can never
+    disagree about whether a settlement counted.
+
+    ``created_by`` rides along for the same reason ``_expense_view`` carries it.
+    Today it always equals ``from_member_id``, because the payer is the acting member.
+    """
+    return {
+        "id": settlement.id,
+        "from_member_id": settlement.from_member_id,
+        "to_member_id": settlement.to_member_id,
+        # The magnitude through the one display edge, so no minus sign ever reaches a
+        # client, exactly as every other amount on this wire.
+        "amount": _amount(settlement.amount_cents, settlement.currency),
+        # The same spelling ``_expense_view`` and ``_debt_entry_view`` use, so one
+        # instant is spelled one way wherever it appears and the shell's ``feedDate``
+        # reads it with no second parser.
+        "created_at": settlement.created_at.isoformat(timespec="microseconds"),
+        "created_by": settlement.created_by,
+        "state": _SETTLEMENT_STATE_WIRE[state],
+    }
+
+
 # --- Authentication and the acting member -----------------------------------
 
 
@@ -1355,6 +1434,28 @@ def _read_balances() -> flask.Response:
     debt this transfer covers and the debt's whole total. ``covers_whole_debt`` on each
     row is computed from cents here rather than by comparing the two formatted strings,
     for the same reason ``direction`` exists on a net row.
+
+    ``pending`` carries every settlement in the group nobody has answered, oldest
+    first. It rides on this read rather than on a ``GET /api/settlements`` of its own
+    so that the transfers and the claims come from **one** ``list_events`` call at one
+    instant: two requests against a ledger that moved in between may legitimately
+    disagree, and a suggested payment disagreeing with the claim that answers it is
+    exactly the confusion this task exists to prevent. Oldest first, and not reversed
+    the way ``_list_expenses`` reverses, because the claim that has been waiting
+    longest is the one that needs chasing; it also lets the screen append a freshly
+    created settlement to the end of the list and be exactly right.
+
+    ``awaiting_confirmation`` on each transfer is computed here, from ids, for the
+    same reason ``covers_whole_debt`` and ``direction`` are: what counts as a match is
+    a product rule, task 15 refines it when rejected settlements join the list, and it
+    must live in one place. The amount is deliberately no part of the match, so a
+    claim of 5.00 marks a 9.00 row: the row says a payment is marked and unconfirmed
+    and never that this figure has been paid, and the claimed figure is in ``pending``
+    where it can be read against the suggestion.
+
+    None of this moves a figure. ``derive_balances`` folds confirmed settlements only,
+    so a pending claim changes ``net``, ``transfers`` and every ``payer_debts`` row not
+    at all, and a test over generated ledgers holds that to be true.
     """
     group = flask.g.group
     ledger = _store().list_events(group.id)
@@ -1362,6 +1463,23 @@ def _read_balances() -> flask.Response:
         ledger, group_id=events.GroupId(group.id), currency=group.currency
     )
     plan = simplify.simplify_debts(derived)
+    # The same function ``derive_balances`` reaches, over the same ledger, so a
+    # rendered state and a balance can never disagree about whether one counted.
+    states = balances.settlement_states(ledger)
+    # Filtered out of the list already read, never re-fetched with
+    # ``list_settlements``: one snapshot, so the rows below and the claims here cannot
+    # be two different instants. ``list_events`` is ``ordering_key`` ascending, so
+    # this is ascending ``(created_at, id)`` with nothing sorted here.
+    pending = [
+        recorded
+        for recorded in ledger
+        if isinstance(recorded, events.SettlementEvent)
+        and states[recorded.id] is events.SettlementState.PENDING
+    ]
+    awaiting = {
+        (settlement.from_member_id, settlement.to_member_id)
+        for settlement in pending
+    }
     net = []
     for member in _store().list_members(group.id):
         position = derived.net_for(events.MemberId(member.id))
@@ -1391,11 +1509,175 @@ def _read_balances() -> flask.Response:
                     "receiver_credits": [
                         _absorbed_view(row) for row in transfer.receiver_credits
                     ],
+                    # From the ids alone, and the amounts are never compared: see the
+                    # docstring for why the claimed figure is no part of this match.
+                    "awaiting_confirmation": (
+                        transfer.from_member_id,
+                        transfer.to_member_id,
+                    )
+                    in awaiting,
                 }
                 for transfer in plan.transfers
             ],
+            "pending": [
+                _settlement_view(settlement, events.SettlementState.PENDING)
+                for settlement in pending
+            ],
         },
         200,
+    )
+
+
+_SETTLEMENT_LOCK: Final = threading.Lock()
+"""Held across the one-pending-per-pair check and the append that follows it.
+
+The rule is check-then-act: it reads the ledger, decides no claim is pending, and only
+then appends. The run command serves with ``threaded=True``, so two requests can
+interleave inside that window, each see no pending claim and each append. The store
+cannot catch the second, because pending is derived from the decisions a settlement
+does *not* have and is no column anything could be unique on. Two pending claims for
+one payment are two confirmations in issue #16, and the debt clears twice.
+
+**What this lock is worth, exactly.** It serialises the check and the append within one
+process, which is the deployment this repository has: ``scripts/serve.py`` runs one
+threaded process bound to ``127.0.0.1``. It is worth nothing across two processes or
+two hosts, where two workers hold two different locks and the window is open again. So
+the invariant is a property of how this is run, not of the ledger: no lock can make it
+a property of the ledger while pending is derived rather than stored. A second process
+is not a supported deployment today; if it ever is, this is the sentence that has to be
+paid for, with a uniqueness constraint or a transaction the store does not have yet.
+
+It guards the ledger read as well as the append, not the append alone: a lock taken
+after the read would let both requests read first and change nothing.
+
+**It is not reentrant, and that is the one way to misuse it.** ``threading.Lock``, not
+``RLock``: taking it twice on one thread hangs that request for good, with no exception
+and no log line, and every later request for the same rule hangs behind it. So take it
+once per request, at the outermost point that needs it, and never inside a function
+that a holder of the lock might call. The rule that keeps that easy: a helper that
+counts is handed a ledger and takes no lock, and the caller holds the lock around it.
+A helper that both counts and locks is the shape that deadlocks. ``RLock`` would make
+the nesting harmless, and is the wrong trade here, because the value of this lock is
+one unbroken span from the read to the append and a nested acquire would read like a
+second span while being no such thing.
+
+**For issue #16.** Do not read "at most one pending claim per pair" as given. Confirming
+is the same check-then-act shape, so #16 should take *this* lock across its own read
+and its own append, and count the pair's pending claims inside it rather than trusting
+this endpoint to have kept it to one. Under one process that count is a cheap
+restatement of what is already true; under two it is the only thing standing between a
+duplicated claim and a debt cleared twice. Sharing the lock is deliberate: two locks
+for one invariant is one lock too many. Share the counting the way the paragraph above
+says, by passing the ledger rather than by taking the lock in two places.
+"""
+
+
+def _create_settlement() -> flask.Response:
+    """``POST /api/settlements``: record that the acting member transferred money.
+
+    One appended ``SettlementEvent`` and nothing else. No ``SettlementDecisionEvent``
+    is written, because a settlement with no decision is pending by definition, so
+    marking a payment as paid is one append. **No balance moves**: ``derive_balances``
+    folds confirmed settlements only, and until the receiver confirms nothing has.
+
+    **The payer is the acting member and is never named in the body.** Both
+    ``from_member_id`` and ``created_by`` come from ``flask.g.member``, and
+    ``_require_keys`` refuses a body that names either. That is deliberate and is not
+    ``_create_expense``'s rule that "``payer_id`` may be any member": an expense is
+    two people agreeing something happened, while a settlement is settled by exactly
+    one person, the receiver, in task 15. If either end could create one, the receiver
+    could create **and** confirm it and a debt would clear with the payer never having
+    touched the app. Payer-creates plus receiver-confirms is what makes a settlement
+    need two people, and one rule without the other is worth nothing.
+
+    **The request is never checked against the simplify plan.** It does not have to
+    name a transfer that exists, and the amount does not have to equal one:
+    ``balances.py`` already refuses to validate a settlement against the pairwise debt
+    it appears to clear, the person is recording something that happened in the world,
+    and the receiver is the check. Refusing a real payment against a plan that may
+    have moved since the screen was drawn would refuse it for a reason nobody could
+    act on.
+
+    The self-pair and the non-positive amount are refused **here**, before the event
+    is constructed, rather than being left to ``SettlementEvent.__post_init__``: it
+    raises ``InvalidEvent``, which is in neither :data:`ERROR_STATUS` nor
+    :data:`ERROR_CODE`, so an escape would reach the client as a generic 500 with the
+    real reason in the log only. The constructor stays as the backstop it is.
+
+    At most one settlement per ordered pair may be pending, so a second claim to a
+    receiver who has not answered the first is ``SettlementAlreadyPending``. The pair
+    is ordered, because a claim each way is two claims about two different transfers
+    and both may be true, and the amount is no part of the rule, because two claims
+    for different amounts in one direction is still the ambiguity this refuses. The
+    check and the append are held under :data:`_SETTLEMENT_LOCK`, which is what makes
+    that a rule rather than a hope, and its docstring records the one thing the lock
+    cannot do: hold across two processes.
+    """
+    payload = _json_object()
+    what = "a settlement body"
+    _require_keys(payload, ("to_member_id", "amount"), what)
+    to_member_id = _require_str(payload, "to_member_id", what)
+    amount_text = _require_amount_str(payload, "amount", what)
+
+    group = flask.g.group
+    acting = flask.g.member
+    roster = {member.id for member in _store().list_members(group.id)}
+    if to_member_id not in roster:
+        raise MalformedRequest(
+            f"{what} names a to_member_id that is not a member of this group: "
+            f"{to_member_id!r}"
+        )
+    if to_member_id == acting.id:
+        raise MalformedRequest(
+            f"a member cannot record a payment to themselves: {to_member_id!r} is "
+            f"both the payer and the receiver"
+        )
+    amount = money.parse_amount(amount_text, group.currency)
+    if amount.cents <= 0:
+        raise MalformedRequest(
+            f"{what} amount must be more than zero, got {amount_text!r}"
+        )
+
+    # Read before writing, from one snapshot of the ledger, so the pending state this
+    # refusal is scoped to is the same one ``_read_balances`` renders. Both halves are
+    # under :data:`_SETTLEMENT_LOCK`, because a check in one transaction and an append
+    # in another is a rule two threaded requests walk straight through. Everything
+    # above validates the request alone and needs no lock; everything the rule depends
+    # on is inside it. Nothing in here can block on anything but the store.
+    with _SETTLEMENT_LOCK:
+        ledger = _store().list_events(group.id)
+        states = balances.settlement_states(ledger)
+        for existing in ledger:
+            if (
+                isinstance(existing, events.SettlementEvent)
+                and existing.from_member_id == acting.id
+                and existing.to_member_id == to_member_id
+                and states[existing.id] is events.SettlementState.PENDING
+            ):
+                raise SettlementAlreadyPending(
+                    "a payment to that person is already marked as paid and is "
+                    "waiting for them to confirm it; there can be only one at a time"
+                )
+
+        settlement = events.SettlementEvent(
+            id=events.SettlementId(events.new_id()),
+            group_id=events.GroupId(group.id),
+            currency=group.currency,
+            from_member_id=events.MemberId(acting.id),
+            to_member_id=events.MemberId(to_member_id),
+            amount_cents=amount.cents,
+            created_at=_now(),
+            created_by=events.MemberId(acting.id),
+        )
+        _store().append_settlement(settlement)
+    # Born pending, because no decision references it and none is written here.
+    return _json_response(
+        {
+            "settlement": _settlement_view(
+                settlement, events.SettlementState.PENDING
+            )
+        },
+        201,
     )
 
 
@@ -1636,6 +1918,21 @@ _API_ROUTES: Final[tuple[_ApiRoute, ...]] = (
         "read_debt",
         _read_debt,
         ("GET",),
+        _Access.MEMBER,
+    ),
+    # Task 14, appended. Nothing at run time reads this order: the policy map is keyed
+    # by endpoint and Flask routes by rule. One test does, and says so plainly:
+    # ``test_the_route_tables_hold_exactly_the_routes_the_app_serves`` compares this
+    # table against an ordered list literal, so a row added here is added to that
+    # literal in the same position. That is an obligation about a declaration, which
+    # is what the test is for. What is gone is the other kind: the audit test that
+    # withholds one row now picks it by endpoint, so no row has to sit anywhere in
+    # particular to keep a test testing the route it was written about.
+    _ApiRoute(
+        "/api/settlements",
+        "create_settlement",
+        _create_settlement,
+        ("POST",),
         _Access.MEMBER,
     ),
 )

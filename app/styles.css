@@ -979,3 +979,92 @@ body {
 .balances-entry-effect {
   overflow-wrap: break-word;
 }
+
+
+/* Task 14: marking a payment as paid. Appended as one block on task 12's own
+   terms, every selector prefixed `.balances-`, no rule above modified, and
+   nothing here moves, so the reduced-motion block still has nothing on this
+   screen to switch off. */
+
+/* A pending claim stacks its sentence over its date, the way an entry row does,
+   rather than putting them on one line: at 320px a name, an amount and a date on
+   one line is what pushes this screen into a horizontal scroll. */
+.balances-pending {
+  display: block;
+  padding: 10px 14px;
+}
+
+.balances-pending + .balances-pending {
+  border-top: 1px solid var(--line);
+}
+
+/* Interpolates two display names, so it gives way where every other line
+   carrying one does. Its content box is 258px at 320px wide and a 40-character
+   name with nothing to break on runs past 300px. */
+.balances-pending-line {
+  display: block;
+  font-size: 17px;
+  overflow-wrap: break-word;
+}
+
+/* 16px like every other date on this screen: there is no small print here. */
+.balances-pending-date {
+  display: block;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+/* The third child of a transfer row, holding either the awaiting sentence or the
+   button and its status line. It carries the row's own horizontal padding,
+   because the button above it took the row's padding on to itself. */
+.balances-action {
+  padding: 0 14px 12px;
+}
+
+/* Full width, so the whole row is the target with no dead strip down either side,
+   and clearing the 44px floor on its own like both disclosure buttons. */
+.balances-mark-button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 17px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Three levels of control now, all three reachable by Tab, so all three say where
+   the keyboard is. */
+.balances-mark-button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+
+/* The line a row says while it is recording, once it has recorded, and when it
+   could not. It carries a name through the receiver in the recorded sentence, so
+   it gives way like the rest. Deliberately no `min-height`, no padding and no
+   `:empty` rule: it ships empty and must take no vertical space until there is
+   something to say, and it is never hidden, because a live region whose text
+   changes while it is hidden announces nothing in several screen readers. */
+.balances-action-status {
+  margin: 0;
+  font-size: 16px;
+  color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+/* The sentence a row already claimed shows instead of a button. Not a disabled
+   control and not small print: it is the answer to "why is this still here". */
+.balances-awaiting {
+  display: block;
+  font-size: 16px;
+  color: var(--muted);
+  overflow-wrap: break-word;
+}

@@ -3839,11 +3839,35 @@ const SCENARIOS = [
          is ever rendered as text. */
       page.is(row.getAttribute('data-from'), 'mem-1', 'data-from');
       page.is(row.getAttribute('data-to'), 'mem-2', 'data-to');
-      /* Exactly two, so task 14 can append a third without unpicking either. */
-      page.is(row.childNodes.length, 2, 'children of the transfer row');
+      /* Three since task 14, and only here among task 13's scenarios: this is the one
+         fixture whose acting member is the payer of its transfer, so this is the one
+         row that carries the Mark as paid control. childNodes[0] and childNodes[1]
+         keep exactly the meanings task 13 gave them, because the action was appended
+         rather than inserted. Every other balances scenario still reads 2. */
+      page.is(row.childNodes.length, 3, 'children of the transfer row');
 
       const button = row.childNodes[0];
       const detail = row.childNodes[1];
+      const action = row.childNodes[2];
+      page.is(action.tagName, 'DIV', 'the action region');
+      page.is(action.className, 'balances-action', 'the action class');
+      page.is(action.childNodes.length, 2, 'children of the action region');
+      const mark = action.childNodes[0];
+      const markStatus = action.childNodes[1];
+      page.is(mark.tagName, 'BUTTON', 'the mark control');
+      page.is(mark.type, 'button', 'the mark control type');
+      page.is(mark.className, 'balances-mark-button', 'the mark control class');
+      page.is(mark.textContent, 'Mark as paid', 'the visible label');
+      /* The visible label first and then the payment, so the accessible name contains
+         the visible one and three payments read as three different buttons. */
+      page.is(
+        mark.getAttribute('aria-label'),
+        'Mark as paid: Sam (you) pays Ali 600.00',
+        'the accessible name'
+      );
+      page.is(markStatus.getAttribute('role'), 'status', 'the status line');
+      page.is(markStatus.textContent, '', 'the status line before anything happens');
+      page.is(markStatus.hidden, false, 'the status line is never hidden');
       page.is(button.tagName, 'BUTTON', 'the control');
       page.is(button.type, 'button', 'the control type');
       page.is(button.getAttribute('aria-expanded'), 'false', 'aria-expanded closed');
@@ -5091,6 +5115,1012 @@ const SCENARIOS = [
       page.is(transferRows(page).length, 0, 'the transfer rows');
       page.expectRequests(HINT_REQUESTS);
     }
+  },
+
+  /* --- Task 14: marking a payment as paid ---------------------------------------
+
+     Appended, with every fixture local to its own scenario, following task 12a's note
+     that one appended block conflicts with less on a file other branches are editing.
+     Nothing in the DOM stub is widened for any of these: createElement,
+     createTextNode, setAttribute, removeAttribute, appendChild, className,
+     textContent, hidden, id, type, disabled, addEventListener and querySelectorAll
+     were all there already. */
+
+  {
+    /* Sam is acting and is the payer of both suggestions, so both rows carry their
+       own control, their own status line and their own closure, and marking one
+       changes nothing about the other. The second answer is a 201 whose view the
+       screen cannot read: nothing is appended for it, and the sentence saying the
+       payment was recorded still stands, because it was. */
+    name: 'the_payer_can_mark_a_suggested_payment_as_paid',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '750.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '600.00', direction: 'owed' },
+          { member_id: 'mem-3', amount: '150.00', direction: 'owed' }
+        ],
+        transfers: [
+          payableTransfer('mem-1', 'mem-2', '600.00', false),
+          payableTransfer('mem-1', 'mem-3', '150.00', false)
+        ],
+        pending: []
+      };
+      await onBalances(page, roster, figures);
+      /* Entering the route still costs exactly two reads, and drawing a payable row
+         costs none: the control asks for nothing until it is pressed. */
+      page.same(page.requests, BALANCES_ENTRY, 'requests on entering the route');
+      page.is(
+        page.el('balances-pending-block').hidden,
+        true,
+        'the pending block with nothing pending'
+      );
+
+      const rows = transferRows(page);
+      page.is(rows.length, 2, 'transfer rows');
+      page.is(rows[0].childNodes.length, 3, 'children of the first row');
+      page.is(rows[1].childNodes.length, 3, 'children of the second row');
+      /* The first two children still mean what task 13 made them mean. */
+      page.is(rows[0].childNodes[0].tagName, 'BUTTON', 'the disclosure');
+      page.is(regionFor(page, rows[0].childNodes[0]), rows[0].childNodes[1], 'region');
+
+      const first = markButtonIn(rows[0]);
+      const second = markButtonIn(rows[1]);
+      page.ok(first !== null && second !== null, 'each row has a control');
+      page.ok(first !== second, 'and its own, not one shared between them');
+      page.is(first.textContent, 'Mark as paid', 'the visible label');
+      page.is(
+        first.getAttribute('aria-label'),
+        'Mark as paid: Sam (you) pays Ali 600.00',
+        'the accessible name of the first'
+      );
+      page.is(
+        second.getAttribute('aria-label'),
+        'Mark as paid: Sam (you) pays Cass 150.00',
+        'the accessible name of the second'
+      );
+      page.is(first.disabled, false, 'the control before it is pressed');
+      page.is(markStatusIn(rows[0]).textContent, '', 'the status line before');
+
+      page.respondInOrder('POST', '/settlements', [
+        created({
+          settlement: settlementView(
+            'set-1',
+            'mem-1',
+            'mem-2',
+            '600.00',
+            '2026-09-07T08:00:00.000000+00:00'
+          )
+        }),
+        created({
+          settlement: {
+            id: 'set-2',
+            from_member_id: 'mem-1',
+            to_member_id: 'mem-3',
+            amount: '150.00',
+            created_at: '2026-09-07T08:05:00.000000+00:00',
+            created_by: 'mem-1',
+            /* Not the one string this screen renders a row for. */
+            state: 'unknown'
+          }
+        })
+      ]);
+
+      await page.dispatch(first, 'click');
+      page.is(
+        markStatusIn(rows[0]).textContent,
+        'Marked as paid. It is not counted until Ali confirms.',
+        'the first row after a 201'
+      );
+      /* Still in the document, still labelled the same, disabled rather than removed:
+         removing the element that has focus moves focus to the body. */
+      page.is(actionIn(rows[0]).childNodes[0], first, 'the control is still there');
+      page.is(first.disabled, true, 'the control after a 201');
+      page.is(first.textContent, 'Mark as paid', 'the label after a 201');
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.is(pendingRows(page).length, 1, 'pending rows');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Sam (you) marked 600.00 as paid to Ali.',
+        'the row the 201 appended'
+      );
+      /* The other row is untouched by the first one's answer. */
+      page.is(markStatusIn(rows[1]).textContent, '', 'the other status line');
+      page.is(second.disabled, false, 'the other control');
+
+      await page.dispatch(second, 'click');
+      page.is(
+        markStatusIn(rows[1]).textContent,
+        'Marked as paid. It is not counted until Cass confirms.',
+        'the second row after a 201'
+      );
+      /* The view did not validate, so nothing was appended and the list still holds
+         only the row the first answer put there. */
+      page.is(pendingRows(page).length, 1, 'pending rows after an unreadable view');
+
+      /* Marking changes no route, pushes and replaces no history entry, and moves no
+         focus. */
+      page.is(page.hash, '#/balances', 'the hash');
+      page.same(page.pushStates, [], 'history entries pushed');
+      page.same(page.replaceStates, [], 'history entries replaced');
+      page.is(page.focused, null, 'focus');
+
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          MARK_SIX_HUNDRED,
+          {
+            method: 'POST',
+            path: '/settlements',
+            body: '{"to_member_id":"mem-3","amount":"150.00"}'
+          }
+        ])
+      );
+    }
+  },
+
+  {
+    /* The live region is written to before the request goes out, not after it comes
+       back. page.onRequest sees the page as it was at the moment fetch was called,
+       which is the only moment that state exists. */
+    name: 'marking_a_payment_paid_announces_it_before_and_after_the_request',
+    async run(page) {
+      await onOnePayableBalance(page);
+      const row = transferRows(page)[0];
+      const region = actionIn(row);
+      const button = markButtonIn(row);
+      const status = markStatusIn(row);
+
+      let seen = null;
+      page.onRequest('POST', '/settlements', () => {
+        seen = {
+          busy: region.getAttribute('aria-busy'),
+          said: status.textContent,
+          disabled: button.disabled
+        };
+      });
+      page.respond('POST', '/settlements', created({ settlement: SIX_HUNDRED_VIEW }));
+
+      await page.dispatch(button, 'click');
+      page.same(
+        seen,
+        { busy: 'true', said: 'Recording this payment.', disabled: true },
+        'the row at the moment the request went out'
+      );
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy once it settled');
+      page.is(
+        status.textContent,
+        'Marked as paid. It is not counted until Ali confirms.',
+        'the row once it settled'
+      );
+      page.expectRequests(BALANCES_ENTRY.concat([MARK_SIX_HUNDRED]));
+    }
+  },
+
+  {
+    /* Two taps, one settlement. The second is dispatched straight at the listener
+       while the first request is still in flight, which is the only way the closure
+       flag can be told apart from the disabled attribute: nothing here consults
+       disabled, so a guard living only in the attribute would be asserted nowhere. A
+       third tap after the answer is refused by the other flag. */
+    name: 'tapping_mark_as_paid_twice_records_one_settlement',
+    async run(page) {
+      await onOnePayableBalance(page);
+      const row = transferRows(page)[0];
+      const button = markButtonIn(row);
+      page.respond('POST', '/settlements', created({ settlement: SIX_HUNDRED_VIEW }));
+      let again = true;
+      page.onRequest('POST', '/settlements', () => {
+        if (!again) {
+          /* Once only. A screen without the flag would recurse rather than fail with
+             a readable request list. */
+          return;
+        }
+        again = false;
+        (button.listeners.click || []).forEach((handler) => handler({ type: 'click' }));
+      });
+
+      await page.dispatch(button, 'click');
+      page.is(again, false, 'the second tap ran while the first was in flight');
+      page.is(pendingRows(page).length, 1, 'pending rows after two taps');
+
+      await page.dispatch(button, 'click');
+      page.is(pendingRows(page).length, 1, 'pending rows after a tap on a done row');
+      page.is(button.disabled, true, 'the control after a 201');
+      page.expectRequests(BALANCES_ENTRY.concat([MARK_SIX_HUNDRED]));
+    }
+  },
+
+  {
+    /* One fixed sentence for every one of api.js's six kinds, into the row that asked
+       and nowhere else, and nothing was kept, so it can be tried again. The server's
+       own words name a member id, which this screen may never render, and this
+       asserts that sentence is absent from the screen character for character. */
+    name: 'a_payment_that_will_not_record_says_so_and_can_be_tried_again',
+    async run(page) {
+      await onOnePayableBalance(page);
+      const row = transferRows(page)[0];
+      const disclosure = row.childNodes[0];
+      const detail = regionFor(page, disclosure);
+      const region = actionIn(row);
+      const button = markButtonIn(row);
+      const status = markStatusIn(row);
+      /* Opened first, so "an open drill-down stays open" is about this state and not
+         about a region that was never open. */
+      await page.dispatch(disclosure, 'click');
+
+      page.respondInOrder('POST', '/settlements', [
+        failure(400, CODES.malformedRequest, MALFORMED_SETTLEMENT),
+        created({ settlement: SIX_HUNDRED_VIEW })
+      ]);
+
+      await page.dispatch(button, 'click');
+      appIsUp(page, 'after a refused mark');
+      page.is(status.textContent, 'That was not recorded.', 'the row that asked');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy after a refusal');
+      /* Nothing was kept, so the control comes back rather than staying dead. */
+      page.is(button.disabled, false, 'the control after a refusal');
+      /* And nothing else on the screen moved. */
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.is(page.el('balances-net').childNodes.length, 2, 'the net list');
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.is(pendingRows(page).length, 0, 'pending rows');
+      page.is(disclosure.getAttribute('aria-expanded'), 'true', 'the open payment');
+      page.is(detail.hidden, false, 'the open region');
+      const shown = page.el('screen-balances').textContent;
+      page.ok(
+        shown.indexOf(MALFORMED_SETTLEMENT) === -1,
+        'the server sentence is nowhere on the screen'
+      );
+      page.ok(shown.indexOf('mem-') === -1, 'no member id is rendered as text');
+
+      /* A fresh request, because nothing was kept. */
+      await page.dispatch(button, 'click');
+      page.is(
+        status.textContent,
+        'Marked as paid. It is not counted until Ali confirms.',
+        'the row after trying again'
+      );
+      page.is(pendingRows(page).length, 1, 'pending rows after trying again');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([MARK_SIX_HUNDRED, MARK_SIX_HUNDRED])
+      );
+    }
+  },
+
+  {
+    /* Nobody is offered a control they could not use. Sam is acting and this payment
+       is Ali's to make, so the row is byte for byte what task 13 rendered. */
+    name: 'a_payment_someone_else_owes_offers_no_way_to_mark_it_paid',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '40.00', direction: 'owes' },
+          { member_id: 'mem-3', amount: '40.00', direction: 'owed' }
+        ],
+        transfers: [payableTransfer('mem-2', 'mem-3', '40.00', false)],
+        pending: []
+      };
+      await onBalances(page, roster, figures);
+      const row = transferRows(page)[0];
+      page.is(row.childNodes.length, 2, 'children of the transfer row');
+      page.is(actionIn(row), null, 'the third child');
+      page.is(markButtonIn(row), null, 'a control on a payment somebody else owes');
+      page.is(awaitingLineIn(row), null, 'an awaiting line');
+      page.is(lineOf(row.childNodes[0]).textContent, 'Ali pays Cass 40.00', 'the row');
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* A payment already claimed says so instead of offering to claim it again,
+       whoever is holding the phone, the payer included. This is the up-front guard
+       against a second claim, which is what makes the server's 409 a race guard
+       rather than the normal path. */
+    name: 'a_payment_already_marked_as_paid_says_so_instead_of_offering_the_button',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '640.00', direction: 'owed' },
+          { member_id: 'mem-3', amount: '40.00', direction: 'owes' }
+        ],
+        /* The first is the acting member's own and the second is somebody else's, and
+           both are claimed: the sentence is the same on both. */
+        transfers: [
+          payableTransfer('mem-1', 'mem-2', '600.00', true),
+          payableTransfer('mem-3', 'mem-2', '40.00', true)
+        ],
+        pending: [
+          settlementView(
+            'set-1',
+            'mem-1',
+            'mem-2',
+            '5.00',
+            '2026-09-05T09:00:00.000000+00:00'
+          )
+        ]
+      };
+      await onBalances(page, roster, figures);
+      const rows = transferRows(page);
+      page.same(
+        rows.map((row) => row.childNodes.length),
+        [3, 3],
+        'children of each transfer row'
+      );
+      page.same(
+        rows.map((row) => (awaitingLineIn(row) || {}).textContent),
+        [
+          'Marked as paid, and not confirmed yet.',
+          'Marked as paid, and not confirmed yet.'
+        ],
+        'the sentence on each claimed payment'
+      );
+      page.same(
+        rows.map((row) => markButtonIn(row)),
+        [null, null],
+        'controls on a claimed payment'
+      );
+      page.same(
+        rows.map((row) => actionIn(row).childNodes.length),
+        [1, 1],
+        'children of each action region'
+      );
+      /* The suggestion itself is untouched: same wording, same amount. A claim of
+         5.00 marks a 600.00 row, because the amount is no part of the server's match,
+         and the row never says this figure has been paid. */
+      page.same(
+        rows.map((row) => lineOf(row.childNodes[0]).textContent),
+        ['Sam (you) pays Ali 600.00', 'Cass pays Ali 40.00'],
+        'the suggestions'
+      );
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Sam (you) marked 5.00 as paid to Ali.',
+        'the claimed figure, where it can be read against the suggestion'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* An inert row gets none of it, even when the acting member is its payer and even
+       when the server says it is awaiting confirmation. A screen that cannot explain
+       a payment has no business offering to record it, and task 13's one-span row is
+       not amended. The claim is not lost: the block above lists it in full, because
+       that block is built from `pending` and not from these rows. */
+    name: 'a_transfer_row_without_provenance_offers_no_way_to_mark_it_paid',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '600.00', direction: 'owed' }
+        ],
+        transfers: [
+          {
+            from_member_id: 'mem-1',
+            to_member_id: 'mem-2',
+            amount: '600.00',
+            payer_debts: [],
+            receiver_credits: [],
+            awaiting_confirmation: true
+          }
+        ],
+        pending: [
+          settlementView(
+            'set-1',
+            'mem-1',
+            'mem-2',
+            '600.00',
+            '2026-09-05T09:00:00.000000+00:00'
+          )
+        ]
+      };
+      await onBalances(page, roster, figures);
+      const row = transferRows(page)[0];
+      page.is(row.childNodes.length, 1, 'children of the inert row');
+      page.is(row.childNodes[0].tagName, 'SPAN', 'the one child');
+      page.is(row.childNodes[0].className, 'balances-line', 'the one child class');
+      page.is(row.className, 'balances-row', 'the row class');
+      page.is(markButtonIn(row), null, 'a control on an inert row');
+      page.is(awaitingLineIn(row), null, 'an awaiting line on an inert row');
+      page.is(actionIn(row), null, 'a third child on an inert row');
+      page.is(row.querySelectorAll('.balances-indicator').length, 0, 'an indicator');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the drill-down hint');
+      /* Still listed in full above, so nothing about the claim is lost. */
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Sam (you) marked 600.00 as paid to Ali.',
+        'the claim, listed even though its row cannot carry it'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
+  },
+
+  {
+    /* One ledger read off three phones says the same thing, and the pending row
+       differs only in where ` (you)` falls: task 12's rule, that a row meaning
+       different things depending on who is holding the phone is worse than a list of
+       names. The three phones are one page signing out and back in, which is the only
+       way this harness can put three people in front of one fixture. */
+    name: 'everyone_sees_the_same_payment_awaiting_confirmation',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' },
+          { id: 'mem-3', display_name: 'Cass' }
+        ]
+      };
+      const claimed = '2026-09-05T09:00:00.000000+00:00';
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '600.00', direction: 'owed' },
+          { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', true)],
+        pending: [settlementView('set-1', 'mem-1', 'mem-2', '600.00', claimed)]
+      };
+      page.respondInOrder('GET', '/session', [
+        ok(A_MEMBER),
+        ok(A_SECOND_MEMBER),
+        ok(A_THIRD_MEMBER)
+      ]);
+      page.respondInOrder('POST', '/session', [
+        ok(A_SECOND_MEMBER),
+        ok(A_THIRD_MEMBER)
+      ]);
+      page.respond('DELETE', '/session', noContent());
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok(figures));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const read = () => {
+        const row = pendingRows(page)[0];
+        return {
+          rows: pendingRows(page).length,
+          hidden: page.el('balances-pending-block').hidden,
+          line: row.childNodes[0].textContent,
+          date: row.childNodes[1].textContent,
+          claimed: row.childNodes[1].getAttribute('datetime'),
+          children: row.childNodes.length,
+          settlement: row.getAttribute('data-settlement'),
+          from: row.getAttribute('data-from'),
+          to: row.getAttribute('data-to'),
+          figures: figuresIn(row),
+          marks: page
+            .el('balances-transfers')
+            .querySelectorAll('.balances-mark-button').length
+        };
+      };
+
+      const payer = read();
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after the payer signs out');
+      await signIn(page, 'ali@example.com', 'opensesame');
+      appIsUp(page, 'after the receiver signs in');
+      const receiver = read();
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after the receiver signs out');
+      await signIn(page, 'cass@example.com', 'letmein');
+      appIsUp(page, 'after a third member signs in');
+      const third = read();
+
+      const shape = {
+        rows: 1,
+        hidden: false,
+        line: '',
+        date: spelledDate(claimed),
+        claimed: claimed,
+        children: 2,
+        settlement: 'set-1',
+        from: 'mem-1',
+        to: 'mem-2',
+        figures: ['600.00'],
+        /* Nobody is offered a control on a payment somebody has already claimed. */
+        marks: 0
+      };
+      page.same(
+        payer,
+        Object.assign({}, shape, { line: 'Sam (you) marked 600.00 as paid to Ali.' }),
+        'the payer’s phone'
+      );
+      page.same(
+        receiver,
+        Object.assign({}, shape, { line: 'Sam marked 600.00 as paid to Ali (you).' }),
+        'the receiver’s phone'
+      );
+      page.same(
+        third,
+        Object.assign({}, shape, { line: 'Sam marked 600.00 as paid to Ali.' }),
+        'a third member’s phone'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SECOND_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: THIRD_SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* The suggestion stays. Nothing is removed, greyed, struck through, reordered or
+       collapsed by a claim, because no balance moved, and a screen that quietly
+       dropped the row would be showing a cleared debt that is not cleared. */
+    name: 'a_pending_payment_leaves_the_suggested_payment_where_it_was',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' }
+        ]
+      };
+      const net = [
+        { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+        { member_id: 'mem-2', amount: '600.00', direction: 'owed' }
+      ];
+      const before = {
+        currency: 'AUD',
+        net: net,
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+        pending: []
+      };
+      const after = {
+        currency: 'AUD',
+        net: net,
+        /* The same transfer, with the same amount and the same provenance: the fold
+           did not move, so simplify_debts produced the same plan. */
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', true)],
+        pending: [SIX_HUNDRED_VIEW]
+      };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respondInOrder('GET', '/balances', [ok(before), ok(after)]);
+      page.respond('GET', '/debts/mem-1/mem-2', ok(oneEntryDebt('mem-1', 'mem-2')));
+      page.respond('POST', '/settlements', created({ settlement: SIX_HUNDRED_VIEW }));
+      page.startAt('#/balances');
+      await page.boot();
+
+      const row = transferRows(page)[0];
+      const disclosure = row.childNodes[0];
+      const detail = regionFor(page, disclosure);
+      const sentence = lineOf(disclosure).textContent;
+      await page.dispatch(disclosure, 'click');
+      const debt = debtRowsIn(detail)[0];
+      await page.dispatch(debt.childNodes[0], 'click');
+      const lines = detailLines(detail);
+      const entries = entriesIn(debt.childNodes[1]).length;
+
+      await page.dispatch(markButtonIn(row), 'click');
+      /* Still there, still first, still saying the same thing, and still open. */
+      page.is(transferRows(page).length, 1, 'transfer rows after a 201');
+      page.is(transferRows(page)[0], row, 'the row itself, not a rebuilt one');
+      page.is(lineOf(disclosure).textContent, sentence, 'the suggestion');
+      page.same(figuresIn(disclosure), ['600.00'], 'the amount');
+      page.is(row.className, 'balances-row balances-transfer', 'the row class');
+      page.is(disclosure.getAttribute('aria-expanded'), 'true', 'still open');
+      page.is(detail.hidden, false, 'the open region');
+      page.same(detailLines(detail), lines, 'the debts behind it');
+      page.is(entriesIn(debt.childNodes[1]).length, entries, 'the expenses behind it');
+
+      /* And still there after the server has been asked again, now marked. */
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      const rebuilt = transferRows(page);
+      page.is(rebuilt.length, 1, 'transfer rows after returning');
+      page.is(
+        lineOf(rebuilt[0].childNodes[0]).textContent,
+        'Sam (you) pays Ali 600.00',
+        'the suggestion after returning'
+      );
+      page.is(
+        (awaitingLineIn(rebuilt[0]) || {}).textContent,
+        'Marked as paid, and not confirmed yet.',
+        'the sentence that stops it reading as a bug'
+      );
+      page.is(markButtonIn(rebuilt[0]), null, 'a second chance to claim it');
+      page.is(pendingRows(page).length, 1, 'pending rows after returning');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/debts/mem-1/mem-2',
+          MARK_SIX_HUNDRED,
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* A row this screen cannot read is left out and the rest of the list still
+       renders: one unreadable row must not hide a real claim. The state is compared
+       by one strict equality against 'pending', which is what lets task 15 widen this
+       list with decided settlements without this screen labelling a rejected claim as
+       awaiting somebody. */
+    name: 'a_pending_row_the_screen_cannot_read_is_left_out_rather_than_guessed_at',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' }
+        ]
+      };
+      const net = [
+        { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+        { member_id: 'mem-2', amount: '0.00', direction: 'settled' }
+      ];
+      const good = settlementView(
+        'set-1',
+        'mem-1',
+        'mem-2',
+        '5.00',
+        '2026-09-05T09:00:00.000000+00:00'
+      );
+      const alsoGood = settlementView(
+        'set-2',
+        'mem-2',
+        'mem-1',
+        '7.00',
+        '2026-09-06T09:00:00.000000+00:00'
+      );
+      const mixed = {
+        currency: 'AUD',
+        net: net,
+        transfers: [],
+        pending: [
+          good,
+          null,
+          'a settlement',
+          Object.assign({}, alsoGood, { id: 7 }),
+          Object.assign({}, alsoGood, { amount: 5 }),
+          Object.assign({}, alsoGood, { created_at: null }),
+          /* Decided, not awaiting: 'pending' is the one string this screen draws. */
+          Object.assign({}, alsoGood, { state: 'confirmed' }),
+          Object.assign({}, alsoGood, { state: 'rejected' }),
+          Object.assign({}, alsoGood, { state: 'PENDING' }),
+          alsoGood
+        ]
+      };
+      /* An older server is a screen without the block, not a broken one, and neither
+         is one whose list is not a list at all or holds nothing this screen can
+         read: the block is shown only when at least one row was rendered. */
+      const older = { currency: 'AUD', net: net, transfers: [] };
+      const notAList = { currency: 'AUD', net: net, transfers: [], pending: 'nope' };
+      const noneReadable = {
+        currency: 'AUD',
+        net: net,
+        transfers: [],
+        pending: [null, Object.assign({}, alsoGood, { state: 'rejected' })]
+      };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respondInOrder('GET', '/balances', [
+        ok(mixed),
+        ok(older),
+        ok(notAList),
+        ok(noneReadable)
+      ]);
+      page.startAt('#/balances');
+      await page.boot();
+
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.same(
+        pendingRows(page).map((row) => row.childNodes[0].textContent),
+        [
+          'Sam (you) marked 5.00 as paid to Ali.',
+          'Ali marked 7.00 as paid to Sam (you).'
+        ],
+        'the rows this screen could read'
+      );
+
+      const revisit = async (what) => {
+        await page.goTo('#/feed');
+        await page.goTo('#/balances');
+        page.is(page.el('balances-pending-block').hidden, true, what);
+        page.is(pendingRows(page).length, 0, 'rows for ' + what);
+      };
+      await revisit('an absent pending list');
+      await revisit('a pending list that is not a list');
+      await revisit('a pending list nothing in which could be read');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances',
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances',
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* Behind a curtain nothing is asked, nothing is disabled and nothing is written:
+       the same shared helper the feed retry, the add retry and both disclosure
+       handlers call, and not a fifth copy of the question. */
+    name: 'marking_a_payment_paid_behind_a_curtain_asks_for_nothing',
+    async run(page) {
+      await onOnePayableBalance(page);
+      const row = transferRows(page)[0];
+      const region = actionIn(row);
+      const button = markButtonIn(row);
+      const status = markStatusIn(row);
+      page.respond('DELETE', '/session', noContent());
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+
+      await page.dispatch(button, 'click');
+      page.is(status.textContent, '', 'the live region');
+      page.is(region.getAttribute('aria-busy'), null, 'aria-busy');
+      page.is(button.disabled, false, 'the control');
+      page.expectRequests(
+        BALANCES_ENTRY.concat([{ method: 'DELETE', path: '/session', body: NO_BODY }])
+      );
+    }
+  },
+
+  {
+    /* Two halves, both true and neither what a reader would guess. An account with no
+       member row never reaches this screen at all: ledgerIsUp() refuses a session
+       view carrying no member and boot raises the not-linked notice, so nothing is
+       drawn and nothing is asked. The null acting id balancesActingId() guards
+       against is reached instead through a session view carrying a member this screen
+       cannot identify, and there the block still renders, because it is information,
+       while no row matches and no control is drawn anywhere. */
+    name: 'an_unlinked_account_is_offered_no_way_to_mark_anything_paid',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+          { member_id: 'mem-2', amount: '600.00', direction: 'owed' }
+        ],
+        transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+        pending: [
+          settlementView(
+            'set-1',
+            'mem-1',
+            'mem-2',
+            '5.00',
+            '2026-09-05T09:00:00.000000+00:00'
+          )
+        ]
+      };
+      page.respondInOrder('GET', '/session', [
+        ok(NO_MEMBER),
+        ok({
+          account: A_MEMBER.account,
+          group: A_MEMBER.group,
+          /* Linked, and unidentifiable: ledgerIsUp() admits it and balancesActingId()
+             cannot get an id out of it. */
+          member: { display_name: 'Sam' }
+        })
+      ]);
+      page.respond('POST', '/session', ok(A_MEMBER));
+      page.respond('DELETE', '/session', noContent());
+      page.respond('GET', '/members', ok(roster));
+      page.respond('GET', '/balances', ok(figures));
+      page.startAt('#/balances');
+      await page.boot();
+
+      noticeIsUp(page, 'unlinked', 'an account nobody has linked', true);
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.is(transferRows(page).length, 0, 'transfer rows');
+      page.is(
+        page.query('.balances-mark-button').length,
+        0,
+        'controls anywhere in the document'
+      );
+
+      await page.dispatch(page.el('sign-out'), 'click');
+      gateIsUp(page, 'after signing out');
+      await signIn(page, 'sam@example.com', 'hunter2');
+      appIsUp(page, 'with a member this screen cannot identify');
+      /* The information is still shown, and no name carries ` (you)` anywhere,
+         because no row matches. */
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Sam marked 5.00 as paid to Ali.',
+        'the claim'
+      );
+      page.is(
+        lineOf(transferRows(page)[0].childNodes[0]).textContent,
+        'Sam pays Ali 600.00',
+        'the suggestion'
+      );
+      page.is(transferRows(page)[0].childNodes.length, 2, 'children of the row');
+      page.is(
+        page.query('.balances-mark-button').length,
+        0,
+        'controls for a member nobody can identify'
+      );
+      page.expectRequests([
+        'GET /api/session',
+        { method: 'DELETE', path: '/session', body: NO_BODY },
+        { method: 'POST', path: '/session', body: SIGN_IN_BODY },
+        'GET /api/session',
+        'GET /api/members',
+        'GET /api/balances'
+      ]);
+    }
+  },
+
+  {
+    /* Nothing survives a navigation. The whole screen is rebuilt from the second
+       read, no row survives from before it, and no POST is replayed. Neutralise the
+       line in balancesClear() that empties this list and this goes red. */
+    name: 'leaving_the_balances_screen_and_returning_clears_the_pending_list',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' }
+        ]
+      };
+      const net = [
+        { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+        { member_id: 'mem-2', amount: '0.00', direction: 'settled' }
+      ];
+      const first = {
+        currency: 'AUD',
+        net: net,
+        transfers: [],
+        pending: [
+          settlementView(
+            'set-1',
+            'mem-1',
+            'mem-2',
+            '5.00',
+            '2026-09-05T09:00:00.000000+00:00'
+          )
+        ]
+      };
+      /* The claim was answered while the person was on another screen, so the second
+         read does not carry it. */
+      const second = { currency: 'AUD', net: net, transfers: [], pending: [] };
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/expenses', ok(EMPTY_FEED));
+      page.respond('GET', '/members', ok(roster));
+      page.respondInOrder('GET', '/balances', [ok(first), ok(second)]);
+      page.startAt('#/balances');
+      await page.boot();
+
+      const was = pendingRows(page)[0];
+      page.is(pendingRows(page).length, 1, 'pending rows on the first read');
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+
+      await page.goTo('#/feed');
+      await page.goTo('#/balances');
+      page.is(pendingRows(page).length, 0, 'pending rows on the second read');
+      page.is(page.el('balances-pending-block').hidden, true, 'the pending block');
+      page.ok(
+        pendingRows(page).indexOf(was) === -1,
+        'no row survived from the first read'
+      );
+      page.expectRequests(
+        BALANCES_ENTRY.concat([
+          'GET /api/expenses',
+          'GET /api/members',
+          'GET /api/members',
+          'GET /api/balances'
+        ])
+      );
+    }
+  },
+
+  {
+    /* Both are true at once and neither cancels the other: nothing is needed, and
+       somebody has claimed something nobody has confirmed. The block is rendered
+       independently of the transfer list and is not suppressed by any of the four
+       fixed messages. Confirming that claim would move the group away from zero, and
+       that is task 15's problem, correctly. */
+    name: 'a_group_with_nothing_left_to_settle_still_shows_a_pending_payment',
+    async run(page) {
+      const roster = {
+        members: [
+          { id: 'mem-1', display_name: 'Sam' },
+          { id: 'mem-2', display_name: 'Ali' }
+        ]
+      };
+      const figures = {
+        currency: 'AUD',
+        net: [
+          { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+          { member_id: 'mem-2', amount: '0.00', direction: 'settled' }
+        ],
+        transfers: [],
+        pending: [
+          settlementView(
+            'set-1',
+            'mem-1',
+            'mem-2',
+            '20.00',
+            '2026-09-05T09:00:00.000000+00:00'
+          )
+        ]
+      };
+      await onBalances(page, roster, figures);
+      /* Which of the four fixed messages is showing. The sentence itself is pinned
+         in tests/test_web_shell.py, where the markup it lives in is read. */
+      page.is(page.el('balances-none').hidden, false, '#balances-none');
+      page.is(page.el('balances-busy').hidden, true, '#balances-busy');
+      page.is(page.el('balances-error').hidden, true, '#balances-error');
+      page.is(page.el('balances-transfers').hidden, true, 'the transfer list');
+      page.is(page.el('balances-drill-hint').hidden, true, 'the drill-down hint');
+      /* And the claim, on screen at the same time. */
+      page.is(page.el('balances-pending-block').hidden, false, 'the pending block');
+      page.is(pendingRows(page).length, 1, 'pending rows');
+      page.is(
+        pendingRows(page)[0].childNodes[0].textContent,
+        'Sam (you) marked 20.00 as paid to Ali.',
+        'the claim beside a settled plan'
+      );
+      page.expectRequests(BALANCES_ENTRY);
+    }
   }
 ];
 
@@ -5407,6 +6437,123 @@ function entryParts(item) {
 function unique(values) {
   return values.filter((value, at) => values.indexOf(value) === at);
 }
+
+/* --- Task 14: marking a payment as paid -----------------------------------------
+
+   Below SCENARIOS for the reason tasks 43 and 13 put their blocks there: this task
+   appends to this file and edits one scenario of it, and module evaluation reaches
+   these long before main() runs, which is all a scenario body needs. */
+
+/* A third person at the same phone, so one fixture can be read off three of them.
+   A_MEMBER and A_SECOND_MEMBER are Sam and Ali; this is Cass. */
+const A_THIRD_MEMBER = {
+  account: { id: 'acc-3', email: 'cass@example.com', display_name: 'Cass' },
+  group: { id: 'grp-1', name: 'Flat', currency: 'AUD' },
+  member: { id: 'mem-3', display_name: 'Cass' }
+};
+/* Spelled out rather than rebuilt from what the scenario typed, for the reason
+   SIGN_IN_BODY is: a body asserted against a copy of the code that built it asserts
+   nothing. */
+const THIRD_SIGN_IN_BODY = '{"email":"cass@example.com","password":"letmein"}';
+
+/* The sentence _create_settlement composes for an id that is not in the roster. It
+   names a member id, so it is the one this screen may never render, and a scenario
+   asserts it is absent from the screen character for character. */
+const MALFORMED_SETTLEMENT =
+  "a settlement body names a to_member_id that is not a member of this group: 'mem-9'";
+
+/* The seven keys _settlement_view sends, born pending because no decision references
+   it and this task appends none. */
+function settlementView(id, fromId, toId, amount, when) {
+  return {
+    id: id,
+    from_member_id: fromId,
+    to_member_id: toId,
+    amount: amount,
+    created_at: when,
+    created_by: fromId,
+    state: 'pending'
+  };
+}
+
+/* One transfer in the six keys a transfer now carries, with the direct provenance
+   that makes it openable, so a scenario about the action is not also a scenario about
+   task 13's inert fallback. */
+function payableTransfer(fromId, toId, amount, awaiting) {
+  return {
+    from_member_id: fromId,
+    to_member_id: toId,
+    amount: amount,
+    payer_debts: [absorbed(fromId, toId, amount, amount, true)],
+    receiver_credits: [absorbed(fromId, toId, amount, amount, true)],
+    awaiting_confirmation: awaiting
+  };
+}
+
+/* The commonest fixture for this task: Sam acting, one suggestion Sam owes Ali, and
+   nothing claimed yet. */
+const SIX_HUNDRED_VIEW = settlementView(
+  'set-1',
+  'mem-1',
+  'mem-2',
+  '600.00',
+  '2026-09-07T08:00:00.000000+00:00'
+);
+
+/* The exact body app/api.js puts on the wire for that payment, key order included. */
+const MARK_SIX_HUNDRED = {
+  method: 'POST',
+  path: '/settlements',
+  body: '{"to_member_id":"mem-2","amount":"600.00"}'
+};
+
+async function onOnePayableBalance(page) {
+  const roster = {
+    members: [
+      { id: 'mem-1', display_name: 'Sam' },
+      { id: 'mem-2', display_name: 'Ali' }
+    ]
+  };
+  const figures = {
+    currency: 'AUD',
+    net: [
+      { member_id: 'mem-1', amount: '600.00', direction: 'owes' },
+      { member_id: 'mem-2', amount: '600.00', direction: 'owed' }
+    ],
+    transfers: [payableTransfer('mem-1', 'mem-2', '600.00', false)],
+    pending: []
+  };
+  page.respond('GET', '/debts/mem-1/mem-2', ok(oneEntryDebt('mem-1', 'mem-2')));
+  await onBalances(page, roster, figures);
+}
+
+function pendingRows(page) {
+  return page.el('balances-pending').childNodes;
+}
+
+/* The third child of a transfer row, or null when it has none. Read by position
+   rather than by class, so a row that grew a fourth child fails rather than passing. */
+function actionIn(row) {
+  return row.childNodes.length === 3 ? row.childNodes[2] : null;
+}
+
+function onlyOne(node, selector) {
+  const found = node.querySelectorAll(selector);
+  return found.length === 1 ? found[0] : null;
+}
+
+function markButtonIn(row) {
+  return onlyOne(row, '.balances-mark-button');
+}
+
+function markStatusIn(row) {
+  return onlyOne(row, '.balances-action-status');
+}
+
+function awaitingLineIn(row) {
+  return onlyOne(row, '.balances-awaiting');
+}
+
 
 /* --- Running ---------------------------------------------------------------- */
 

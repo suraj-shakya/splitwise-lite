@@ -1159,6 +1159,9 @@ API_SURFACE = {
     "addExpense",
     "balances",
     "debt",
+    # Task 14. The key that fired this section's `Mark as paid` prompt: it arrived, this
+    # test went red naming both documents, and the bullets moved.
+    "addSettlement",
 }
 
 # Capability key -> the (file under `app/`, substring) pairs that must all be PRESENT.
@@ -1182,6 +1185,16 @@ WORKS_TODAY = {
     "Transfer drill-down": (
         ("index.html", 'id="balances-drill-hint"'),
         ("app.js", "api.debt("),
+    ),
+    # Backlog task 14. Until it landed this key sat in NOT_YET as a PROMPT with no
+    # absent rule, and the prompt did what it said it would: `addSettlement` arrived on
+    # window.SplitwiseApi, test_the_api_client_offers_exactly_the_named_calls went red
+    # naming both documents, and that is what moved these bullets. The evidence is the
+    # block the payer's claim is drawn in and the call the screen makes, not the client
+    # key alone, which would prove only that the method exists unused.
+    "Mark as paid": (
+        ("index.html", 'id="balances-pending-block"'),
+        ("app.js", "api.addSettlement("),
     ),
     "Install and open offline": (
         ("app.js", "navigator.serviceWorker.register('sw.js')"),
@@ -1217,6 +1230,15 @@ WORKS_TODAY = {
 # while both documents still called the capability missing, the rule fired, and the
 # entry moved to WORKS_TODAY.
 #
+# One prompt has now been spent too, and it worked: `Mark as paid` was a PROMPT with no
+# absent rule, task 14 built it in house style, `addSettlement` arrived on
+# window.SplitwiseApi, test_the_api_client_offers_exactly_the_named_calls went red
+# naming both documents, and the bullets moved. One observation is not a guarantee, and
+# the reasons below still say what each entry is worth on its own terms: the two things
+# that keep a prompt short of a guarantee, a name added to API_SURFACE with the bullets
+# untouched and a round trip made from inside an existing method, were both open on that
+# build too and neither happened to be taken.
+#
 # What API_SURFACE catches, measured rather than reasoned about, on 2026-09-07: it
 # compares the set of TOP-LEVEL KEYS of window.SplitwiseApi against a literal. A
 # capability arriving as a new key fires it. A capability arriving inside an existing
@@ -1225,28 +1247,17 @@ WORKS_TODAY = {
 # so test_the_api_client_offers_exactly_the_named_calls never fired. The three reasons
 # below that name that test describe the likely build, not a guarantee, and each says
 # so. Nothing here claims a capability cannot arrive without a new name.
+#
+# Both measurements in this section were taken while the set held fourteen keys. Task 14
+# has since added `addSettlement` and it holds fifteen. The measurements are about what
+# the parse notices, not about the number, so they stand as taken.
 NOT_YET = {
-    "Mark as paid": {
-        "task": 14,
-        "absent": (),
-        "reason": (
-            "A PROMPT, not an interlock, and only for the obvious build. Recording "
-            "a payment is a round trip, and app/api.js is the only file allowed to "
-            "make one. Written in house style it arrives as a new key on "
-            "window.SplitwiseApi, and "
-            "test_the_api_client_offers_exactly_the_named_calls goes red naming both "
-            "lists in both documents. Two things keep that short of a guarantee: "
-            "adding \"markPaid\" to API_SURFACE turns the suite green again with both "
-            "bullets untouched, and a round trip made from inside an existing method "
-            "adds no key, so the test never fires at all. Whoever builds this moves "
-            "the bullets, or nobody does."
-        ),
-    },
     "Receiver confirmation": {
         "task": 15,
         "absent": (),
         "reason": (
-            "A PROMPT, not an interlock, on the same terms as Mark as paid. "
+            "A PROMPT, not an interlock, on the terms Mark as paid sat here on until "
+            "task 14 landed it. "
             "Confirming a settlement is a round trip too, so in house style it "
             "arrives as a new name in API_SURFACE and "
             "test_the_api_client_offers_exactly_the_named_calls notices. It does not "
@@ -1498,6 +1509,10 @@ BALANCES_IDS = {
     "balances-transfers",
     # Task 13's one added sentence, hidden until a payment can actually be opened.
     "balances-drill-hint",
+    # Task 14. One wrapper with one hidden flag over the heading, the note and the
+    # list, so they cannot be half-shown.
+    "balances-pending-block",
+    "balances-pending",
 }
 
 # Every fixed sentence the screen can show lives in the markup, so a Python test can
@@ -1591,15 +1606,22 @@ def test_the_status_region_announces_and_ships_every_message_hidden() -> None:
         assert inner(section, element_id, "p") == sentence
 
 
-def test_the_two_lists_ship_empty_under_headings_in_the_stated_order() -> None:
+def test_the_three_lists_ship_empty_under_headings_in_the_stated_order() -> None:
+    # Task 14 puts "Awaiting confirmation" between the two, so the sentence saying why
+    # a payment is still suggested is read before the suggestion, and so "the figures
+    # above" and "the list below" both point at something the reader can see.
     section = balances_section()
     headings = [
         " ".join(text.split())
         for text in re.findall(r"<h2\b[^>]*>(.*?)</h2>", section, re.S)
     ]
-    assert headings == ["Net positions", "Suggested payments"]
+    assert headings == [
+        "Net positions",
+        "Awaiting confirmation",
+        "Suggested payments",
+    ]
     # No invented rows: the lists are filled from the API or not at all.
-    for element_id in ("balances-net", "balances-transfers"):
+    for element_id in ("balances-net", "balances-pending", "balances-transfers"):
         assert inner(section, element_id, "ul") == "", element_id
 
 
@@ -1792,50 +1814,58 @@ def test_the_balances_block_never_moves_a_row_out_of_document_order() -> None:
     assert re.search(r"(?<![-\w])order\s*:", block) is None
 
 
-def test_only_the_two_disclosure_buttons_look_tappable() -> None:
-    # The pointer cursor is the one affordance this screen offers and exactly the two
-    # controls that really open something offer it. A transfer row whose payload
-    # carries no usable provenance is drawn inert and has to look inert, so a cursor
-    # on the row itself, on a debt row or on a list would be a promise the screen
-    # cannot keep. Still no generated glyph either: the open and closed indicators
-    # are text app.js writes, which a reader can be told to ignore and a copy carries.
+def test_only_the_three_controls_that_really_do_something_look_tappable() -> None:
+    # The pointer cursor is the one affordance this screen offers and exactly the
+    # three controls that really do something offer it: the two disclosures that open
+    # a region, and task 14's Mark as paid, which records a payment. A transfer row
+    # whose payload carries no usable provenance is drawn inert and has to look inert,
+    # so a cursor on the row itself, on a debt row, on a pending row or on a list
+    # would be a promise the screen cannot keep. Still no generated glyph either: the
+    # open and closed indicators are text app.js writes, which a reader can be told to
+    # ignore and a copy carries.
     block = without_comments(balances_styles())
     # `content`, and not the `content` inside `justify-content`.
     assert re.search(r"(?<![-\w])content\s*:", block) is None
-    carrying = 0
+    carrying = []
     for rule in block.split("}"):
         head, _, body = rule.partition("{")
         if "cursor" not in body:
             continue
-        carrying += 1
         assert re.findall(r"cursor:\s*([a-z-]+)", body) == ["pointer"], head
         selectors = [part.strip() for part in head.split(",")]
         assert selectors
-        for selector in selectors:
-            assert selector in (
-                ".balances-transfer-button",
-                ".balances-debt-button",
-            ), selector
-    assert carrying == 1, carrying
+        carrying.extend(selectors)
+    # Counted by selector rather than by rule, and pinned as an equality rather than a
+    # membership, so a fourth control cannot be admitted by adding it to the list a
+    # rule already carries.
+    assert sorted(carrying) == [
+        ".balances-debt-button",
+        ".balances-mark-button",
+        ".balances-transfer-button",
+    ]
 
 
-def test_both_disclosure_buttons_show_a_keyboard_user_where_they_are() -> None:
-    # Two levels of control, both in the tab order with no tabindex written for them,
-    # so both have to say which one the keyboard is on.
+def test_all_three_controls_show_a_keyboard_user_where_they_are() -> None:
+    # Three controls now, all three in the tab order with no tabindex written for any
+    # of them, so all three have to say which one the keyboard is on.
     block = without_comments(balances_styles())
-    for name in (".balances-transfer-button", ".balances-debt-button"):
-        outlined = False
-        for rule in block.split("}"):
-            head, _, body = rule.partition("{")
-            if name + ":focus-visible" not in [
-                part.strip() for part in head.split(",")
-            ]:
+    focused = []
+    for rule in block.split("}"):
+        head, _, body = rule.partition("{")
+        for selector in [part.strip() for part in head.split(",")]:
+            if not selector.endswith(":focus-visible"):
                 continue
             found = re.search(r"outline:\s*([^;]+);", body)
-            assert found is not None, name
-            assert "none" not in found.group(1), name
-            outlined = True
-        assert outlined, name
+            assert found is not None, selector
+            assert "none" not in found.group(1), selector
+            focused.append(selector)
+    # An equality, so a fourth control that skipped its focus ring fails here rather
+    # than passing because the three named ones still have theirs.
+    assert sorted(focused) == [
+        ".balances-debt-button:focus-visible",
+        ".balances-mark-button:focus-visible",
+        ".balances-transfer-button:focus-visible",
+    ]
 
 
 def test_every_transfer_row_clears_the_hit_area_floor() -> None:
@@ -1891,6 +1921,10 @@ CARRIES_A_NAME = (
     ".balances-debt-label",
     ".balances-entry-description",
     ".balances-entry-effect",
+    # Task 14. The pending row names both ends of the payment, and the status line
+    # names the receiver in the sentence it shows after a claim is recorded.
+    ".balances-pending-line",
+    ".balances-action-status",
 )
 
 
@@ -1957,3 +1991,78 @@ def test_the_drill_down_hint_ships_hidden_between_the_heading_and_the_list() -> 
     status = re.search(r'<div\b[^>]*\bid="balances-status".*?</div>', section, re.S)
     assert status is not None
     assert "balances-drill-hint" not in status.group(0)
+
+
+# --- Task 14: the pending block and the action on a transfer row ------------
+
+BALANCES_PENDING_NOTE = (
+    "These are marked as paid and not confirmed yet. They are not counted in the "
+    "figures above, and they stay in the suggested payments below, until the person "
+    "receiving the money confirms."
+)
+
+
+def test_the_pending_block_ships_hidden_with_its_heading_and_its_note() -> None:
+    # One wrapper with one hidden flag, so the heading, the note and the list cannot
+    # be half-shown: a bare "Awaiting confirmation" over an empty list on an ordinary
+    # day is noise. The prose is pinned exactly, because it is the sentence that stops
+    # a standing suggestion beside a recorded payment reading as a bug.
+    section = balances_section()
+    block = re.search(
+        r'<div\b[^>]*\bid="balances-pending-block"[^>]*>(.*?)</div>', section, re.S
+    )
+    assert block is not None
+    assert "hidden" in balances_markup().find("div", id="balances-pending-block")[0]
+    inside = block.group(1)
+    heading = re.search(r"<h2\b[^>]*>(.*?)</h2>", inside, re.S)
+    assert heading is not None
+    assert " ".join(heading.group(1).split()) == "Awaiting confirmation"
+    note = re.search(r'<p class="balances-note">(.*?)</p>', inside, re.S)
+    assert note is not None
+    assert " ".join(note.group(1).split()) == BALANCES_PENDING_NOTE
+    assert '<ul class="balances-list" id="balances-pending"></ul>' in " ".join(
+        inside.split()
+    )
+
+
+def test_the_pending_block_sits_between_the_net_list_and_the_suggestions() -> None:
+    # Above the suggested payments, so the sentence explaining why a payment is still
+    # suggested is read before the suggestion.
+    section = balances_section()
+    assert (
+        section.index('id="balances-net"')
+        < section.index('id="balances-pending-block"')
+        < section.index("Suggested payments")
+    )
+
+
+def test_the_pending_block_is_the_only_thing_task_fourteen_added_to_the_document(
+) -> None:
+    # Every other section of the document is untouched: one block goes in, inside the
+    # balances section, and nothing else in index.html changes.
+    document_text = markup()
+    outside = document_text.replace(balances_section(), "")
+    for owned in ("balances-pending", "Awaiting confirmation", "marked as paid"):
+        assert owned not in outside, owned
+
+
+def test_the_action_region_never_takes_space_while_it_is_empty() -> None:
+    # The status line ships empty and is never hidden, because a live region whose
+    # text changes while it is hidden announces nothing in several screen readers. So
+    # it must take no vertical space of its own until there is something to say.
+    rules = balances_declarations()
+    status = rules[".balances-action-status"]
+    assert "min-height" not in status
+    assert "padding" not in status
+    assert ":empty" not in without_comments(balances_styles())
+
+
+def test_the_figure_is_still_the_only_thing_that_refuses_to_wrap() -> None:
+    # An amount never breaks mid-number, and nothing else on this screen is allowed to
+    # refuse a wrap, however long a display name is.
+    nowrap = [
+        selector
+        for selector, body in balances_declarations().items()
+        if "white-space: nowrap" in body
+    ]
+    assert nowrap == [".balances-figure"]

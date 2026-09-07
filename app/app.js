@@ -1553,6 +1553,24 @@
      move between the balances read and this request. */
   var BALANCES_NOTHING = 'Nothing is recorded behind this debt.';
 
+  /* Task 14's sentences, composed here for the same reason the three above are: they
+     belong to a row, and a per-row sentence cannot live in markup. The fixed prose
+     the whole screen shows once is in index.html, where a Python test pins it. */
+  var BALANCES_MARK = 'Mark as paid';
+  var BALANCES_RECORDING = 'Recording this payment.';
+  /* One sentence for every one of api.js's six kinds, and never error.say. Every
+     refusal this endpoint can produce names a member id, describes a body the person
+     did not type, or describes a claim they cannot see from here, and a member id may
+     never be rendered as visible text on this screen. Imprecise when the true answer
+     is that another device got there first, and never wrong in the dangerous
+     direction: it never claims something was recorded that was not, and leaving the
+     screen and returning shows the truth from the server. */
+  var BALANCES_NOT_RECORDED = 'That was not recorded.';
+  /* Shown instead of a button on a payment somebody has already claimed, whoever is
+     holding the phone. This is the up-front guard against a second claim, which is
+     what makes the server's 409 a race guard rather than the normal path. */
+  var BALANCES_AWAITING = 'Marked as paid, and not confirmed yet.';
+
   /* Every detail region needs an id for its button's aria-controls. It comes from a
      sequence number and never from the two member ids: task 12 decided the renderer
      does not assume a pair appears at most once, and two rows naming one pair must
@@ -1569,6 +1587,10 @@
   var balancesNone = document.getElementById('balances-none');
   var balancesEmptyRoster = document.getElementById('balances-empty-roster');
   var drillHint = document.getElementById('balances-drill-hint');
+  /* One wrapper and the list inside it. The wrapper carries the hidden flag, so the
+     heading, the note and the list are shown together or not at all. */
+  var pendingBlock = document.getElementById('balances-pending-block');
+  var pendingList = document.getElementById('balances-pending');
 
   /* Which attempt is allowed to draw. Bumped whenever one starts, so an answer from
      a visit the user has already left is discarded rather than drawn over the newer
@@ -1599,6 +1621,10 @@
     /* So neither an open drill-down nor the hint that rows can be opened can survive
        a refresh or sit beside a failure message. */
     drillHint.hidden = true;
+    /* And so no claim from a previous visit sits beside "These figures could not be
+       worked out just now.", or survives into a read that no longer carries it. */
+    balancesEmpty(pendingList);
+    pendingBlock.hidden = true;
   }
 
   function balancesRegionId() {
@@ -2069,6 +2095,213 @@
     return detail;
   }
 
+  function balancesValidPending(view) {
+    /* Exactly the fields a pending row renders, every one of them a string, and the
+       state by one strict equality against 'pending'. Strict, because task 15 widens
+       this list with decided settlements, and a looser test would let this screen
+       label a rejected claim as awaiting somebody. A row that fails is left out and
+       the rest of the list still renders: one unreadable row must not hide a real
+       claim. */
+    return (
+      view !== null &&
+      typeof view === 'object' &&
+      balancesIsText(view.id) &&
+      balancesIsText(view.from_member_id) &&
+      balancesIsText(view.to_member_id) &&
+      balancesIsText(view.amount) &&
+      balancesIsText(view.created_at) &&
+      view.state === 'pending'
+    );
+  }
+
+  function balancesPendingRow(view, names, actingId) {
+    /* The one function that takes one pending view and returns one row. Two children,
+       a line and a date, so task 15 can append its confirm and reject controls as a
+       third without unpicking either, exactly as this task appended a third to a
+       transfer row. */
+    var row = document.createElement('li');
+    row.className = 'balances-pending';
+    /* Attributes only, never rendered as text. No settlement id and no member id is
+       ever visible on this screen, in any state; task 15 finds the claim to answer
+       through these three. */
+    row.setAttribute('data-settlement', view.id);
+    row.setAttribute('data-from', view.from_member_id);
+    row.setAttribute('data-to', view.to_member_id);
+
+    /* The same sentence on every phone, differing only in where ` (you)` falls, which
+       is task 12's rule: a row that means different things depending on who is
+       holding the phone is worse than a list of names. */
+    var line = document.createElement('span');
+    line.className = 'balances-pending-line';
+    line.appendChild(
+      document.createTextNode(
+        balancesName(view.from_member_id, names, actingId) + ' marked '
+      )
+    );
+    line.appendChild(balancesFigure(view.amount));
+    line.appendChild(
+      document.createTextNode(
+        ' as paid to ' + balancesName(view.to_member_id, names, actingId) + '.'
+      )
+    );
+    row.appendChild(line);
+
+    /* feedDate rather than a second parser: one ledger has one date spelling, and
+       nothing here derives anything from it. How long a claim has been waiting is
+       task 16's signal, not this screen's. */
+    var stamp = balancesText(
+      'time',
+      'balances-pending-date',
+      feedDate(view.created_at)
+    );
+    stamp.setAttribute('datetime', view.created_at);
+    row.appendChild(stamp);
+    return row;
+  }
+
+  function balancesPendingAdd(view, names, actingId) {
+    /* The one place anything is put into this list, so the row a read draws and the
+       row a fresh 201 appends cannot drift apart. Revealing the block here is what
+       makes "shown only when at least one row was rendered" true by construction. */
+    if (!balancesValidPending(view)) {
+      return false;
+    }
+    pendingList.appendChild(balancesPendingRow(view, names, actingId));
+    pendingList.hidden = false;
+    pendingBlock.hidden = false;
+    return true;
+  }
+
+  function balancesPendingFill(rows, names, actingId) {
+    /* In the order the array arrived, which the server sends oldest first: the claim
+       that has been waiting longest is the one that needs chasing. Nothing here
+       sorts, reverses or filters by anything but readability, and an absent or
+       non-array `pending` is an older server, which is a screen without the block
+       rather than a broken one. */
+    if (!Array.isArray(rows)) {
+      return;
+    }
+    for (var index = 0; index < rows.length; index += 1) {
+      balancesPendingAdd(rows[index], names, actingId);
+    }
+  }
+
+  function balancesActionRegion(transfer, names, actingId) {
+    /* The third child of an openable transfer row, present in exactly two cases and
+       absent otherwise, so a row nobody can act on is byte for byte what task 13
+       rendered. Appended rather than inserted, so childNodes[0] is still the
+       disclosure button and childNodes[1] is still its region, visual order still
+       equals DOM order, and the control that records money comes after the
+       explanation of the payment rather than before it. */
+    if (transfer.awaiting_confirmation === true) {
+      /* Whoever is acting, the payer included: a payment already claimed says so
+         instead of offering to claim it again. */
+      var claimed = document.createElement('div');
+      claimed.className = 'balances-action';
+      claimed.appendChild(
+        balancesText('span', 'balances-awaiting', BALANCES_AWAITING)
+      );
+      return claimed;
+    }
+    if (!actingId || transfer.from_member_id !== actingId) {
+      /* Nobody is offered a control they could not use, and an account nobody has
+         linked has no acting id at all, so no row matches. */
+      return null;
+    }
+
+    var region = document.createElement('div');
+    region.className = 'balances-action';
+    var payer = balancesName(transfer.from_member_id, names, actingId);
+    var receiver = balancesName(transfer.to_member_id, names, actingId);
+
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'balances-mark-button';
+    button.appendChild(document.createTextNode(BALANCES_MARK));
+    /* The visible label first, then the payment, so somebody listing the buttons on a
+       screen with three payments hears three different names and the visible label is
+       contained in the accessible one. The receiver here is never the acting member,
+       because this control is only offered to the payer. */
+    button.setAttribute(
+      'aria-label',
+      BALANCES_MARK + ': ' + payer + ' pays ' + receiver + ' ' + transfer.amount
+    );
+
+    /* In the document from the start and never hidden, because a live region whose
+       text changed while it was hidden announces nothing in several screen readers.
+       It ships empty and its rule gives it no height, so it takes no space until
+       there is something to say. */
+    var status = document.createElement('p');
+    status.className = 'balances-action-status';
+    status.setAttribute('role', 'status');
+    status.textContent = '';
+
+    region.appendChild(button);
+    region.appendChild(status);
+
+    /* Both live in this row's own closure, so two payable rows on one screen each
+       have their own, and marking one changes nothing about the other. The flag is
+       the real double-submission guard and `disabled` is set beside it for the
+       browser: a handler dispatched straight at the listener never consults the
+       attribute, so a guard living only there would be asserted nowhere. */
+    var asking = false;
+    var recorded = false;
+
+    button.addEventListener('click', function () {
+      /* The same question the feed retry, the add retry and both disclosure handlers
+         ask, through the same shared helper rather than a fifth copy of it. Behind a
+         curtain nothing is asked, nothing is disabled and nothing is written. */
+      if (!ledgerIsUp()) {
+        return;
+      }
+      if (asking || recorded) {
+        return;
+      }
+      button.disabled = true;
+      asking = true;
+      /* Task 12's sequence number, captured before the request. Without it an answer
+         arriving after the user left and came back would append a row to a list the
+         second read has already filled from the server, duplicating the claim. The
+         status line below needs no such guard: it writes into this row's own DOM. */
+      var attempt = balancesAttempt;
+      /* Written before the request goes out, so the announcement is already on screen
+         at the moment the call is made rather than after it comes back. */
+      region.setAttribute('aria-busy', 'true');
+      status.textContent = BALANCES_RECORDING;
+      api.addSettlement(transfer.to_member_id, transfer.amount).then(
+        function (payload) {
+          region.removeAttribute('aria-busy');
+          recorded = true;
+          /* Disabled rather than removed, and the row is never re-rendered: removing
+             or disabling the element that has focus moves focus to the body, and this
+             screen calls focus() nowhere. Disabling is unavoidable, because a
+             live-looking control that records nothing is worse; removing on top of it
+             buys nothing. */
+          button.disabled = true;
+          status.textContent =
+            'Marked as paid. It is not counted until ' + receiver + ' confirms.';
+          /* Nothing is re-read. A second GET would snap every open drill-down shut
+             and destroy this live region mid-announcement, and the one row it would
+             add is the row appended here. */
+          if (attempt === balancesAttempt && payload) {
+            balancesPendingAdd(payload.settlement, names, actingId);
+          }
+        },
+        function () {
+          region.removeAttribute('aria-busy');
+          asking = false;
+          /* Nothing was kept, so pressing again sends a fresh request. */
+          button.disabled = false;
+          /* One sentence, for every one of the six kinds, into this row and nowhere
+             else: #balances-error stays hidden, the net list is untouched, the
+             pending block is untouched and an open drill-down stays open. */
+          status.textContent = BALANCES_NOT_RECORDED;
+        }
+      );
+    });
+    return region;
+  }
+
   function balancesTransferRow(transfer, names, actingId) {
     /* Still the one function that takes one transfer and returns one row, so the
        drill-down is a change here and not a restructuring of the list. */
@@ -2140,10 +2373,20 @@
       indicator.textContent = open ? '+' : '-';
     });
 
-    /* Exactly two children, the region a sibling of the button rather than its
-       child, so task 14 can append a third without unpicking either. */
+    /* The region is a sibling of the button rather than its child, which is what let
+       task 14 append a third child here without unpicking either of the first two. */
     row.appendChild(button);
     row.appendChild(detail);
+    /* Task 14's third child, when there is one. An inert row returned above and never
+       reaches this, so a transfer whose payload cannot explain itself gets no button
+       and no awaiting line even when the acting member is its payer: a screen that
+       cannot explain a payment has no business offering to record it, and task 13's
+       one-span row is not amended. The claim is not lost in that case, because the
+       pending block above is built from `pending` and not from these rows. */
+    var action = balancesActionRegion(transfer, names, actingId);
+    if (action !== null) {
+      row.appendChild(action);
+    }
     return row;
   }
 
@@ -2186,6 +2429,12 @@
        here. Shown only once there is at least one row to apply it to. */
     currencyCode.textContent = figures.currency;
     currencyLine.hidden = false;
+
+    /* Rendered independently of the transfer list, and never suppressed by any of the
+       four fixed messages: a group with nothing left to settle and a claim nobody has
+       confirmed is showing two true things at once, and hiding either would be the
+       screen deciding one of them does not count. */
+    balancesPendingFill(figures.pending, names, actingId);
 
     balancesFill(transferList, transfers, balancesTransferRow, names, actingId);
     /* Shown only when at least one rendered row is a control that really opens. An

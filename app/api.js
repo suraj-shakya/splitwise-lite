@@ -415,6 +415,21 @@
           '/' +
           encodeURIComponent(creditorId)
       );
+    },
+
+    /* Record that whoever is signed in has paid toMemberId. The payer is never sent:
+       the server takes it from the session, which is what stops one member recording
+       a payment as coming from another, and the two keys below are the whole body.
+       amount is the string the person is recording, passed through untouched, since
+       nothing in this file parses, formats or compares money. A refusal here is a
+       refusal like any other and so is the caller's own to report: it belongs to one
+       row of one screen, and a curtain over the whole frame would take that row's own
+       message away. */
+    addSettlement: function (toMemberId, amount) {
+      return call('POST', '/settlements', {
+        to_member_id: toMemberId,
+        amount: amount
+      });
     }
   };
 })();

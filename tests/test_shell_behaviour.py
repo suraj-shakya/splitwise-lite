@@ -155,6 +155,21 @@ SCENARIOS = [
     "a_failed_read_leaves_no_hint_beside_the_failure",
     "a_group_with_no_member_rows_shows_no_hint",
     "a_group_with_nothing_left_to_settle_shows_no_hint",
+    # Marking a payment as paid
+    "the_payer_can_mark_a_suggested_payment_as_paid",
+    "marking_a_payment_paid_announces_it_before_and_after_the_request",
+    "tapping_mark_as_paid_twice_records_one_settlement",
+    "a_payment_that_will_not_record_says_so_and_can_be_tried_again",
+    "a_payment_someone_else_owes_offers_no_way_to_mark_it_paid",
+    "a_payment_already_marked_as_paid_says_so_instead_of_offering_the_button",
+    "a_transfer_row_without_provenance_offers_no_way_to_mark_it_paid",
+    "everyone_sees_the_same_payment_awaiting_confirmation",
+    "a_pending_payment_leaves_the_suggested_payment_where_it_was",
+    "a_pending_row_the_screen_cannot_read_is_left_out_rather_than_guessed_at",
+    "marking_a_payment_paid_behind_a_curtain_asks_for_nothing",
+    "an_unlinked_account_is_offered_no_way_to_mark_anything_paid",
+    "leaving_the_balances_screen_and_returning_clears_the_pending_list",
+    "a_group_with_nothing_left_to_settle_still_shows_a_pending_payment",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

@@ -251,6 +251,21 @@
     <!-- Both lists ship empty: every row comes from the API or there is no row. -->
     <ul class="balances-list" id="balances-net"></ul>
 
+    <!-- Task 14. One wrapper with one hidden flag, so the heading, the note and the
+         list cannot be half-shown: a bare "Awaiting confirmation" over an empty list
+         on an ordinary day is noise. It sits above the suggested payments so the
+         sentence explaining why a payment is still suggested is read before the
+         suggestion, and so "the figures above" and "the list below" both point at
+         something the reader has in front of them. The list ships empty like the
+         other two. -->
+    <div id="balances-pending-block" hidden>
+      <h2 class="balances-heading">Awaiting confirmation</h2>
+      <p class="balances-note">These are marked as paid and not confirmed yet. They are not
+        counted in the figures above, and they stay in the suggested payments below, until
+        the person receiving the money confirms.</p>
+      <ul class="balances-list" id="balances-pending"></ul>
+    </div>
+
     <h2 class="balances-heading">Suggested payments</h2>
     <!-- Task 13. Shown only once at least one rendered payment is a control that
          really opens: a transfer whose payload carries no usable provenance stays
