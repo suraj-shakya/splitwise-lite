@@ -834,6 +834,106 @@ edit to `app/api.js`, it has gone wrong.
 
 ## Findings
 
-To be filled in before the PR is opened, per criterion 43 and the note on criterion 27. An empty
-Findings section with a non-trivial mutation audit behind it is itself a prose record standing in
-for the thing, which is the defect `plans/mutations/` exists to remove.
+Filled in before the PR was opened, per criterion 43 and the note on criterion 27. Every number
+here was produced by a command on this branch, not read out of a file.
+
+### The count, and the arithmetic
+
+`uv run python -m pytest --collect-only -q`:
+
+| | master (`c685cee`) | branch | delta |
+|---|---|---|---|
+| whole suite | 2498 | 2593 | **+95** |
+| `tests/test_staleness.py` | absent | 58 | +58 |
+| `tests/test_web_api.py` | 475 | 490 | +15 |
+| `tests/test_shell_behaviour.py` | 172 | 185 | +13 |
+| `tests/test_web_shell.py` | 144 | 151 | +7 |
+| `tests/test_suite_integrity.py` | 52 | 54 | +2 |
+| `tests/test_feed_screen.py` | 22 | 22 | 0 |
+
+58 + 15 + 13 + 7 + 2 = **95**, and 2498 + 95 = **2593**. The two in
+`tests/test_suite_integrity.py` are criterion 40's: both of its checks are driven by
+`TESTS.rglob("*.py")`, so a new test module adds one case to each with no list to edit. The 13
+in `tests/test_shell_behaviour.py` are the 9 harness scenarios, `MUTANT_H`'s test and the 3
+cross-language pins of criterion 39.
+
+**Run in five chunks, never the whole suite in one go**, because it has grown past the
+ten-minute agent watchdog under contention:
+
+* `money, events, split, balances, simplify, smoke`: 733 passed
+* `store, accounts, groups, setup_group_cli, dev_server, end_to_end`: 873 passed
+* `web_api`: 490 passed
+* `web_shell, feed_screen, add_screen, suite_integrity, staleness`: 312 passed
+* `shell_behaviour`: 185 passed
+
+733 + 873 + 490 + 312 + 185 = **2593 passed, 0 failed, 0 skipped, 0 xfailed.**
+
+### What the mutation runs found that I had not predicted
+
+Recorded in full in `plans/mutations/16-incompleteness-signal.md`, each with a whole-module,
+unfiltered `N failed, M passed`. Three are worth naming here because they are not what a
+prediction would have said:
+
+1. **The clamp mutation is killed by the result type, not by the assertion.** Deleting the clamp
+   met `TypeError: Staleness days_since_last_expense must be zero or positive, got -1` from
+   `Staleness.__post_init__` before the test's own assertion ran. The clamp is guarded twice and
+   the mutation removes one guard. Still `killed`: the deleted clamp is the cause and the test
+   that names it is the test that went red.
+2. **`test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines` survives the
+   mutation that stops `ordering_key` being used.** The identity assertion holds because the
+   import still resolves; it is simply no longer called. An identity check on an import is not
+   evidence that the import is used, and criterion 11's behavioural companion is what bites.
+3. **Four of the five mutations survive all 490 tests in `tests/test_web_api.py`.** Only the
+   member-age one is visible through a real request. That is not a gap in the endpoint tests: a
+   future timestamp is unreachable through an endpoint that stamps `created_at` from `_now()`,
+   and no endpoint test sits on the exact boundary. It does mean the domain module is the sole
+   guard on four of the five, which is stated rather than left to be discovered.
+
+### Criterion 27: the copy was not reworded and no ban was narrowed
+
+`test_no_feed_copy_claims_the_ledger_is_current` passes **unedited**. The feed sentence contains
+none of its seven banned substrings: it says "for 9 days", never "days ago", and none of
+"today", "yesterday", "just now", "up to date", "everything is here" or "last updated".
+
+### Deviations from this document, each with its reason
+
+1. **`tests/test_end_to_end.py` was edited and is not in the Constraints file list.** It had to
+   be: step 0 pins the balances payload's top-level key set exactly, so the new key turned it
+   red, which is the interlock working. The edit adds `"staleness"` to the set and one assertion
+   that a group which has recorded nothing reports `never` with no number and nobody named, so
+   the walk covers the new signal rather than merely tolerating it.
+2. **`app/app.js` orders the toggler's arms stale-then-never.** The natural order is
+   never-then-stale and that is how it was first written. It was reordered so `MUTANT_H` has a
+   **one-line** anchor: the three-line version matched zero times on this working tree, which is
+   CRLF, and `MUTANT_F` already carries that scar. Behaviour is identical either way.
+3. **The endpoint tests replace `web._now` rather than choosing event timestamps relative to the
+   real clock**, which is what decision 1's rationale suggested. Both styles are already in that
+   file. Replacing the seam was chosen because the roster's ages cannot be controlled the other
+   way: `seed_group` stamps every member row with `at()`, a fixed instant, so a quiet-member
+   assertion written against the real clock would pass today and fail in a fortnight. Replacing
+   the seam is not a second clock read, and `test_the_clock_is_read_once_and_only_in_one_place`
+   passes unedited.
+4. **`staleness.py` names `datetime` at runtime, in exactly one place.** Criterion 8's
+   parenthetical predicted it would need no runtime `datetime` name at all. It needs one:
+   `_require_instant`'s `isinstance` guard, which is what criterion 7 asks for, because refusing
+   a naive value the way `events._require_utc` does means naming the class. Everything else is
+   annotation-only, no `timedelta` is constructed, and the arithmetic names no class because
+   `(later - earlier).days` does not. The rule the criterion states is unaffected: this module's
+   check forbids clock **reads**, and an `isinstance` is not one. The comment in the file says
+   that rather than repeating the prediction.
+
+### What was verified, and what was not
+
+**Verified by the suite**: every domain figure to the microsecond, both wire payloads, which
+elements are hidden, the exact text they hold, the order they sit in the document, that names
+resolve through `balancesName`, that no member id reaches visible text, that the client obeys
+`state` and not the count, and that a missing key draws nothing.
+
+**NOT RUN, and no verdict here depends on any of it**: whether the signal is *obvious*, which is
+the word the spec uses; whether three stacked notes push the first figure below the fold at
+320px; whether the age sentence reads as a warning or as more small print; whether a screen
+reader announces the new copy in a useful order now that three more elements sit above the
+existing live region; whether the quiet list is legible at five names. **Nothing in this project
+has ever been verified in a browser.** These five were added to issue #80, the existing
+mechanism for one dated manual sweep. No second mechanism was opened and nothing here blocks on
+it.
