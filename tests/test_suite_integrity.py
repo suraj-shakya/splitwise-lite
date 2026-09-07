@@ -829,15 +829,20 @@ def blockquote_run(lines: list[str], index: int) -> list[str]:
     """The contiguous run of blockquote lines containing ``lines[index]``, or nothing.
 
     The run and not the line. A dated note opens with its marker and the wording it
-    quotes usually sits several lines below, so looking for the date on the line that
-    carries the banned literal would refuse every real note in this repo.
+    quotes sits below that marker, so looking for the date on the line that carries the
+    banned literal would refuse every real note in this repo.
 
     Measured 2026-09-07 rather than assumed, because that reason otherwise reads as a
     guess. The five surviving blockquoted occurrences sit in runs of **10, 10, 12, 14
     and 21 lines**. In all five the date is on the run's opening line and the literal is
-    one or two lines below it, so the date is never on the line carrying the literal and
-    a line-local predicate would have reddened all five. That is the load-bearing part;
-    the runs are long, but the distance that matters is small and it is never zero.
+    **one or two lines below it**, so the date is never on the line carrying the literal
+    and a line-local predicate would have reddened all five. That is the load-bearing
+    part: the runs are long, but the distance that matters is small and it is never zero.
+
+    An earlier draft of the paragraph above said the quoted wording "usually sits several
+    lines below". The measurement does not support that, and the clause is quoted here
+    rather than silently dropped because two distances standing side by side, one of them
+    superseded and unmarked, is the defect this whole module is about.
 
     A blank line breaks the run, which is Markdown's own rule for where a blockquote
     ends, and that is the residual worth stating plainly: an undated ``>`` line glued

@@ -245,6 +245,13 @@ defect `plans/tasks/42-what-the-documents-claim.md` exists about. One line each.
 
 **Nine places, eight files, no criterion renumbered.**
 
+> **Corrected 2026-09-07.** **Eleven places, seven files.** The nine this paragraph
+> enumerates fall in tasks 08, 10, 11, 12, 13, 14 and 15, which is seven files and not
+> eight, because tasks 10 and 11 each carry two of them — so "eight files" was wrong before
+> anything was added. QA then found two more, both in task 13, and criterion 47's amendment
+> has them. Counted mechanically after landing: 08 one, 10 two, 11 two, 12 one, 13 three,
+> 14 one, 15 one. "No criterion renumbered" still holds, here and after every amendment.
+
 Deliberately left alone: the vaguer manual-checklist lines that say "no horizontal scroll"
 without naming an element (`08:393-394`, `10:698-701`, `11:486-487`, `12:475-476`,
 `13:1059-1060`). They are imprecise, not false, and tasks 14 and 15 already say "no
@@ -265,6 +272,13 @@ mechanism is a single test that refuses the literal `documentElement` in any doc
 where dated correction notes live, so the historical record stays legal and the next
 criterion cannot be written. It also forces this task's own corrections into the right
 shape: the old wording must move into a `>` note rather than being left in place.
+
+> **Corrected 2026-09-07, after the senior review of this PR.** This paragraph says the
+> exemption is "except inside a blockquote". It is narrower than that as built: the
+> exemption is a blockquote **carrying a date**, and an undated one is refused. Criterion
+> 20's amendment records why the bare `>` form was replaced and what the dated form costs.
+> The sentence about blockquotes being where dated correction notes live was the intent all
+> along; the predicate now enforces the "dated" half rather than assuming it.
 
 That check lives in `tests/test_suite_integrity.py`, not in `tests/test_web_shell.py`.
 That module is the suite's check on itself, its subject is checks that report success
@@ -609,6 +623,23 @@ refuse a collision, so run that module before settling on one.
     exemption works as designed: the existing note at
     `plans/tasks/13-transfer-drill-down.md:908`, which contains the same literal inside a
     `>` blockquote, does **not** trip it.
+
+    > **Corrected 2026-09-07 on two counts, after the senior review and the QA verification
+    > of this PR.**
+    >
+    > First, "inside a `>` blockquote" is no longer sufficient and this criterion should not
+    > be read as saying it is: an undated blockquote is **refused**, and the note this
+    > criterion points at is exempt because it opens
+    > `**Corrected 2026-09-06, after the first review of PR #56.**` and carries that date.
+    > Criterion 20's amendment has the predicate and the reason.
+    >
+    > Second, the coordinate `:908` was right when this criterion was written and is not
+    > durable. The literal sits in that file's **only** occurrence of it, inside the
+    > 2026-09-06 note on criterion 68, which is the way to find it at any revision; by line
+    > it was `:908` at `c10a0f5` and `:910` here, moved by the two notes criterion 47's
+    > amendment added to that file. A `file:line` reference is true at exactly one commit,
+    > which is the lesson criterion 23's amendment already records for the line numbers QA
+    > measured.
 29. **The positive control for the manual sweep is written down and reproducible.**
     Criterion 39 states it; the QA note records that it was read and understood even if the
     sweep itself was not run. A manual check with no way to make it fail is what this whole
@@ -660,11 +691,14 @@ refuse a collision, so run that module before settling on one.
     > `test_no_document_asks_for_the_measurement_that_cannot_fail` and
     > `test_the_wrong_measurement_message_says_what_to_write_instead`), so net **+4** and
     > nothing hidden. 2498 − 1 + 0 + 3 + 2 = 2502 = 2498 + 4. **CI is the oracle and
-    > agreed on both legs at head `c005194`:** 2502 collected and 2502 passed on
-    > `ubuntu-latest` and on `windows-latest`, no skips, no xfails. First measured at
-    > `c10a0f5`, one commit earlier, at 2502 passed in 91.53s and 235.01s; every commit
-    > after `c005194` changes documentation and comment text only, so the count is
-    > unchanged and CI re-runs on each to confirm rather than to discover.
+    > agreed on both legs at head `6dc8eb5`, run `34111754201`:** `ubuntu-latest`
+    > `2502 passed in 90.64s`, `windows-latest` `2502 passed in 334.48s`. Neither summary
+    > line names a skipped, xfailed or failed category, which is what says there were none.
+    > Read out of that run's own logs, with its `head_sha` checked against the commit
+    > first, rather than copied from a comment: a reviewer transcribed a figure out of the
+    > very docstring it was auditing during this task, and the run is a better source than
+    > anybody reporting it. Also measured at `c10a0f5` (91.53s, 235.01s) and at `c005194`,
+    > both 2502.
 
 ### The browser checklist `(browser check, unrun)`
 
@@ -775,6 +809,20 @@ refuse a collision, so run that module before settling on one.
 46. After criterion 45, no line in any of those four files contains `documentElement`
     outside a blockquote, so criterion 20's check is green on them. This is the test of
     whether the corrections were made in the right shape.
+
+    > **Corrected 2026-09-07, after the QA verification of this PR.** The **inference** in
+    > this criterion no longer follows in general. "Outside a blockquote, so criterion 20's
+    > check is green" was valid while the exemption was any `>` line; since the tightening
+    > it is not, because an undated blockquote satisfies this criterion and reddens
+    > criterion 20. The correct form is: no line in those four files contains
+    > `documentElement` except inside a **dated** blockquote.
+    >
+    > **Nothing violates it today and the criterion passes either way.** QA measured all
+    > four: one occurrence each, every one inside a note opening
+    > `**Corrected 2026-09-07 for issue #58**`, and the live scan reports 0 non-exempt
+    > findings across the 36 documents it covers with all 5 occurrences in dated runs. So
+    > this is accuracy rather than a defect — and it is the same register defect this delta
+    > was sent to fix, one level down, in a criterion that was not part of the fix.
 47. The five stale-mechanism places each get a one-line dated note:
     * `plans/tasks/10-expense-entry-screen.md:513` — the people rows no longer set
       `overflow-wrap` themselves; one declaration on `body` covers them.
@@ -791,20 +839,30 @@ refuse a collision, so run that module before settling on one.
     > references to `test_a_long_display_name_wraps_rather_than_being_cut_off`, which this
     > task deletes:
     >
-    > * `plans/tasks/13-transfer-drill-down.md:890-892` — criterion 64 says the test
+    > Both are in `plans/tasks/13-transfer-drill-down.md`, and both are named by the
+    > criterion they sit in rather than by line, because a `file:line` reference is true at
+    > exactly one commit and these two moved twice while this PR was open:
+    >
+    > * **Criterion 64**, the one asserting `.balances-figure` stays the only selector in
+    >   the balances block carrying `white-space: nowrap`, which says the deleted test
     >   "passes unchanged". All three properties it names are now asserted file-wide by
     >   `test_nothing_in_the_shell_takes_the_break_rule_back`, and the `nowrap` half is
     >   still asserted block-locally by
     >   `test_the_figure_is_still_the_only_thing_that_refuses_to_wrap`.
-    > * `plans/tasks/13-transfer-drill-down.md:966` — the same name inside **criterion
-    >   73**'s list of tests that must pass unchanged, at `:957` ("Every other task 12 test
-    >   in `tests/test_web_shell.py` passes untouched, by name:"); it was replaced by
-    >   `test_no_balances_rule_declares_a_break_of_its_own`. An earlier draft of this note
-    >   said criterion 71, which is the deletion of
-    >   `test_nothing_asks_for_provenance_that_is_not_in_the_payload` and a different
-    >   criterion entirely. The note itself was placed correctly; only this
-    >   cross-reference was wrong, which is the failure mode of citing a number from
-    >   memory in a document about documents that misname things.
+    > * **Criterion 73**, "Every other task 12 test in `tests/test_web_shell.py` passes
+    >   untouched, by name:", where the deleted name is one entry in that list. It was
+    >   replaced by `test_no_balances_rule_declares_a_break_of_its_own`, so read that entry
+    >   as the replacement.
+    >
+    >   Two earlier drafts of this bullet were wrong in the two ways a cross-reference can
+    >   be. The first said criterion **71**, which is the deletion of
+    >   `test_nothing_asks_for_provenance_that_is_not_in_the_payload`, a different criterion
+    >   entirely. The second cited line **`:966`**, which was correct at `c10a0f5` and at no
+    >   other revision: the name sits at `:968` at the head this landed on and at `:958` on
+    >   `master`, so the sentence mixed two coordinate systems and labelled neither. Both
+    >   notes were placed on the right criteria throughout; only the references to them
+    >   were wrong, which is the exact failure mode of a document that names things by
+    >   position in a document about documents that misname things.
     >
     > Both get a one-line dated note in the same shape, so the total for criteria 45 to 47
     > is **eleven** notes rather than nine.
@@ -843,13 +901,15 @@ refuse a collision, so run that module before settling on one.
     > `pull_request`, so no CI run exists until the PR does, and the available token cannot
     > dispatch a `workflow_dispatch` run. The Findings were filled in first with the
     > measured local figures and the arithmetic, the PR was opened, and the CI count was
-    > pasted in on the first head that both legs reported, `c10a0f5`, at 2502 collected
-    > and 2502 passed. The figure recorded here is **2502 collected and 2502 passed on
-    > `ubuntu-latest` and on `windows-latest` at `c005194`**, the head the senior review
-    > approved, matching the arithmetic exactly. QA scored this criterion PARTIAL for the
-    > placeholder that stood in the meantime, which was the right call, and the review then
-    > caught the recorded figures naming a head one commit behind the one being reviewed,
-    > which is the same staleness one level down; both are fixed.
+    > pasted in on the first head that both legs reported, `c10a0f5`, at 2502 passed. The
+    > figure recorded here is **`2502 passed` on `ubuntu-latest` and on `windows-latest` at
+    > `6dc8eb5`, run `34111754201`**, matching the arithmetic exactly. QA scored this
+    > criterion PARTIAL for the placeholder that stood in the meantime, which was the right
+    > call, and the recorded head then trailed the head under review twice in a row — once
+    > at `c10a0f5` and once at `c005194` — which is the same staleness one level down. All
+    > of it is fixed, and the reason it kept recurring is that a documentation-only round
+    > still creates a new head, so the figure has to be re-read rather than reasoned
+    > forward.
 
 ## Out of scope
 
@@ -1037,8 +1097,18 @@ beneath it, the reason the comparison is constant in this shell, and the substit
 plus both caveats. The path is POSIX on Windows, via `posix()`.
 
 Exactly **one** finding, which is the confirmation the criterion asks for: task 13's
-existing note at `plans/tasks/13-transfer-drill-down.md:908` contains the same literal
-inside a `>` blockquote and does not trip the scan. Removed; `54 passed`.
+existing note, that file's only occurrence of the literal, contains it inside a blockquote
+and does not trip the scan. Removed; `54 passed`.
+
+Two things about that sentence, both of them the shape this task is about. It was run
+under the **first** predicate, when any `>` line was exempt; under the predicate that
+shipped, that note is exempt because it opens
+`**Corrected 2026-09-06, after the first review of PR #56.**` and carries a date, and an
+undated blockquote would now be refused. QA re-ran the case against the tightened
+predicate and got the same answer, plus a case the old predicate let through. And the note
+is identified here by what it is rather than by line, because this record first cited
+`:908`, which was true at `c10a0f5` and nowhere else: the two notes criterion 47's
+amendment added to that file moved it to `:910`.
 
 ### `SHELL_DIGEST`
 
@@ -1081,12 +1151,18 @@ So the arithmetic reaching this branch's number is **2498 − 1 + 3 + 2 = 2502**
 * `tests/test_suite_integrity.py` — 54 passed (52 + 2)
 * `tests/test_shell_behaviour.py` — 172 passed, unchanged by this task
 
-**CI, both legs, agreed at head `c005194`:** 2502 collected and 2502 passed on
-`ubuntu-latest` and on `windows-latest`, no skips, no xfails. First measured one commit
-earlier at `c10a0f5`, at `2502 passed in 91.53s` and `2502 passed in 235.01s`; the review
-caught the recorded figures naming that earlier head rather than the head under review,
-and every commit after `c005194` changes documentation and comment text only, so the count
-is unchanged and CI re-runs to confirm rather than to discover.
+**CI, both legs, agreed at head `6dc8eb5`, run `34111754201`:** `ubuntu-latest`
+`2502 passed in 90.64s`, `windows-latest` `2502 passed in 334.48s`. Neither summary line
+names a skipped, xfailed or failed category, which is what says there were none. Read out
+of that run's own logs after checking its `head_sha` against the commit, rather than copied
+from a report of it. Also 2502 at `c10a0f5` (91.53s, 235.01s) and at `c005194`.
+
+The recorded head trailed the head under review twice before this, at `c10a0f5` and then
+at `c005194`, and the reason it kept recurring is worth stating: a documentation-only round
+still creates a new head, so "the delta is inert, therefore the figure stands" is true
+about the count and false about the sha. The figure has to be re-read, not reasoned
+forward.
+
 QA measured `master` independently in its own worktree and also got 2498, and diffed the
 two `--collect-only` id sets to confirm the composition: two ids out, six in, net +4, with
 nothing hidden. So the count closes against two independent readings, the absolute and the
@@ -1257,7 +1333,13 @@ several comment sentences, and gains one declaration and one substantial comment
 `tests/test_web_shell.py` loses a nine-entry constant and one test, replaces one, and gains
 three of roughly fifteen lines each. `tests/test_suite_integrity.py` gains a scan, a message
 helper and two tests, perhaps fifty lines. `.claude/rules/testing.md` gains a bullet and two
-front-matter lines. The eight task files gain nine short blockquotes.
+front-matter lines. The seven task files gain eleven short blockquotes.
+
+> **Corrected 2026-09-07.** This line said "The eight task files gain nine short
+> blockquotes", which was the same off-by-one as decision 6 plus the two notes QA found.
+> Eleven notes, seven task files. This estimate also predates the review rounds, which
+> added dated amendments to this file rather than to the eight in criterion 41; the shape
+> of the change is unaltered and its documentary half is larger than budgeted.
 
 The expensive part is criterion 27, which is three demonstrations with real runs, and
 criterion 45, which is four corrections that have to say why the old line was wrong rather
