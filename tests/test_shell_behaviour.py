@@ -201,6 +201,17 @@ SCENARIOS = [
     "four_people_sharing_one_expense_read_as_two_names_and_a_count",
     "leaving_the_feed_and_coming_back_draws_each_row_once",
     "a_created_at_that_is_not_a_date_never_reads_as_nan",
+    # Task 16: the incompleteness signal. The feed carries the age signal only.
+    "a_stale_feed_shows_how_old_the_newest_expense_is",
+    "a_fresh_feed_says_nothing_about_its_age",
+    "the_feed_obeys_the_state_and_not_the_day_count",
+    # And the balances screen carries both halves of it.
+    "a_group_with_nothing_recorded_says_so_beside_the_figures",
+    "a_stale_balance_names_who_has_entered_nothing",
+    "a_quiet_member_the_roster_does_not_know_reads_as_words_not_as_an_id",
+    "a_payload_with_no_staleness_at_all_draws_neither_signal",
+    "a_staleness_state_the_client_does_not_recognise_draws_nothing",
+    "one_quiet_member_reads_grammatically",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

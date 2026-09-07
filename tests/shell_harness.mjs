@@ -1157,9 +1157,33 @@ const AMBIGUOUS_GROUP =
    call nobody registered an answer for is a failure. These are the empty, valid shapes:
    those two tasks own the scenarios that assert what their screens draw, and this task
    still asserts only the gate, the notices, routing and the client. */
-const EMPTY_FEED = { currency: 'AUD', expenses: [] };
+/* Both gained a `staleness` key when task 16 landed: the shipped client reads it on
+   every render, so a fixture without it would answer these scenarios with a payload no
+   server sends. What a group that has recorded nothing gets is its own state and no
+   number, which is the case a zero would have lied about.
+
+   These call staleness() rather than naming a constant, and that is not a style
+   choice. staleness() is declared at the foot of this file as a function declaration,
+   which is hoisted, so it is callable here at module-evaluation time. A `const` there
+   would not be: it sits in the temporal dead zone until evaluation reaches it, which
+   is after these two lines, and the harness dies on load with "Cannot access ... before
+   initialization". That was measured rather than reasoned about, on the first run of
+   this fixture.
+
+   tests/test_shell_behaviour.py asserts every one of these key names and every state
+   value against src/splitwise_lite/web.py, so this cannot drift from the contract it
+   is imitating. */
+const EMPTY_FEED = {
+  currency: 'AUD',
+  expenses: [],
+  staleness: staleness('never', null, [])
+};
 const EMPTY_ROSTER = { members: [] };
-const EMPTY_BALANCES = { net: [], transfers: [] };
+const EMPTY_BALANCES = {
+  net: [],
+  transfers: [],
+  staleness: staleness('never', null, [])
+};
 
 function screensLoad(page) {
   page.respond('GET', '/expenses', ok(EMPTY_FEED));
@@ -7750,6 +7774,315 @@ const SCENARIOS = [
         'the row reads ' + JSON.stringify(row.textContent)
       );
     }
+  },
+
+  /* --- Task 16: the incompleteness signal -------------------------------------
+     The feed carries the age signal only; the balances screen carries both. Every
+     scenario below asserts what is on screen, never what app.js says: a rendering
+     claim made by reading source was rejected on PR #30, where such a test passed two
+     mutants that reintroduced the bug it claimed to cover. */
+
+  {
+    /* The whole of what the feed says about its own age, character for character.
+       Nine days, printed from the payload and from nowhere else: this client may not
+       read the clock, and tests/test_feed_screen.py bans Date.now( and new Date()
+       from the whole of app/app.js for that reason. */
+    name: 'a_stale_feed_shows_how_old_the_newest_expense_is',
+    async run(page) {
+      await onFeed(
+        page,
+        {
+          currency: 'AUD',
+          expenses: [FEED_MILK],
+          staleness: staleness('stale', 9, ['mem-2'])
+        },
+        FEED_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      page.is(feedAgeLine(page).hidden, false, 'the age sentence');
+      page.is(
+        flatText(feedAgeLine(page)),
+        'Nothing new has been recorded here for 9 days. The app only knows what ' +
+          'people enter.',
+        'what the age sentence says'
+      );
+      /* The rows are still drawn: the sentence is a caveat on them and not a state
+         that replaces them. */
+      feedShows(page, 'list', 'a rendered list beside the age sentence');
+      /* This screen carries the age signal and no quiet list, so the id of the quiet
+         member the payload named appears nowhere on it. */
+      page.ok(
+        page.el('screen-feed').textContent.indexOf('mem-2') === -1,
+        'a member id reached the feed as visible text'
+      );
+    }
+  },
+
+  {
+    /* A ledger somebody is keeping up. The element is in the document and hidden,
+       never absent: the sentence lives in the markup and the code only toggles it. */
+    name: 'a_fresh_feed_says_nothing_about_its_age',
+    async run(page) {
+      await onFeed(
+        page,
+        {
+          currency: 'AUD',
+          expenses: [FEED_MILK],
+          staleness: staleness('fresh', 2, [])
+        },
+        FEED_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      page.is(feedAgeLine(page).hidden, true, 'the age sentence');
+      page.is(page.el('feed-stale-days').textContent, '', 'the day count');
+      feedShows(page, 'list', 'a rendered list with nothing said about its age');
+    }
+  },
+
+  {
+    /* The positive control for "the client obeys the state and never the count". The
+       two fields disagree on purpose: fresh, and 99 days. A client that compared the
+       count against a threshold of its own would show the sentence; one that switches
+       on the state cannot. This is the check that proves it rather than asserting it,
+       because a source-reading lint cannot tell a comparison that is absent from one
+       that is merely spelled differently, and a payload whose two fields disagree
+       can. */
+    name: 'the_feed_obeys_the_state_and_not_the_day_count',
+    async run(page) {
+      await onFeed(
+        page,
+        {
+          currency: 'AUD',
+          expenses: [FEED_MILK],
+          staleness: staleness('fresh', 99, [])
+        },
+        FEED_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      page.is(feedAgeLine(page).hidden, true, 'the age sentence');
+      page.ok(
+        page.el('screen-feed').textContent.indexOf('99') === -1,
+        'the day count reached the screen against the state'
+      );
+    }
+  },
+
+  {
+    /* A brand-new flat, which is the worst case for the risk this whole feature is
+       against: every net position reads 0.00, and a reader could take three zeroes for
+       a settled position. The sentence with no number in it is what says otherwise.
+       The age sentence stays hidden, because there is no age to state, and nobody is
+       named, because naming three people for one fact the sentence above them already
+       states is noise and reads as an accusation of three people for one
+       circumstance. */
+    name: 'a_group_with_nothing_recorded_says_so_beside_the_figures',
+    async run(page) {
+      await onBalances(
+        page,
+        QUIET_ROSTER,
+        settledFigures(staleness('never', null, []))
+      );
+      page.expectRequests(BALANCES_ENTRY);
+      page.same(
+        stalenessOnScreen(page),
+        { stale: false, never: true, quiet: false, days: '', window: '', names: [] },
+        'the signal on a group that has recorded nothing'
+      );
+      page.is(
+        flatText(page.el('balances-never')),
+        'Nothing has been recorded in this group yet, so there is nothing behind ' +
+          'these figures.',
+        'what the no-ledger sentence says'
+      );
+      /* The figures are still drawn, all three settled, which is exactly the reading
+         the sentence above them is there to qualify. */
+      page.is(page.el('balances-net').childNodes.length, 3, 'net rows');
+      page.is(page.el('balances-none').hidden, false, 'the settled-up message');
+    }
+  },
+
+  {
+    /* Both halves at once, which is the state this screen exists to be honest in: the
+       ledger is nine days old and two of the three have entered nothing. The names are
+       in the order the payload sent them, which is neither sorted order nor the order
+       of the net list, and the acting member carries ` (you)` through balancesName like
+       every other name on this screen. */
+    name: 'a_stale_balance_names_who_has_entered_nothing',
+    async run(page) {
+      await onBalances(
+        page,
+        QUIET_ROSTER,
+        settledFigures(staleness('stale', 9, ['mem-3', 'mem-1']))
+      );
+      page.expectRequests(BALANCES_ENTRY);
+      page.same(
+        stalenessOnScreen(page),
+        {
+          stale: true,
+          never: false,
+          quiet: true,
+          days: '9',
+          window: '7',
+          names: ['Cass', 'Sam (you)']
+        },
+        'the signal on a stale ledger'
+      );
+      page.is(
+        flatText(page.el('balances-stale')),
+        'Nothing new has been recorded for 9 days. These figures may be missing ' +
+          'recent spending.',
+        'what the age sentence says'
+      );
+      /* The note itself, read on its own. The names are pinned above as a list,
+         because textContent over two list items runs them together and an assertion
+         on that would be about this stub rather than about the screen. */
+      page.is(
+        flatText(quietNoteIn(page)),
+        'No expense entered in the last 7 days by:',
+        'what the quiet note says'
+      );
+      /* No member id is ever rendered as visible text, which is the rule this screen
+         already holds everywhere. */
+      const shown = page.el('screen-balances').textContent;
+      page.ok(shown.indexOf('mem-1') === -1, 'a member id reached the screen');
+      page.ok(shown.indexOf('mem-3') === -1, 'a member id reached the screen');
+    }
+  },
+
+  {
+    /* An id the roster does not know. It reads as words through balancesName, exactly
+       as a net row does, and the raw id appears nowhere in the whole document text: an
+       id on screen is the shape of leak this screen has refused everywhere else, and
+       the roster and the signal are two reads that can legitimately disagree. */
+    name: 'a_quiet_member_the_roster_does_not_know_reads_as_words_not_as_an_id',
+    async run(page) {
+      await onBalances(
+        page,
+        QUIET_ROSTER,
+        settledFigures(staleness('stale', 12, ['mem-9']))
+      );
+      page.expectRequests(BALANCES_ENTRY);
+      page.same(stalenessOnScreen(page).names, ['Unknown member'], 'the quiet list');
+      page.ok(
+        page.query('html')[0].textContent.indexOf('mem-9') === -1,
+        'the raw id reached the document text'
+      );
+    }
+  },
+
+  {
+    /* A payload with no staleness key at all, which is what a server that has not been
+       upgraded sends. Neither signal is drawn, nothing is an error, and every figure
+       still arrives: turning a whole read into a failure over an absent signal would
+       be reporting an absence as a breakage, which is issue #44 one more time. Both
+       screens, because feedValidPayload deliberately does not require the key
+       either. */
+    name: 'a_payload_with_no_staleness_at_all_draws_neither_signal',
+    async run(page) {
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(QUIET_ROSTER));
+      page.respond('GET', '/balances', ok(settledFigures(null)));
+      page.respond('GET', '/expenses', ok({ currency: 'AUD', expenses: [FEED_MILK] }));
+      page.startAt('#/balances');
+      await page.boot();
+      page.same(
+        stalenessOnScreen(page),
+        { stale: false, never: false, quiet: false, days: '', window: '', names: [] },
+        'the signal on a payload that carries none'
+      );
+      page.is(page.el('balances-net').childNodes.length, 3, 'net rows');
+
+      /* And the same on the feed: the rows are drawn and no age sentence appears. */
+      await page.goTo('#/feed');
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      feedShows(page, 'list', 'a feed whose payload carries no signal');
+      page.is(feedAgeLine(page).hidden, true, 'the age sentence');
+      page.expectRequests(
+        BALANCES_ENTRY.concat(['GET /api/expenses', 'GET /api/members'])
+      );
+    }
+  },
+
+  {
+    /* A state this client does not recognise draws nothing, following the inert
+       fallback balancesTransferRow uses for a transfer with no usable provenance:
+       silence is the honest answer to a payload this client cannot read. The count and
+       the quiet list are deliberately real, so what is being obeyed is the state and
+       not the absence of anything to print. */
+    name: 'a_staleness_state_the_client_does_not_recognise_draws_nothing',
+    async run(page) {
+      await onBalances(
+        page,
+        QUIET_ROSTER,
+        settledFigures(staleness('ancient', 400, ['mem-1']))
+      );
+      page.expectRequests(BALANCES_ENTRY);
+      page.same(
+        stalenessOnScreen(page),
+        { stale: false, never: false, quiet: false, days: '', window: '', names: [] },
+        'the signal on a state this client cannot read'
+      );
+      page.ok(
+        page.el('screen-balances').textContent.indexOf('400') === -1,
+        'a count reached the screen under a state nobody can read'
+      );
+    }
+  },
+
+  {
+    /* One quiet member, which is the case the wording in index.html was chosen for:
+       "No expense entered in the last 7 days by:" over a list of one reads exactly as
+       it does over a list of three, so no sentence in this feature has a singular form
+       and there is no pluralisation code anywhere to get wrong. The day count is the
+       threshold itself here, the lowest figure the stale arm can ever print, which is
+       what keeps "7 days" from ever having to become "1 day". */
+    name: 'one_quiet_member_reads_grammatically',
+    async run(page) {
+      await onBalances(
+        page,
+        QUIET_ROSTER,
+        settledFigures(staleness('stale', 7, ['mem-2']))
+      );
+      page.expectRequests(BALANCES_ENTRY);
+      page.same(
+        stalenessOnScreen(page),
+        {
+          stale: true,
+          never: false,
+          quiet: true,
+          days: '7',
+          window: '7',
+          names: ['Ali']
+        },
+        'the signal with exactly one quiet member'
+      );
+      page.is(
+        flatText(quietNoteIn(page)),
+        'No expense entered in the last 7 days by:',
+        'what the quiet note says over a list of one'
+      );
+      page.is(
+        flatText(page.el('balances-stale')),
+        'Nothing new has been recorded for 7 days. These figures may be missing ' +
+          'recent spending.',
+        'the age sentence at the threshold itself'
+      );
+    }
   }
 ];
 
@@ -8752,6 +9085,94 @@ async function readConfig() {
   }
 }
 
+/* --- Task 16: the incompleteness signal ------------------------------------------
+
+   Below SCENARIOS and above the entry point, which is where every other fixture
+   block in this file sits and is not a matter of taste: the entry point runs
+   `await main()` at the top level, so a `const` declared after it is still in the
+   temporal dead zone when a scenario body reads it and the scenario dies with "Cannot
+   access ... before initialization". Measured, twice, rather than reasoned about. A
+   function declaration is hoisted and would survive down there; the consts below would
+   not, so the whole block stays here.
+
+   What these fixtures are for. The client is handed a three-valued state and two
+   numbers, and the whole of its job is to obey the state and never to compare the
+   numbers against each other. No amount of reading app.js proves that: a comparison
+   that is absent looks exactly like one that is merely spelled differently. A payload
+   whose two fields disagree does prove it. */
+
+/* The four keys _staleness_view sends. The threshold is a literal here because this is
+   the stubbed response; that the server really sends 7 is asserted in Python against
+   staleness.QUIET_AFTER_DAYS and never here, because a fixture that is also the
+   expected value cannot detect its own drift. */
+function staleness(state, days, quietIds) {
+  return {
+    state: state,
+    days_since_last_expense: days,
+    quiet_after_days: 7,
+    quiet_member_ids: quietIds === undefined ? [] : quietIds
+  };
+}
+
+/* The age element on the feed, which holds the only text on that screen the client
+   composes out of a payload field. */
+function feedAgeLine(page) {
+  return page.el('feed-stale');
+}
+
+/* The note above the quiet list, which carries no id of its own: the wrapper carries
+   the hidden flag and the note is fixed prose inside it. */
+function quietNoteIn(page) {
+  return onlyOne(page.el('balances-quiet-block'), '.balances-note');
+}
+
+/* The three balances elements as one record, so a scenario says what the screen shows
+   in one assertion rather than in six that can drift apart. The names are read out of
+   the rows themselves, in the order they were drawn. */
+function stalenessOnScreen(page) {
+  return {
+    stale: !page.el('balances-stale').hidden,
+    never: !page.el('balances-never').hidden,
+    quiet: !page.el('balances-quiet-block').hidden,
+    days: page.el('balances-stale-days').textContent,
+    window: page.el('balances-quiet-days').textContent,
+    names: page.el('balances-quiet').childNodes.map((row) => row.textContent)
+  };
+}
+
+/* A roster of three that does not start with the acting member, so payload order can
+   be told apart from roster order and from sorted order. */
+const QUIET_ROSTER = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-3', display_name: 'Cass' }
+  ]
+};
+
+/* One settled net row per member, so balancesRender gets past its empty-roster early
+   return and draws the figures the signal is a caveat on. A null signal is a payload
+   that carries no staleness key at all, which is what a server that has not been
+   upgraded sends. */
+function settledFigures(signal) {
+  const figures = {
+    currency: 'AUD',
+    net: [
+      { member_id: 'mem-2', amount: '0.00', direction: 'settled' },
+      { member_id: 'mem-1', amount: '0.00', direction: 'settled' },
+      { member_id: 'mem-3', amount: '0.00', direction: 'settled' }
+    ],
+    transfers: [],
+    pending: [],
+    rejected: []
+  };
+  if (signal !== null) {
+    figures.staleness = signal;
+  }
+  return figures;
+}
+
+
 try {
   process.exitCode = await main();
 } catch (error) {
@@ -8761,3 +9182,4 @@ try {
   );
   process.exitCode = 2;
 }
+

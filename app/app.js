@@ -189,6 +189,11 @@
   var feedRetry = document.getElementById('feed-retry');
   var feedCurrency = document.getElementById('feed-currency');
   var feedList = document.getElementById('feed-list');
+  /* Task 16. How old the newest expense is, and the span the figure goes in. The
+     sentence is fixed prose in index.html; the only thing written here is the number
+     the payload carried. */
+  var feedStale = document.getElementById('feed-stale');
+  var feedStaleDays = document.getElementById('feed-stale-days');
   var feedBusy = false;
 
   function feedText(tag, className, value) {
@@ -213,7 +218,33 @@
       /* No list is ever shown beside a failure notice, and a failure never shows the
          empty state: those are three different things and must look like three. */
       feedList.replaceChildren();
+      /* Task 16 joins that structure rather than becoming a fifth thing every caller
+         has to remember: the age sentence is a caveat on the list, so it goes wherever
+         the list goes. A group that has recorded nothing reaches feedState('empty'),
+         which already says the honest thing and needs no age beside it, and a failed
+         read must never carry a sentence about how old a ledger nobody could read is.
+         In the list state feedRender decides, because only it has the payload. */
+      feedStale.hidden = true;
+      feedStaleDays.textContent = '';
     }
+  }
+
+  function feedAge(signal) {
+    /* Drawn from `state` and from nothing else. The count is printed inside the stale
+       arm and is never compared against anything: what counts as stale is a product
+       rule, it lives in staleness.py, and a client that measured a count against a
+       threshold would be a second copy of that rule. A state this client does not
+       recognise, and a payload carrying no signal at all, both draw nothing, following
+       the inert fallback balancesTransferRow uses for a transfer with no usable
+       provenance: silence is the honest answer to a payload this client cannot read,
+       and a missing signal is not a broken feed. */
+    if (!signal || typeof signal !== 'object' || signal.state !== 'stale') {
+      feedStale.hidden = true;
+      feedStaleDays.textContent = '';
+      return;
+    }
+    feedStaleDays.textContent = String(signal.days_since_last_expense);
+    feedStale.hidden = false;
   }
 
   function feedIsText(value) {
@@ -584,6 +615,10 @@
        front end does not overrule that. No per-row marker either, because the group
        has exactly one currency and repeating it on every line is noise. */
     feedCurrency.textContent = 'Amounts in ' + payload.currency + '.';
+    /* Written before the state goes up, so the screen never appears with a list and a
+       sentence about the previous group's age between them. feedState('list') leaves
+       this element alone, which is what makes the two halves separable at all. */
+    feedAge(payload.staleness);
     feedState('list');
   }
 
@@ -1624,6 +1659,16 @@
      balancesClear(), because the re-read an answer fires runs through balancesClear()
      and would wipe the sentence it had just written. */
   var decisionLine = document.getElementById('balances-decision');
+  /* Task 16. Two standalone sentences, at most one of them ever up, and one wrapper
+     over a note and a list on task 14's terms. Both numbers on screen come out of the
+     payload: no threshold is written here, so it cannot be stated in two places that
+     disagree. */
+  var staleNote = document.getElementById('balances-stale');
+  var staleDays = document.getElementById('balances-stale-days');
+  var neverNote = document.getElementById('balances-never');
+  var quietBlock = document.getElementById('balances-quiet-block');
+  var quietDays = document.getElementById('balances-quiet-days');
+  var quietList = document.getElementById('balances-quiet');
 
   /* Which attempt is allowed to draw. Bumped whenever one starts, so an answer from
      a visit the user has already left is discarded rather than drawn over the newer
@@ -1664,6 +1709,83 @@
        that read is there to show. */
     balancesEmpty(rejectedList);
     rejectedBlock.hidden = true;
+    /* And task 16's three, so a sentence about how old one group's ledger is can
+       neither survive a refresh nor sit beside "These figures could not be worked out
+       just now.", which would be a caveat on figures that are not there. This is also
+       what makes the net.length === 0 early return in balancesRender leave all three
+       hidden with no extra code. */
+    balancesStalenessClear();
+  }
+
+  /* The three states the wire carries, spelled here as the client reads them. A state
+     that is not one of these draws nothing at all. */
+  var STALENESS_STATES = ['never', 'fresh', 'stale'];
+
+  function balancesStalenessClear() {
+    staleNote.hidden = true;
+    neverNote.hidden = true;
+    staleDays.textContent = '';
+    quietDays.textContent = '';
+    balancesEmpty(quietList);
+    quietBlock.hidden = true;
+  }
+
+  function balancesStaleness(signal, names, actingId) {
+    /* One toggler for both sentences, in the shape of balancesMessage, rather than
+       three call sites remembering: at most one of #balances-stale and #balances-never
+       is ever not hidden, so this screen can never say both that nothing has been
+       recorded and that something was recorded some days ago.
+
+       Everything below switches on `state` and on nothing else. The counts are printed
+       inside their own arm and are never compared, against each other or against a
+       threshold: what counts as stale is a product rule that lives in staleness.py,
+       and a comparison here would be a second copy of it. A state this client does not
+       recognise, and a payload with no signal at all, both draw nothing, following the
+       inert fallback balancesTransferRow uses for a transfer with no usable
+       provenance. */
+    balancesStalenessClear();
+    var state = signal && typeof signal === 'object' ? signal.state : '';
+    if (STALENESS_STATES.indexOf(state) === -1) {
+      return;
+    }
+    if (state === 'never') {
+      neverNote.hidden = false;
+    } else if (state === 'stale') {
+      staleDays.textContent = String(signal.days_since_last_expense);
+      staleNote.hidden = false;
+    }
+    balancesQuietFill(signal, names, actingId);
+  }
+
+  function balancesQuietFill(signal, names, actingId) {
+    /* One wrapper with one hidden flag over the note and the list, so a bare intro
+       cannot appear over an empty list on an ordinary day. The server sends an empty
+       list whenever it has nothing to say, a group that has recorded nothing included,
+       so there is no state check here beyond the one above. */
+    var quiet = signal.quiet_member_ids;
+    if (!Array.isArray(quiet) || quiet.length === 0) {
+      return;
+    }
+    /* Rendered in the order the array arrived, with nothing here sorting, reversing,
+       filtering or deduplicating it, exactly as balancesFill does: web.py sends roster
+       order and a second ordering rule here would be a second contract. Names go
+       through balancesName, so an id the roster does not know reads as words and no
+       member id is ever rendered as visible text. */
+    for (var index = 0; index < quiet.length; index += 1) {
+      var row = document.createElement('li');
+      row.className = 'balances-row';
+      row.appendChild(
+        balancesText(
+          'span',
+          'balances-line',
+          balancesName(quiet[index], names, actingId)
+        )
+      );
+      quietList.appendChild(row);
+    }
+    quietList.hidden = false;
+    quietDays.textContent = String(signal.quiet_after_days);
+    quietBlock.hidden = false;
   }
 
   function balancesRegionId() {
@@ -2689,6 +2811,12 @@
       balancesMessage('empty-roster');
       return;
     }
+
+    /* Written before any figure is drawn, because it is the caveat on every figure
+       below it: how old the ledger is, or that there has never been one, and who has
+       entered nothing lately. It moves no figure and reads no clock, and every number
+       in it arrived in this payload. */
+    balancesStaleness(figures && figures.staleness, names, actingId);
 
     /* net_for is total by design, so a group that has recorded nothing still returns
        one entry per member, every one of them settled. That is what stops a fresh
