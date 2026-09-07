@@ -804,9 +804,41 @@ def scanned_documents() -> list[Path]:
     ``CARRIES_A_NAME`` list in PR #56 did not have, and its absence is why that list
     shipped wrong and why issue #58 deleted it.
     """
+    # An exclusion that outlives the file it excludes is dead weight nothing reports.
+    # A rename already fails loudly, because the path stops matching and the renamed
+    # file gets scanned; a deletion would not, so it is asserted here instead.
+    assert SPECIFIES_THE_SCAN.exists(), (
+        f"{posix(SPECIFIES_THE_SCAN)} is excluded from this scan but no longer "
+        "exists, so the exclusion is dead. Delete it, or point it at the document "
+        "that specifies this check."
+    )
     found = list((REPO / "plans").rglob("*.md"))
     found += [REPO / "README.md", REPO / "CLAUDE.md"]
     return sorted(path for path in found if path != SPECIFIES_THE_SCAN)
+
+
+# A date, in the form every dated note in this repo already carries. What makes a
+# blockquote an exemption is that somebody wrote down when and why, which is
+# reviewable and shows in a diff as a claim; a bare '>' is one character and is not.
+DATED_NOTE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def blockquote_run(lines: list[str], index: int) -> list[str]:
+    """The contiguous run of blockquote lines containing ``lines[index]``, or nothing.
+
+    The run and not the line. A dated note opens with its marker and the wording it
+    quotes usually sits several lines below, so looking for the date on the line that
+    carries the banned literal would refuse every real note in this repo.
+    """
+    if not lines[index].strip().startswith(">"):
+        return []
+    start = index
+    while start > 0 and lines[start - 1].strip().startswith(">"):
+        start -= 1
+    end = index
+    while end + 1 < len(lines) and lines[end + 1].strip().startswith(">"):
+        end += 1
+    return lines[start : end + 1]
 
 
 def wrong_measurement_message(where: str, line: int, text: str) -> str:
@@ -835,10 +867,14 @@ def wrong_measurement_message(where: str, line: int, text: str) -> str:
         "hidden element reports 0 for both, so every collapsed region passes trivially "
         "unless it is opened first.\n"
         "\n"
-        "Quoting the old wording is legal. A line whose stripped form starts with '>' "
-        "is exempt, because that is where this repo's dated correction notes live, so "
-        "the historical record stays readable while the next criterion cannot be "
-        "written."
+        "Quoting the old wording is legal, in one shape only: a blockquote carrying a "
+        "date, in the form this repo already uses for a correction note, opening "
+        "'**Corrected 2026-09-07 for issue #58**' or '**Stale ...**' and quoting the "
+        "wording that was wrong. The date is what the exemption is for. A bare '>' is "
+        "not enough and is refused, because an exemption a criterion can claim by "
+        "writing one character next to itself is not an exemption, it is a hole, and "
+        "this whole check exists because a check that does not exercise what it names "
+        "was believed."
     )
 
 
@@ -859,18 +895,26 @@ def test_no_document_asks_for_the_measurement_that_cannot_fail() -> None:
     failures: list[str] = []
     for path in scanned_documents():
         where = posix(path)
-        for number, text in enumerate(read(path).splitlines(), start=1):
+        lines = read(path).splitlines()
+        for index, text in enumerate(lines):
             if "documentElement" not in text:
                 continue
-            # The blockquote exemption, and the only exemption a document can claim
-            # for itself. Dated correction notes live in blockquotes in this repo, so
-            # quoting the wording that was wrong stays legal while writing it into a
-            # criterion does not. There is deliberately no allowlist and no marker
-            # comment: an exemption a criterion could claim by writing a magic word
-            # next to itself is how a check stops being one.
-            if text.strip().startswith(">"):
+            # The dated-note exemption, and the only exemption a document can claim
+            # for itself. Quoting the wording that was wrong stays legal so the
+            # historical record survives; writing it into a criterion does not.
+            #
+            # The date is the whole exemption, and requiring it is the difference
+            # between a hatch and a hole. An earlier version of this check accepted any
+            # line starting with '>', which meant a future author facing this red test
+            # could prefix one character and go green with no reason, no date, and
+            # nothing in the diff that reads as a claimed exemption. That is a check
+            # that does not exercise what it names, which is the defect this module
+            # exists to refuse, so it was refusing it everywhere except in itself. The
+            # bar now matches the `# unanchored:` hatch above: an exemption costs a
+            # written, reviewable claim.
+            if DATED_NOTE.search("\n".join(blockquote_run(lines, index))):
                 continue
-            failures.append(wrong_measurement_message(where, number, text))
+            failures.append(wrong_measurement_message(where, index + 1, text))
     assert not failures, "\n\n".join(failures)
 
 
@@ -898,8 +942,12 @@ def test_the_wrong_measurement_message_says_what_to_write_instead() -> None:
     assert "el.scrollWidth > el.clientWidth" in message
     assert "integer-rounded" in message
     assert "reports 0 for both" in message
-    # And the one way to keep the old wording legally.
-    assert "starts with '>'" in message
+    # And the one way to keep the old wording legally, stated as the dated note it
+    # actually requires rather than as the bare '>' an earlier version accepted. A
+    # message that advertises a wider hatch than the check honours sends the reader
+    # to write something that will still be refused.
+    assert "blockquote carrying a date" in message
+    assert "A bare '>' is not enough and is refused" in message
 
 
 # --- The rules the three issues land in ------------------------------------

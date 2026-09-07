@@ -799,9 +799,18 @@ def test_nothing_in_the_shell_takes_the_break_rule_back() -> None:
     """
     css = styles()
     block = without_comments(css)
-    # The selectors first and the count second, deliberately. A third `nowrap` fails
+    # The selectors first and the count second, deliberately: a third `nowrap` fails
     # both, and the message worth reading is the one that names the selector, so that
     # is the assertion that fires.
+    #
+    # The two do not overlap, and the second is not redundant. The selector regex only
+    # matches a rule containing `white-space: nowrap`, so `white-space: pre` on a new
+    # class leaves `refusing` unchanged and sails past the first assertion; the second
+    # sees `['nowrap', 'pre', 'nowrap']` and fires. `pre`, `pre-wrap` and
+    # `break-spaces` all preserve sequences of spaces and suppress the wrapping this
+    # rule depends on, so the count is what covers every wrap-suppressing value other
+    # than the one spelling the selector check knows about. Do not delete it as a
+    # duplicate of the line above.
     refusing = sorted(
         head.strip()
         for head in re.findall(r"([^{}]*)\{[^}]*white-space:\s*nowrap", block)
