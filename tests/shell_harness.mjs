@@ -53,12 +53,21 @@
 
        node tests/shell_harness.mjs < /dev/null
 
+   Configuration keys: scenarios, a subset to run; substitutions, the anchored
+   mutations above; provokeRunawayTimer, a self-rescheduling timer proving settle()
+   is bounded; and hideDocumentMembers, a list of names deleted from the document
+   stub before the run, so a gap in the stub can be reproduced without editing this
+   file or committing a second copy of it. A name the stub does not define is a
+   harness error rather than a hiding that hides nothing.
+
    Exit status is 0 when every requested scenario passed, 1 when one or more failed,
    and 2 for a harness error: unparseable stdin, an anchor that did not match exactly
-   once, a missing file, a script that threw while loading, or a run that would not
-   quiesce. The 1 and 2 distinction is not decoration: the mutant tests assert exit 1
-   so that a substitution which broke a file into a syntax error cannot be mistaken
-   for a killed mutant. */
+   once, a hideDocumentMembers name the document stub does not define, a missing
+   file, a script that threw while loading, or a run that would not quiesce. The 1
+   and 2 distinction is not decoration: the mutant tests assert exit 1 so that a
+   substitution which broke a file into a syntax error cannot be mistaken for a
+   killed mutant, and the hideDocumentMembers test asserts exit 1 so that a broken
+   configuration cannot be mistaken for a caught defect. */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -133,6 +142,24 @@ const VOID_TAGS = new Set([
 ]);
 
 const ATTRIBUTE = /([a-zA-Z][a-zA-Z0-9:_.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+
+/* What a browser does with a fragment on insertion: its children go into the parent
+   in its place and the fragment is left empty. Both insertion points route every node
+   they are given through here, and that is not optional. This stub's replaceChildren
+   is an assignment and its appendChild is a push, so a fragment accepted as it stands
+   would become one child node rather than its children: descendants() would walk into
+   it as if it were an element, the textContent getter would read a node with no
+   tagName as node.text and yield undefined, and .expense-row would be found under a
+   phantom element. A wrong tree and no error is the one behaviour a stub must never
+   have, so the flattening is a guarantee rather than a convenience. */
+function inserted(node) {
+  if (node.tagName !== '#DOCUMENT-FRAGMENT') {
+    return [node];
+  }
+  const children = node.childNodes.slice();
+  node.childNodes = [];
+  return children;
+}
 
 function element(tag, attributes, sink) {
   const own = {
@@ -213,7 +240,8 @@ function element(tag, attributes, sink) {
       delete own.attributes[name];
     },
     appendChild(child) {
-      own.childNodes.push(child);
+      inserted(child).forEach((node) => own.childNodes.push(node));
+      /* The node it was handed, which is what a browser returns, fragment included. */
       return child;
     },
     removeChild(child) {
@@ -225,7 +253,9 @@ function element(tag, attributes, sink) {
       return child;
     },
     replaceChildren(...nodes) {
-      own.childNodes = nodes.slice();
+      const flat = [];
+      nodes.forEach((node) => inserted(node).forEach((child) => flat.push(child)));
+      own.childNodes = flat;
     },
     get firstChild() {
       return own.childNodes.length === 0 ? null : own.childNodes[0];
@@ -278,7 +308,7 @@ function guarded(target, what) {
       if (typeof property === 'symbol' || property in object) {
         return object[property];
       }
-      throw new Error(
+      throw refusedProperty(
         'the stub ' + what + ' has no ' + String(property) + '; the harness fakes ' +
           'only what a shipped file uses, so widen it deliberately'
       );
@@ -288,7 +318,7 @@ function guarded(target, what) {
          it would leave a shipped file writing into a stub that reflects nothing,
          which reads as a passing test. */
       if (typeof property !== 'symbol' && !(property in object)) {
-        throw new Error(
+        throw refusedProperty(
           'the stub ' + what + ' has no ' + String(property) + ' to set; the harness ' +
             'fakes only what a shipped file uses, so widen it deliberately'
         );
@@ -530,7 +560,7 @@ function networkFailure() {
 
 const SETTLE_STEPS = 1000;
 
-function page(scripts, name, provokeRunawayTimer) {
+function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
   const sink = { focused: null };
   const parsed = parseDocument(readFileSync(join(APP, 'index.html'), 'utf8'), sink);
   const failures = [];
@@ -617,6 +647,8 @@ function page(scripts, name, provokeRunawayTimer) {
   };
 
   const head = select(parsed.root, 'head')[0];
+  /* Replaced rather than routed through inserted(): it exists to load api.js, and
+     nothing appends a document fragment to <head>. */
   head.appendChild = (node) => {
     head.childNodes.push(node);
     if (node.tagName === 'SCRIPT' && node.src !== '') {
@@ -635,6 +667,15 @@ function page(scripts, name, provokeRunawayTimer) {
          composes a row out of text nodes so that a display name holding a `<` reaches
          the DOM as text: balancesNetRow, balancesTransferRow and task 13's rows. */
       createTextNode: (text) => ({ text: String(text) }),
+      /* feedRender builds its rows in a fragment and hands the fragment to
+         feedList.replaceChildren. Built by element() under a reserved #-prefixed tag,
+         following the precedent parseDocument's element('#document', ...) root sets,
+         so the fragment carries childNodes, firstChild, textContent and the same
+         guarded proxy every element carries, for one line. No selector can name it:
+         select() reads a leading # as an id and its bare-tag pattern is
+         ^[a-z][a-z0-9]*$. Insertion flattens it, per inserted() above, and that is
+         the part that is not optional. */
+      createDocumentFragment: () => element('#document-fragment', {}, sink),
       head: head,
       get title() {
         return titleElement.textContent;
@@ -650,6 +691,20 @@ function page(scripts, name, provokeRunawayTimer) {
     },
     'document'
   );
+
+  /* Deleted from the stub after it is built rather than left out of it, so the list
+     is checked against what this file really fakes: a misspelled name would hide
+     nothing, every scenario would pass, and the run would read as a caught defect
+     that was never provoked. That is a harness error, not a green run. */
+  hideDocumentMembers.forEach((member) => {
+    if (!(member in documentStub)) {
+      throw new HarnessError(
+        'hideDocumentMembers names ' + member + ', which the document stub does not ' +
+          'define; hiding a name that is already absent hides nothing'
+      );
+    }
+    delete documentStub[member];
+  });
 
   const fetchStub = (url, options) => {
     const method = String(options.method);
@@ -925,6 +980,32 @@ function page(scripts, name, provokeRunawayTimer) {
           );
         }
       }
+      /* And the in-flight invariant, checked on every scenario for the same reason:
+         after settle, no screen is left in the state it shows while a read is running.
+         Every answer here resolves or rejects immediately and settle() drains both
+         queues, so a screen still mid-flight when a scenario ends is a screen whose
+         render died. It lives here rather than in the scenarios that thought to look
+         because that is the whole lesson of this defect: feedState('list') is the last
+         line of feedRender, so a throw out of it left #feed-loading up forever and no
+         assertion anywhere in this file asked.
+
+         Know its one limit before relying on it: main() calls finish() only when a
+         scenario body returns, so a body that throws skips this check along with the
+         rest of finish(), and "in every scenario" means in every scenario that
+         returns. That is why the feed scenarios below reach their rows through
+         feedRows(), which records the count failure and returns rather than
+         dereferencing a row that is not there. A scenario that dies on an unrelated
+         exception will not report a screen left mid-flight, and widening this to catch
+         that means moving finish() into a finally in main(), which is its own change
+         with its own blast radius. */
+      ['feed-loading', 'balances-busy'].forEach((id) => {
+        if (!byId(id).hidden) {
+          failures.push(
+            '#' + id + ' is still showing after settle: this scenario left a screen ' +
+              'mid-flight, which is what a render that threw looks like from outside'
+          );
+        }
+      });
       calls.forEach((call, index) => wellFormed(call, index, failures));
       if (declaredRequests === null) {
         failures.push(
@@ -7168,6 +7249,507 @@ const SCENARIOS = [
         }
       ]);
     }
+  },
+
+  /* --- Issue #57: what a feed row shows ---------------------------------------
+     The first eleven scenarios in this repo to render one. feedRender's
+     document.createDocumentFragment was not faked, and loadFeed ends
+     .then(done, done), so every line of the render path threw and the throw reached
+     the same place a refused request does. Nothing asserted row content, so nothing
+     saw it. */
+
+  {
+    /* The whole of a row, which is the screen a person opens the app on. The payer is
+       neither the person entering nor the first member of the roster nor whoever
+       recorded it, so a row that reads the wrong field names the wrong person, which
+       on a shared ledger is the wrong person being owed money. */
+    name: 'a_feed_row_names_the_payer_the_amount_and_what_it_was_for',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_MILK] }, FEED_ROSTER);
+      /* Declared here rather than last, as every scenario in this block does: a dead
+         render returns early through the guard below, and a scenario that returned
+         without declaring its requests reports one complaint about the declaration on
+         top of the two that say what actually broke. */
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const summary = summaryIn(row);
+      page.is(
+        onlyOne(row, '.expense-description').textContent,
+        'Milk run',
+        'the description'
+      );
+      /* The amount as format_amount produced it, character for character, and read
+         from the summary rather than from the row: the detail carries figures of its
+         own. Not parsed, not reformatted, not compared as a number. */
+      page.is(onlyOne(summary, '.expense-figure').textContent, '12.50', 'the amount');
+      page.is(onlyOne(row, '.expense-payer').textContent, 'Paid by Cass', 'the payer');
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Sam and Cass',
+        'the split line'
+      );
+      page.is(
+        page.el('feed-currency').textContent,
+        'Amounts in AUD.',
+        'the currency line'
+      );
+      feedShows(page, 'list', 'a rendered list');
+
+      /* The rows are children of #feed-list itself. The fragment feedRender built
+         them in is not a node a browser leaves behind, and a stub that kept it would
+         put a phantom element between the list and every row. */
+      page.is(page.el('feed-list').childNodes.length, 1, 'children of #feed-list');
+      page.is(page.el('feed-list').childNodes[0], row, 'the first child of #feed-list');
+      page.is(page.el('feed-list').firstChild, row, 'the firstChild of #feed-list');
+      page.ok(
+        tagsInDocument(page).indexOf('#DOCUMENT-FRAGMENT') === -1,
+        'a document fragment was left in the rendered tree'
+      );
+      FEED_CLASSES.forEach((selector) => {
+        page.ok(page.query(selector).length > 0, 'nothing matches ' + selector);
+      });
+
+      /* Closed, and saying so twice: to a screen reader through aria-expanded, and to
+         everybody through the glyph. The region it names exists exactly once, so the
+         id derived from the expense id is an id and not a guess. */
+      page.is(summary.getAttribute('aria-expanded'), 'false', 'aria-expanded');
+      page.is(indicatorIn(summary).textContent, '+', 'the indicator');
+      page.is(
+        page.query('#' + summary.getAttribute('aria-controls')).length,
+        1,
+        'regions the summary names'
+      );
+      page.is(regionFor(page, summary).hidden, true, 'the detail region');
+
+      /* The raw instant survives in the markup byte for byte even though the visible
+         text is rounded to a day and spelled in the reader's own timezone. What day
+         that is depends on the machine, so the visible half is held to the two things
+         that do not: it says something, and it never says NaN. */
+      const stamp = onlyOne(row, '.expense-date');
+      page.is(stamp.tagName, 'TIME', 'the date element');
+      page.is(stamp.getAttribute('datetime'), FEED_WHEN, 'the datetime attribute');
+      page.ok(stamp.textContent !== '', 'the visible date says nothing');
+      page.ok(
+        stamp.textContent.indexOf('NaN') === -1,
+        'the visible date reads ' + JSON.stringify(stamp.textContent)
+      );
+    }
+  },
+
+  {
+    /* A group on day one, and the one scenario in this family that never reaches
+       feedRender: loadFeed hands a zero-length list to feedState('empty') and
+       returns, so only the else arm renders. It could not have caught the fragment
+       gap and it cannot prove the fix either, which is criterion 17 of this task's
+       file. That is asserted rather than claimed, in
+       test_hiding_the_fragment_maker_shows_what_the_feed_was_hiding, which hides the
+       member and requires this scenario to stay green. */
+    name: 'a_feed_with_nothing_recorded_says_so_and_draws_no_row',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+      feedShows(page, 'empty', 'a group with nothing recorded');
+      /* Not dressed as a list: no row, no currency line and an empty list element. */
+      page.is(page.el('feed-list').childNodes.length, 0, 'children of #feed-list');
+      page.is(page.query('.expense-row').length, 0, 'expense rows');
+    }
+  },
+  {
+    /* web.py owns the ordering rule and has it written down: store.list_expenses
+       returns ascending (created_at, id) and the endpoint turns it around. feedRender
+       renders the array as it arrived and does not sort, reverse, compare or group it,
+       so a second ordering rule here would be a second contract to keep in step with
+       the first. Two of the three share an instant, because a tie is where a client
+       that sorted would disagree first. */
+    name: 'the_rows_stay_in_the_order_the_server_sent_them',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: FEED_THREE }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 3, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      page.same(
+        rowDescriptions(page),
+        ['Bread', 'Cheese', 'Milk run'],
+        'the order the rows read in'
+      );
+      /* Children of #feed-list itself, three of them, each an LI carrying the row
+         class. A fragment that survived insertion would put one node here instead. */
+      const children = page.el('feed-list').childNodes;
+      page.is(children.length, 3, 'children of #feed-list');
+      page.same(children.map((node) => node.tagName), ['LI', 'LI', 'LI'], 'their tags');
+      page.same(
+        children.map((node) => node.className),
+        ['expense-row', 'expense-row', 'expense-row'],
+        'their classes'
+      );
+      page.is(page.el('feed-list').firstChild, children[0], 'the firstChild');
+      /* The textContent getter reads a node with no tagName as node.text, so a
+         fragment left in the tree reads as the string undefined rather than failing. */
+      page.ok(
+        page.el('feed-list').textContent.indexOf('undefined') === -1,
+        'the list reads ' + JSON.stringify(page.el('feed-list').textContent)
+      );
+      page.ok(
+        tagsInDocument(page).indexOf('#DOCUMENT-FRAGMENT') === -1,
+        'a document fragment was left in the rendered tree'
+      );
+      feedShows(page, 'list', 'three rendered rows');
+    }
+  },
+
+  {
+    /* app.js composes every row out of createElement and text, and assigns no
+       innerHTML anywhere. Until this scenario that claim rested on a ban on the source
+       text of app.js in tests/test_feed_screen.py, which reads the committed document
+       and cannot watch a description reach a screen. This one watches. */
+    name: 'an_expense_described_in_markup_reaches_the_screen_as_text',
+    async run(page) {
+      const described = {
+        id: 'exp-10',
+        description: FEED_MARKUP,
+        amount: '5.00',
+        payer_id: 'mem-1',
+        created_by: 'mem-1',
+        created_at: FEED_WHEN,
+        allocations: [{ member_id: 'mem-1', amount: '5.00' }]
+      };
+      await onFeed(page, { currency: 'AUD', expenses: [described] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      /* The literal characters, as text: the angle brackets are read, not parsed. */
+      page.is(
+        onlyOne(row, '.expense-description').textContent,
+        FEED_MARKUP,
+        'the description'
+      );
+      page.is(row.querySelectorAll('img').length, 0, 'IMG nodes in the row');
+      /* No console output is declared, here as everywhere, so the alert this markup
+         asks for would fail this scenario if anything ever ran it. */
+    }
+  },
+
+  {
+    /* No description is a thing that happens: the add screen sends an empty one. A
+       fixed literal, never a summary invented from the other fields, because "Milk
+       run" is indistinguishable from a description a person typed and inventing one is
+       the authoritative-while-wrong failure the spec names as the largest risk. Not
+       blank either: a blank first line makes the row look broken. */
+    name: 'an_expense_with_no_description_still_names_everything_else',
+    async run(page) {
+      await onFeed(
+        page,
+        { currency: 'AUD', expenses: [FEED_UNDESCRIBED] },
+        FEED_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const described = onlyOne(row, '.expense-description');
+      page.is(described.textContent, 'No description', 'the description');
+      /* Both classes: the second is what lets the stylesheet say it differently
+         without the row losing the class everything else selects it by. */
+      page.same(
+        described.classList,
+        ['expense-description', 'expense-description--none'],
+        'the classes on it'
+      );
+      /* And the rest of the row survives the missing half. */
+      page.is(
+        onlyOne(summaryIn(row), '.expense-figure').textContent,
+        '3.00',
+        'the amount'
+      );
+      page.is(onlyOne(row, '.expense-payer').textContent, 'Paid by Sam', 'the payer');
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Sam',
+        'the split line'
+      );
+      page.is(
+        onlyOne(row, '.expense-date').getAttribute('datetime'),
+        FEED_WHEN,
+        'the datetime attribute'
+      );
+    }
+  },
+  {
+    /* The disclosure, and the whole of what it discloses. An inline region, not a
+       modal and not a fourth route: it pushes nothing onto the history stack, so Back
+       still leaves the app from the feed. The screen never adds the shares up and
+       neither does this scenario: every figure is compared as the string the payload
+       carried. */
+    name: 'opening_a_row_shows_every_share_and_the_total_they_are_shares_of',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_DINNER] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const summary = summaryIn(rows[0]);
+      const detail = regionFor(page, summary);
+      page.is(summary.getAttribute('aria-expanded'), 'false', 'aria-expanded, closed');
+      page.is(detail.hidden, true, 'the region, closed');
+
+      await page.dispatch(summary, 'click');
+      page.is(summary.getAttribute('aria-expanded'), 'true', 'aria-expanded, open');
+      page.is(detail.hidden, false, 'the region, open');
+      page.is(indicatorIn(summary).textContent, '-', 'the indicator, open');
+      /* Every share, in roster order, with the zero included and none dropped,
+         blanked or dashed out. Ali paid nothing and is still a participant, because a
+         detail that disagrees with the split line is a bug the reader cannot see. */
+      page.same(
+        sharesIn(detail),
+        [['Ali', '0.00'], ['Sam', '15.00'], ['Cass', '15.00']],
+        'the shares'
+      );
+      /* The total those shares are shares of, labelled, and with no sentence claiming
+         a relationship between the two: the front end is in no position to have
+         checked one. */
+      const total = onlyOne(detail, '.expense-total');
+      page.is(onlyOne(total, '.expense-total-label').textContent, 'Total', 'the label');
+      page.is(onlyOne(total, '.expense-figure').textContent, '30.00', 'the total');
+      /* Cass paid and is sharing, so the only note is who recorded it. */
+      page.same(noteLinesIn(detail), ['Recorded by Sam.'], 'the notes');
+
+      await page.dispatch(summary, 'click');
+      page.is(summary.getAttribute('aria-expanded'), 'false', 'aria-expanded, closed again');
+      page.is(detail.hidden, true, 'the region, closed again');
+      page.is(indicatorIn(summary).textContent, '+', 'the indicator, closed again');
+
+      page.is(page.hash, '#/feed', 'the hash');
+      page.same(page.pushStates, [], 'history entries');
+    }
+  },
+
+  {
+    /* Task 4 supports paying for a meal you did not eat. The payer is not quietly
+       added to the participant list and no share is implied for them; the fact is
+       stated instead, which is the difference between a screen that reports the ledger
+       and one that improves on it. */
+    name: 'a_payer_who_is_not_sharing_is_said_so_rather_than_added_to_the_split',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_TREAT] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const summary = summaryIn(row);
+      await page.dispatch(summary, 'click');
+      const detail = regionFor(page, summary);
+      page.is(onlyOne(row, '.expense-payer').textContent, 'Paid by Cass', 'the payer');
+      /* Exactly the one sentence, naming that payer. */
+      page.same(
+        noteLinesIn(detail),
+        ['Cass paid and is not sharing this expense.'],
+        'the notes'
+      );
+      /* The shares are exactly the participants, and Cass is not among them, in the
+         detail or on the split line. */
+      page.same(sharesIn(detail), [['Ali', '10.00'], ['Sam', '10.00']], 'the shares');
+      page.same(
+        detail.querySelectorAll('.expense-share-name').map((node) => node.textContent),
+        ['Ali', 'Sam'],
+        'the share names'
+      );
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Ali and Sam',
+        'the split line'
+      );
+    }
+  },
+
+  {
+    /* A member row can go while the expenses that name it stay, which store.Member
+       allows on purpose. An unresolvable id must not stop its row or any other row
+       from rendering, must not reach the reader as a UUID, and must not vanish: it
+       keeps its place at the end of the shares, because a share silently dropped is a
+       total that no longer explains itself. */
+    name: 'a_member_the_roster_does_not_know_reads_as_words_not_as_an_id',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_STRANGER] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const summary = summaryIn(row);
+      await page.dispatch(summary, 'click');
+      const detail = regionFor(page, summary);
+      page.is(
+        onlyOne(row, '.expense-payer').textContent,
+        'Paid by Unknown member',
+        'the payer'
+      );
+      /* The known share first, in roster order, and the one the roster cannot place
+         last rather than missing. */
+      page.same(
+        sharesIn(detail),
+        [['Sam', '5.00'], ['Unknown member', '5.00']],
+        'the shares'
+      );
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Sam and Unknown member',
+        'the split line'
+      );
+      /* And the id itself is nowhere a person can read it. */
+      page.ok(
+        row.textContent.indexOf(FEED_UNKNOWN_ID) === -1,
+        'the row reads ' + JSON.stringify(row.textContent)
+      );
+    }
+  },
+  {
+    /* The only place this screen composes prose about people. Three or fewer are all
+       named; four or more become the first two and a count, so six hundred-character
+       display names cannot run the line off a 320px screen. Counting participants is
+       not money arithmetic: no cent value is touched, and a zero cent share would be
+       counted like any other. */
+    name: 'four_people_sharing_one_expense_read_as_two_names_and_a_count',
+    async run(page) {
+      await onFeed(
+        page,
+        { currency: 'AUD', expenses: [FEED_HOUSE_SHOP] },
+        FEED_FOUR_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      /* The whole line, so a count appended to a list of all four names fails here as
+         loudly as a count that is wrong. */
+      page.is(
+        onlyOne(rows[0], '.expense-split').textContent,
+        'Split across Ali, Sam and 2 others',
+        'the split line'
+      );
+      /* And the detail still names everybody: the summary line is shortened, the
+         shares are not. */
+      const summary = summaryIn(rows[0]);
+      await page.dispatch(summary, 'click');
+      page.same(
+        sharesIn(regionFor(page, summary)),
+        [['Ali', '10.00'], ['Sam', '10.00'], ['Cass', '10.00'], ['Dev', '10.00']],
+        'the shares'
+      );
+    }
+  },
+
+  {
+    /* Each load replaces the whole list, so a reload never duplicates a row: a feed
+       that loaded once and never again would show a stale list the moment somebody
+       records an expense, and a feed that appended would show every expense twice.
+       Expansion resets with the list, which is accepted and is asserted here rather
+       than assumed. */
+    name: 'leaving_the_feed_and_coming_back_draws_each_row_once',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_MILK] }, FEED_ROSTER);
+      /* The route change enters the balances screen, so its own two reads are part of
+         this scenario's cost, and coming back re-reads the ledger and the roster. */
+      page.expectRequests(
+        FEED_ENTRY.concat([
+          'GET /api/members',
+          'GET /api/balances',
+          'GET /api/expenses',
+          'GET /api/members'
+        ])
+      );
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      await page.dispatch(summaryIn(rows[0]), 'click');
+      page.is(
+        summaryIn(rows[0]).getAttribute('aria-expanded'),
+        'true',
+        'aria-expanded before leaving'
+      );
+
+      await page.goTo('#/balances');
+      await page.goTo('#/feed');
+
+      const again = feedRows(page, 1, 'expense rows after coming back');
+      if (again === null) {
+        return;
+      }
+      page.is(page.el('feed-list').childNodes.length, 1, 'children of #feed-list');
+      /* The region id feedDetail derives from the expense id, spelled out rather than
+         rebuilt from the code that builds it. Twice in one document would be two rows
+         claiming one id, which is what an appended list looks like from here. */
+      page.is(
+        page.query('#expense-detail-exp-1').length,
+        1,
+        'regions carrying the id derived from the expense id'
+      );
+      const rebuilt = summaryIn(again[0]);
+      page.is(rebuilt.getAttribute('aria-expanded'), 'false', 'aria-expanded, rebuilt');
+      page.is(regionFor(page, rebuilt).hidden, true, 'the region, rebuilt');
+      page.is(indicatorIn(rebuilt).textContent, '+', 'the indicator, rebuilt');
+      feedShows(page, 'list', 'the feed after coming back');
+    }
+  },
+
+  {
+    /* created_at carries six fractional digits, which is more than the ECMAScript
+       date-time grammar requires an engine to accept, so an engine that refuses it
+       must get a fallback rather than NaN. A money screen reading NaN or Invalid Date
+       is worse than one reading the raw characters, and this is the branch nothing had
+       ever run. */
+    name: 'a_created_at_that_is_not_a_date_never_reads_as_nan',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_UNDATED] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      /* The first ten characters, which is what both spellings fall back to. The
+         fixture is longer than ten, so a fallback that passed the value straight
+         through would fail here. */
+      const stamp = onlyOne(row, '.expense-date');
+      page.is(stamp.textContent, 'not a date', 'the visible date');
+      page.is(onlyOne(row, '.expense-when').textContent, 'not a date', 'the detail date');
+      /* And the raw value survives in the markup whatever the visible text became. */
+      page.is(stamp.getAttribute('datetime'), FEED_NOT_A_DATE, 'the datetime attribute');
+      page.ok(
+        row.textContent.indexOf('NaN') === -1,
+        'the row reads ' + JSON.stringify(row.textContent)
+      );
+      page.ok(
+        row.textContent.indexOf('Invalid Date') === -1,
+        'the row reads ' + JSON.stringify(row.textContent)
+      );
+    }
   }
 ];
 
@@ -7320,11 +7902,15 @@ const WHEN = '2026-09-04T08:00:00.000000+00:00';
    relative label, or a second format. A hard-coded string could not, because the
    day a given instant falls on depends on the machine running the suite.
 
-   Reading the feed's own spelling of the same instant would be the independent
-   check, and it is not available: feedRender calls document.createDocumentFragment,
-   which this stub does not fake, so no scenario in this repo has ever rendered a
-   feed row. Issue #14's task file forbids widening the stub for anything but the two
-   properties it names, so that stays for whoever covers the feed. */
+   Corrected by issue #57, which fakes document.createDocumentFragment and renders
+   feed rows: this comment used to say that reading the feed's own spelling of the
+   same instant would be the independent check and was unavailable because no scenario
+   had ever rendered a row. The rows render now, and the check is still not available,
+   for a different and permanent reason. The feed's own spelling is feedDate
+   (app/app.js:526), and the drill-down rows call feedDate too (app/app.js:1898, :2200
+   and :2425), so comparing one to the other compares f(x) to f(x). spelledDate stays:
+   a second copy of the rule is a weaker oracle than an independent one and a stronger
+   one than a tautology. No assertion here is switched to a feed-derived date. */
 const SPELLED_MONTHS = [
   'Jan',
   'Feb',
@@ -7716,6 +8302,291 @@ function answerStatusIn(row) {
 }
 
 
+/* --- Issue #57: the feed render path ---------------------------------------------
+
+   Below SCENARIOS for the reason the task 13, 14, 15 and 43 blocks above are: this
+   task appends to this file and restructures none of it, and module evaluation
+   reaches these long before main() runs, which is all a scenario body needs.
+
+   Every fixture here is spelled out rather than derived. No amount is parsed, added,
+   divided or reformatted anywhere in this block: a cent value is compared as the
+   string the payload carried, which is the only comparison a money screen's test may
+   make. */
+
+/* The instant every fixture in this block is stamped with. Only two things about the
+   way it reaches the screen are machine-independent, and those are the two that get
+   asserted: the datetime attribute carries it byte for byte, and the visible text is
+   neither empty nor NaN. What day it falls on depends on the timezone of the machine
+   running the suite, and feedDate spells it locally on purpose. */
+const FEED_WHEN = '2026-09-04T08:00:00.000000+00:00';
+
+/* The acting member is Sam, mem-1, through A_MEMBER. This roster does not start with
+   Sam, so the payer of an expense can be told apart from the person entering it, from
+   the first row of the roster and from whoever recorded it: three fields a row could
+   read instead of payer_id, and a row that reads any of them names the wrong person
+   out loud on a shared ledger. */
+const FEED_ROSTER = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-3', display_name: 'Cass' }
+  ]
+};
+
+/* Cass paid, Sam recorded it, and the two of them share it. The six keys
+   _expense_view sends, with the allocations the resolver produced. */
+const FEED_MILK = {
+  id: 'exp-1',
+  description: 'Milk run',
+  amount: '12.50',
+  payer_id: 'mem-3',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '6.25' },
+    { member_id: 'mem-3', amount: '6.25' }
+  ]
+};
+
+/* Boots straight onto the feed route, so the recorded request list is about this
+   screen. The balances answer is registered because the route change in
+   leaving_the_feed_and_coming_back_draws_each_row_once enters that screen, and an
+   answer nobody asks for is never served. */
+async function onFeed(page, payload, roster) {
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(payload));
+  page.respond('GET', '/members', ok(roster));
+  page.respond('GET', '/balances', ok(EMPTY_BALANCES));
+  page.startAt('#/feed');
+  await page.boot();
+}
+
+/* Entering the feed route costs exactly these three, however many expenses come
+   back: the session check, the ledger and the roster, and nothing per row. */
+const FEED_ENTRY = ['GET /api/session', 'GET /api/expenses', 'GET /api/members'];
+
+/* The four states feedState() switches between, asserted as a set rather than one at
+   a time, because "exactly one of these is what a person sees" is the guarantee and a
+   single hidden flag is not it. The scenario names the state it expects; this checks
+   all five elements against that name. */
+function feedShows(page, which, what) {
+  page.is(page.el('feed-loading').hidden, which !== 'loading', what + ': #feed-loading');
+  page.is(page.el('feed-empty').hidden, which !== 'empty', what + ': #feed-empty');
+  page.is(page.el('feed-error').hidden, which !== 'error', what + ': #feed-error');
+  page.is(page.el('feed-currency').hidden, which !== 'list', what + ': #feed-currency');
+  page.is(page.el('feed-list').hidden, which !== 'list', what + ': #feed-list');
+}
+
+/* Every class the render path builds. A selector that finds nothing after a render is
+   a render that did not happen, which is exactly the state this file was in before
+   this task. */
+const FEED_CLASSES = [
+  '.expense-row',
+  '.expense-description',
+  '.expense-payer',
+  '.expense-figure',
+  '.expense-split',
+  '.expense-share',
+  '.expense-share-name'
+];
+
+/* Every element in the document, walked rather than selected: select() reads a
+   leading # as an id and its bare-tag pattern refuses one, so no selector can name a
+   document fragment. That is the point of the reserved tag name, and it is also why
+   a fragment left in the tree has to be looked for this way. */
+function tagsInDocument(page) {
+  return descendants(page.query('html')[0], []).map((node) => node.tagName);
+}
+
+/* The rows, or null with the count failure already recorded. A scenario that
+   dereferences a row that is not there throws, a thrown body skips finish() in
+   main(), and skipping finish() skips the in-flight invariant, so a dead render would
+   report a stack and less than it does now. Every scenario below returns on null. */
+function feedRows(page, expected, what) {
+  const rows = page.query('.expense-row');
+  page.is(rows.length, expected, what);
+  return rows.length === expected ? rows : null;
+}
+
+/* The rows as a reader meets them, top to bottom. */
+function rowDescriptions(page) {
+  return page.query('.expense-description').map((node) => node.textContent);
+}
+
+function summaryIn(row) {
+  return onlyOne(row, '.expense-summary');
+}
+
+function indicatorIn(summary) {
+  return onlyOne(summary, '.expense-indicator');
+}
+
+/* The share list of an open row, as pairs of the name and the amount exactly as the
+   payload spelled it. Read from the row rather than recomposed, and nothing here adds
+   the shares up: the screen does not, and neither does its test. */
+function sharesIn(detail) {
+  return onlyOne(detail, '.expense-shares').childNodes.map((share) => [
+    onlyOne(share, '.expense-share-name').textContent,
+    onlyOne(share, '.expense-figure').textContent
+  ]);
+}
+
+/* Every sentence the detail carries that is not a share row: the total line, the
+   notes and the date, in document order. */
+function noteLinesIn(detail) {
+  return detail
+    .querySelectorAll('.expense-note')
+    .map((note) => note.textContent);
+}
+
+/* A second instant, later than FEED_WHEN, so an ordering scenario has a tie and a
+   non-tie in one payload. */
+const FEED_LATER = '2026-09-05T09:00:00.000000+00:00';
+
+/* Three expenses in the order web.py sends them: newest first, ties broken by id
+   descending. Two of them share an instant, because a tie is where a second ordering
+   rule in the client would show itself, and there is no second ordering rule -
+   store.list_expenses returns ascending (created_at, id) and the endpoint turns it
+   around. */
+const FEED_THREE = [
+  {
+    id: 'exp-3',
+    description: 'Bread',
+    amount: '4.00',
+    payer_id: 'mem-2',
+    created_by: 'mem-2',
+    created_at: FEED_LATER,
+    allocations: [{ member_id: 'mem-2', amount: '4.00' }]
+  },
+  {
+    id: 'exp-2',
+    description: 'Cheese',
+    amount: '9.00',
+    payer_id: 'mem-1',
+    created_by: 'mem-1',
+    created_at: FEED_WHEN,
+    allocations: [{ member_id: 'mem-1', amount: '9.00' }]
+  },
+  {
+    id: 'exp-1',
+    description: 'Milk run',
+    amount: '12.50',
+    payer_id: 'mem-3',
+    created_by: 'mem-1',
+    created_at: FEED_WHEN,
+    allocations: [
+      { member_id: 'mem-1', amount: '6.25' },
+      { member_id: 'mem-3', amount: '6.25' }
+    ]
+  }
+];
+
+/* A description somebody could type into the add screen, and which a screen that
+   assigned it to innerHTML would run. The claim that it reaches the screen as text
+   rested on a ban on the source text of app.js and on nothing that ever rendered. */
+const FEED_MARKUP = '<img src=x onerror=alert(1)>';
+
+const FEED_UNDESCRIBED = {
+  id: 'exp-7',
+  description: '',
+  amount: '3.00',
+  payer_id: 'mem-1',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [{ member_id: 'mem-1', amount: '3.00' }]
+};
+
+/* Three shares, one of them nothing at all, and recorded by somebody other than the
+   payer. A zero cent share is a participant like any other: never dropped, never
+   blanked and never dashed out, because a detail that disagrees with the split line
+   is a bug the reader cannot see. */
+const FEED_DINNER = {
+  id: 'exp-4',
+  description: 'Dinner',
+  amount: '30.00',
+  payer_id: 'mem-3',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '15.00' },
+    { member_id: 'mem-2', amount: '0.00' },
+    { member_id: 'mem-3', amount: '15.00' }
+  ]
+};
+
+/* Paying for a meal you did not eat, which task 4 supports. The payer is absent from
+   the allocations and is neither added to the split nor implied a share of. */
+const FEED_TREAT = {
+  id: 'exp-5',
+  description: 'Takeaway',
+  amount: '20.00',
+  payer_id: 'mem-3',
+  created_by: 'mem-3',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '10.00' },
+    { member_id: 'mem-2', amount: '10.00' }
+  ]
+};
+
+/* An id no roster row answers for, which store.Member allows to happen: a member row
+   can go while the expenses that name it stay. A UUID on screen helps nobody, so it
+   must reach the reader as words, and this is the id that must not appear. */
+const FEED_UNKNOWN_ID = 'mem-9';
+const FEED_STRANGER = {
+  id: 'exp-6',
+  description: 'Bus fare',
+  amount: '10.00',
+  payer_id: FEED_UNKNOWN_ID,
+  created_by: FEED_UNKNOWN_ID,
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: FEED_UNKNOWN_ID, amount: '5.00' },
+    { member_id: 'mem-1', amount: '5.00' }
+  ]
+};
+
+/* Four people, so the split line stops naming everybody: six hundred-character
+   display names cannot be allowed to run the line off a 320px screen. */
+const FEED_FOUR_ROSTER = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-3', display_name: 'Cass' },
+    { id: 'mem-4', display_name: 'Dev' }
+  ]
+};
+const FEED_HOUSE_SHOP = {
+  id: 'exp-8',
+  description: 'House shop',
+  amount: '40.00',
+  payer_id: 'mem-1',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '10.00' },
+    { member_id: 'mem-2', amount: '10.00' },
+    { member_id: 'mem-3', amount: '10.00' },
+    { member_id: 'mem-4', amount: '10.00' }
+  ]
+};
+
+/* A created_at the date grammar refuses. web.py never sends one, but a store restored
+   from a hand-edited file or a future migration can, and a money screen that answers
+   with NaN or Invalid Date is worse than one that answers with the raw characters.
+   Longer than ten characters, so the first-ten-characters fallback is visible as a
+   truncation rather than as the whole value passed through. */
+const FEED_NOT_A_DATE = 'not a date at all';
+const FEED_UNDATED = {
+  id: 'exp-9',
+  description: 'Nightcap',
+  amount: '7.00',
+  payer_id: 'mem-1',
+  created_by: 'mem-1',
+  created_at: FEED_NOT_A_DATE,
+  allocations: [{ member_id: 'mem-1', amount: '7.00' }]
+};
+
 /* --- Running ---------------------------------------------------------------- */
 
 /* The scenario being driven, so an error that escapes into a promise nobody handled
@@ -7731,6 +8602,30 @@ function escaped(kind, reason) {
     process.exit(2);
   }
   running.fail(detail);
+}
+
+/* A property the guard refuses is recorded against the running scenario as well as
+   thrown, because throwing alone is not enough: what happens to the exception is the
+   shipped code's decision, and app.js's loadFeed ends .then(done, done), which
+   absorbs a throw out of feedRender exactly as it absorbs a refused request. That is
+   how a missing document.createDocumentFragment hid a whole screen's render path
+   through two tasks. Recording is in addition to throwing and never instead of it:
+   the Error is returned for the guard to throw, so the shipped file's own error path
+   runs exactly as it ran before.
+
+   Deduplicated against this scenario's own failures, so a gap tripped once per row is
+   one line and not a thousand, and a gap tripped in an earlier scenario is still
+   recorded against this one. With no scenario running it is a harness error, which is
+   what escaped() does with a rejection nobody handled. */
+function refusedProperty(message) {
+  if (running === null) {
+    process.stderr.write('harness error: refused property: ' + message + '\n');
+    process.exit(2);
+  }
+  if (running.failures.indexOf(message) === -1) {
+    running.fail(message);
+  }
+  return new Error(message);
 }
 
 process.on('unhandledRejection', (reason) => escaped('unhandled rejection', reason));
@@ -7805,7 +8700,12 @@ async function main() {
     /* A fresh context and a freshly parsed document per scenario: api.js holds cached
        and handlers, app.js holds current and creating, and no scenario may inherit
        another's state. */
-    const driver = page(scripts, scenario.name, Boolean(config.provokeRunawayTimer));
+    const driver = page(
+      scripts,
+      scenario.name,
+      Boolean(config.provokeRunawayTimer),
+      config.hideDocumentMembers || []
+    );
     running = driver;
     try {
       await scenario.run(driver);
