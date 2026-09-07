@@ -267,6 +267,18 @@ fires on the original defect.
 12. `finish()` gains one invariant beside the `#notice` one: after settle, `#feed-loading` is
     hidden and `#balances-busy` is hidden, in every scenario, and a scenario where either is up
     fails with a message naming the element and saying that a screen was left mid-flight.
+
+    **Marked 2026-09-07, not re-scoped.** "In every scenario" is where this criterion was
+    implemented, and it reaches every scenario that returns: `main()` calls `finish()` only
+    after a scenario body returns, so a body that throws skips this check along with the rest
+    of `finish()`. The criterion is met as written - the invariant is in `finish()` and it
+    fires there - but the reach of `finish()` is narrower than the phrase implies, and the
+    limit is written down in the harness beside the invariant so a reader meets it where they
+    would rely on it. This task's own scenarios reach their rows through a `feedRows()` guard
+    that records the count failure and returns rather than dereferencing a row that is not
+    there, which is what makes criterion 16's `#feed-loading` line appear at all. Widening the
+    reach means moving `finish()` into a `finally` in `main()`, which is a change to existing
+    code this task's constraints exclude and a different subject.
 13. Every scenario on `master` still passes with 9 and 12 in place. If one goes red it is
     reported, never softened: a guard trip inside shipped code is another gap of this same
     class and gets the same one-member fix with a comment, and the in-flight invariant firing
@@ -393,6 +405,17 @@ fires on the original defect.
 34. The count goes from **2431** to **2445**: eleven new `test_scenario` results, plus three
     new tests (criterion 15, criterion 16 and mutant G). A different total means something
     unplanned happened, and the engineer finds out what before proceeding.
+
+    **Corrected 2026-09-07.** The absolutes are stale; the arithmetic is not. This criterion
+    was written against a `master` carrying **2431**. By the time the work landed, `master`
+    was `38ebc1e` at **2484**, so the count goes from **2484** to **2498**. What holds
+    unchanged is the **+14**, and it is what the criterion is really about: eleven new
+    `test_scenario` results plus three new tests. Both halves are measured rather than
+    inferred - the absolute from `pytest --collect-only -q` and confirmed by CI's
+    `2498 passed`, and the delta from the diff, which adds exactly eleven entries to
+    `SCENARIOS` and exactly three top-level `def test_` functions. A total that is neither
+    the branch's own base plus fourteen nor explained by a rebase still means something
+    unplanned happened.
 35. Nothing is skipped, xfailed or made conditional on the environment, and a grep for
     `skipif`, `pytest.skip` and `xfail` in `tests/` finds nothing new.
 36. `git diff master -- app/` is empty. `SHELL_DIGEST` and `VERSION` in `app/sw.js` are
@@ -463,9 +486,22 @@ fires on the original defect.
 - **Append; do not restructure.** New scenario objects go at the end of the `SCENARIOS` array
   in the harness. New fixtures and helpers go at the end of the file, under a header naming
   issue #57, the way the task 13, 14, 15 and 43 blocks did; module-level function declarations
-  hoist, so a scenario body can call a helper defined below it. The four edits inside existing
-  code are the stub member, the insertion helper, the `guarded()` recorder, the `finish()`
-  invariant and the corrected comment, and nothing else moves.
+  hoist, so a scenario body can call a helper defined below it. Inside existing code, the
+  edits are confined to the stub member, the insertion helper and the two call sites that
+  route through it, the `guarded()` recorder, the `finish()` invariant, the corrected
+  comment, and the plumbing `hideDocumentMembers` needs to reach the stub. Nothing else
+  moves.
+
+  **Corrected 2026-09-07.** That sentence used to read "The four edits inside existing code
+  are the stub member, the insertion helper, the `guarded()` recorder, the `finish()`
+  invariant and the corrected comment, and nothing else moves." It said four and listed
+  five, and the real diff touches more than five: the header comment, the `page()` signature
+  and the `hideDocumentMembers` loop, the `main()` call site, both `guarded()` traps, and
+  both insertion points. The number was counted by eye rather than from a diff, which is a
+  failure this repo has now hit several times in the same shape, so the corrected wording
+  states the property - the edits are confined to these places - and carries no count for a
+  reader to trust. The constraint is not widened: every place now named was already required
+  by criteria 1, 2, 8, 9, 12, 14 and 32.
 - **The concurrent `task-hygiene` branch adds a duplicate-definition check and an
   anchored-pin check over every module in `tests/`.** Check every new name is free in both
   languages before using it, in the harness and in the Python file: scenario names, fixture

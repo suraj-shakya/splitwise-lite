@@ -17,7 +17,8 @@ the file directly rather than through the harness's `substitutions` list, which 
 loads `app/app.js` and `app/api.js`. Applied with the README's recipe, run with
 `node tests/shell_harness.mjs < /dev/null`, reverted with `git checkout -- <file>`.
 
-Taken against `86e817e` on 2026-09-07, on branch `task-57`. A record quotes a
+Taken against `8d0a8f7` on 2026-09-07, on branch `task-57`, and re-measured there after
+the rebase onto `38ebc1e`. A record quotes a
 measurement, so it carries the tree it was measured on: if the anchor below no longer
 matches exactly once, that is the tree to diff against rather than a defect in the
 record. The suite deliberately does not re-verify these anchors; see `README.md` in
@@ -36,8 +37,15 @@ this directory for that reasoning, and for the format and the recipe.
     "the_rows_stay_in_the_order_the_server_sent_them"
   ],
   "survives": [
+    "a_feed_with_nothing_recorded_says_so_and_draws_no_row",
     "an_expense_described_in_markup_reaches_the_screen_as_text",
-    "a_feed_with_nothing_recorded_says_so_and_draws_no_row"
+    "an_expense_with_no_description_still_names_everything_else",
+    "opening_a_row_shows_every_share_and_the_total_they_are_shares_of",
+    "a_payer_who_is_not_sharing_is_said_so_rather_than_added_to_the_split",
+    "a_member_the_roster_does_not_know_reads_as_words_not_as_an_id",
+    "four_people_sharing_one_expense_read_as_two_names_and_a_count",
+    "leaving_the_feed_and_coming_back_draws_each_row_once",
+    "a_created_at_that_is_not_a_date_never_reads_as_nan"
   ],
   "result": "killed"
 }
@@ -57,15 +65,32 @@ this directory for that reasoning, and for the format and the recipe.
 
 Exit 1, two scenarios red of 149.
 
-**Verdict.** Killed, and the survivors are the interesting half. Nine of the eleven new
-scenarios render rows and only two of them notice, because `.expense-row`,
-`.expense-description`, `.expense-payer`, `.expense-figure`, `.expense-split`,
-`.expense-share` and `.expense-share-name` are **all still reachable** through the
-phantom fragment: `descendants()` walks into it as if it were an element, so every
+**Both arrays above are complete, not a sample.** `kills` is every scenario the
+mutation reds, in the whole suite and not only among this task's; `survives` is every
+one of the other scenarios this task added. Nothing else in the suite renders a feed
+row, so no scenario outside this task's eleven can be affected either way. A partial
+list would be indistinguishable from a complete one to somebody re-running this, which
+is this record's own subject.
+
+**Verdict.** Killed, and the survivors are the interesting half. Every scenario in
+`survives` that renders a row passes straight through the phantom fragment, because
+`.expense-row`, `.expense-description`, `.expense-payer`, `.expense-figure`,
+`.expense-split`, `.expense-share` and `.expense-share-name` are **all still
+reachable**: `descendants()` walks into the fragment as if it were an element, so every
 class selector matches and every text assertion passes. `expense rows: expected 1, got
-0` stayed green in the row scenario. That is finding 2 measured rather than argued, and
-it is why criterion 2 asks for node positions and for the absence of the tag rather
-than for a selector that matches.
+0` stayed green even in the row scenario that did red. Only the two in `kills` notice,
+and they notice through position rather than through content: the row scenario pins
+`firstChild` and the first child of `#feed-list`, and the order scenario's whole subject
+is the direct-children sequence, which three collapsing to one destroys. That is finding
+2 measured rather than argued, and it is why criterion 2 asks for node positions and for
+the absence of the tag rather than for a selector that matches.
+
+The count that carries the argument is the ratio, and it is in the arrays rather than in
+this sentence: an earlier draft of this paragraph said "nine of the eleven render rows",
+conflating the ten that render a row with the nine that survive. Both verifiers caught
+it. A miscounted sentence about a mutation, in the document whose purpose is that
+sentences about mutations are not to be trusted, is worth leaving a note about rather
+than silently correcting.
 
 **One nuance the run corrected.** Finding 2 also predicted that the `textContent`
 getter would read the leftover node as `node.text` and yield `undefined`. It does not,

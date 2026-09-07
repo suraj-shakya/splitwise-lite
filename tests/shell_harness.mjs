@@ -63,9 +63,11 @@
    Exit status is 0 when every requested scenario passed, 1 when one or more failed,
    and 2 for a harness error: unparseable stdin, an anchor that did not match exactly
    once, a hideDocumentMembers name the document stub does not define, a missing
-   file, a script that threw while loading, or a run that would not quiesce. The 1 and 2 distinction is not decoration: the mutant tests assert exit 1
-   so that a substitution which broke a file into a syntax error cannot be mistaken
-   for a killed mutant. */
+   file, a script that threw while loading, or a run that would not quiesce. The 1
+   and 2 distinction is not decoration: the mutant tests assert exit 1 so that a
+   substitution which broke a file into a syntax error cannot be mistaken for a
+   killed mutant, and the hideDocumentMembers test asserts exit 1 so that a broken
+   configuration cannot be mistaken for a caught defect. */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
