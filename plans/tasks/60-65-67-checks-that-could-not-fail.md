@@ -275,12 +275,23 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
     > states it in the past tense with its provenance: "Measured on `7bf518c` (2026-09-07),
     > `money.py:148` said ...". The elements the criterion requires are unchanged; only the tense
     > and the date are added. The reason is rule (d)'s own defect: the claim was undated, present
-    > tense, and duplicated across this criterion, `.claude/rules/testing.md` rule (a) and
-    > `unanchored_pin_message`, while the only test on it asserts the substring against a message
-    > the same file builds. Were `money.py:148` reworded, three documents would become false and
-    > nothing would go red. Pinning it against live source is not available: criterion 2 forbids
-    > importing `splitwise_lite`, which is the right constraint, because the module must run when
-    > the package will not import. A date is what a claim that cannot be pinned carries instead.
+    > tense, and duplicated across **four** places — this criterion, criterion 40a,
+    > `.claude/rules/testing.md` rule (a) and `unanchored_pin_message` — while the only test on it
+    > asserts the substring against a message the same file builds. Were `money.py:148` reworded,
+    > four documents would become false and nothing would go red.
+    >
+    > A pin against live source **is available and was declined**, which is a different sentence
+    > from the one this note first gave. Criterion 2 forbids *importing* `splitwise_lite`; it does
+    > not forbid reading it, and
+    > `read(REPO / "src" / "splitwise_lite" / "money.py")` would pin the claim with no import at
+    > all, in a module that already reads `.claude/`, `plans/` and `tests/` as text and asserts
+    > substrings against them. It was declined because it would be this module's first reach into
+    > `src/`, and a text pin on another module's message is a coupling this file does not want:
+    > the two checks here are about the shape of tests, and `money.py`'s wording is not their
+    > business. So a date is what this claim carries instead — not because pinning was impossible,
+    > but because it was judged the wrong trade. Saying "not available" would have been the
+    > convenient reason rather than the true one, which is the distinction rule (a) is entirely
+    > about.
 
 22. `test_every_message_pin_is_anchored_or_says_why` is parametrised over `TEST_SOURCES` with the
     POSIX path as the id, and reports every offending pin in that file in one failure.
@@ -444,9 +455,17 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
        Lead with `^` and spell enough of the message that no other exception the same call can
        raise would match it. Scar: on PR #62 a test written to prove the currency is validated
        before the total stayed green with the guard deleted, and the first proposed repair,
-       `match="currency must be a Currency"`, had the same defect, because `Money` says
-       `Money currency must be a Currency, ...`. A deliberate substring pin carries
+       `match="currency must be a Currency"`, had the same defect, because as measured on
+       `7bf518c` (2026-09-07) `money.py:148` said `Money currency must be a Currency, ...`.
+       A deliberate substring pin carries
        `# unanchored: <why>`, and `tests/test_suite_integrity.py` refuses one without a reason.
+
+       > **Corrected 2026-09-07, after the first review of PR #69.** This sub-criterion used to
+       > read "because `Money` says `Money currency must be a Currency, ...`", present tense
+       > about live source and undated. It is the fourth copy of that sentence, and the note on
+       > criterion 21 originally enumerated only three, so this document specified rule (a) in
+       > the tense the same review had just corrected everywhere else. Dated here to match the
+       > rule, `unanchored_pin_message` and criterion 21. Nothing else about the rule changes.
     b. **A test function defined twice in one module deletes the first one.** Python rebinds
        silently and pytest collects only what the module ends up holding. Scar: on PR #64 four
        parametrised cases stopped running with the suite green, found only because somebody
@@ -713,8 +732,8 @@ records the tree its messages were taken against, since a record quotes a measur
 measurement carries its provenance.
 
 **The Size estimate was out by about three times.** That section budgets "roughly 250 lines" for
-`tests/test_suite_integrity.py`; it is 803 lines at `7bf518c` plus this review round. The excess
-is mostly the synthetic source
+`tests/test_suite_integrity.py`; it is **726 lines at `7bf518c`** and **803 at `4db1010`** after
+the review round. The excess is mostly the synthetic source
 constants and the two message-element tests that criteria 6 and 21 mandate, so it is spec-driven
 rather than sprawl, but anybody budgeting from that section should treat 250 as low.
 
