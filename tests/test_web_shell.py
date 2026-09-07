@@ -799,11 +799,9 @@ def test_nothing_in_the_shell_takes_the_break_rule_back() -> None:
     """
     css = styles()
     block = without_comments(css)
-    spacing = re.findall(r"white-space:\s*([a-z-]+)", block)
-    assert spacing == ["nowrap", "nowrap"], (
-        f"app/styles.css declares white-space {len(spacing)} times, with values "
-        f"{spacing}. Exactly two are allowed, both `nowrap`."
-    )
+    # The selectors first and the count second, deliberately. A third `nowrap` fails
+    # both, and the message worth reading is the one that names the selector, so that
+    # is the assertion that fires.
     refusing = sorted(
         head.strip()
         for head in re.findall(r"([^{}]*)\{[^}]*white-space:\s*nowrap", block)
@@ -814,6 +812,12 @@ def test_nothing_in_the_shell_takes_the_break_rule_back() -> None:
         "shape. Anything else carrying `white-space: nowrap` cannot use the inherited "
         "`overflow-wrap: anywhere`, because nowrap leaves it no soft wrap opportunity "
         "to take, which is the form the PR #56 defect can still take."
+    )
+    spacing = re.findall(r"white-space:\s*([a-z-]+)", block)
+    assert spacing == ["nowrap", "nowrap"], (
+        f"app/styles.css declares white-space {len(spacing)} times, with values "
+        f"{spacing}. Exactly two are allowed, both `nowrap`, on the two selectors "
+        "above."
     )
     revoked = re.findall(r"overflow-wrap:\s*normal", block)
     assert not revoked, (
