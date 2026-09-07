@@ -7611,6 +7611,133 @@ const SCENARIOS = [
         'the row reads ' + JSON.stringify(row.textContent)
       );
     }
+  },
+  {
+    /* The only place this screen composes prose about people. Three or fewer are all
+       named; four or more become the first two and a count, so six hundred-character
+       display names cannot run the line off a 320px screen. Counting participants is
+       not money arithmetic: no cent value is touched, and a zero cent share would be
+       counted like any other. */
+    name: 'four_people_sharing_one_expense_read_as_two_names_and_a_count',
+    async run(page) {
+      await onFeed(
+        page,
+        { currency: 'AUD', expenses: [FEED_HOUSE_SHOP] },
+        FEED_FOUR_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      /* The whole line, so a count appended to a list of all four names fails here as
+         loudly as a count that is wrong. */
+      page.is(
+        onlyOne(rows[0], '.expense-split').textContent,
+        'Split across Ali, Sam and 2 others',
+        'the split line'
+      );
+      /* And the detail still names everybody: the summary line is shortened, the
+         shares are not. */
+      const summary = summaryIn(rows[0]);
+      await page.dispatch(summary, 'click');
+      page.same(
+        sharesIn(regionFor(page, summary)),
+        [['Ali', '10.00'], ['Sam', '10.00'], ['Cass', '10.00'], ['Dev', '10.00']],
+        'the shares'
+      );
+    }
+  },
+
+  {
+    /* Each load replaces the whole list, so a reload never duplicates a row: a feed
+       that loaded once and never again would show a stale list the moment somebody
+       records an expense, and a feed that appended would show every expense twice.
+       Expansion resets with the list, which is accepted and is asserted here rather
+       than assumed. */
+    name: 'leaving_the_feed_and_coming_back_draws_each_row_once',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_MILK] }, FEED_ROSTER);
+      /* The route change enters the balances screen, so its own two reads are part of
+         this scenario's cost, and coming back re-reads the ledger and the roster. */
+      page.expectRequests(
+        FEED_ENTRY.concat([
+          'GET /api/members',
+          'GET /api/balances',
+          'GET /api/expenses',
+          'GET /api/members'
+        ])
+      );
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      await page.dispatch(summaryIn(rows[0]), 'click');
+      page.is(
+        summaryIn(rows[0]).getAttribute('aria-expanded'),
+        'true',
+        'aria-expanded before leaving'
+      );
+
+      await page.goTo('#/balances');
+      await page.goTo('#/feed');
+
+      const again = feedRows(page, 1, 'expense rows after coming back');
+      if (again === null) {
+        return;
+      }
+      page.is(page.el('feed-list').childNodes.length, 1, 'children of #feed-list');
+      /* The region id feedDetail derives from the expense id, spelled out rather than
+         rebuilt from the code that builds it. Twice in one document would be two rows
+         claiming one id, which is what an appended list looks like from here. */
+      page.is(
+        page.query('#expense-detail-exp-1').length,
+        1,
+        'regions carrying the id derived from the expense id'
+      );
+      const rebuilt = summaryIn(again[0]);
+      page.is(rebuilt.getAttribute('aria-expanded'), 'false', 'aria-expanded, rebuilt');
+      page.is(regionFor(page, rebuilt).hidden, true, 'the region, rebuilt');
+      page.is(indicatorIn(rebuilt).textContent, '+', 'the indicator, rebuilt');
+      feedShows(page, 'list', 'the feed after coming back');
+    }
+  },
+
+  {
+    /* created_at carries six fractional digits, which is more than the ECMAScript
+       date-time grammar requires an engine to accept, so an engine that refuses it
+       must get a fallback rather than NaN. A money screen reading NaN or Invalid Date
+       is worse than one reading the raw characters, and this is the branch nothing had
+       ever run. */
+    name: 'a_created_at_that_is_not_a_date_never_reads_as_nan',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_UNDATED] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      /* The first ten characters, which is what both spellings fall back to. The
+         fixture is longer than ten, so a fallback that passed the value straight
+         through would fail here. */
+      const stamp = onlyOne(row, '.expense-date');
+      page.is(stamp.textContent, 'not a date', 'the visible date');
+      page.is(onlyOne(row, '.expense-when').textContent, 'not a date', 'the detail date');
+      /* And the raw value survives in the markup whatever the visible text became. */
+      page.is(stamp.getAttribute('datetime'), FEED_NOT_A_DATE, 'the datetime attribute');
+      page.ok(
+        row.textContent.indexOf('NaN') === -1,
+        'the row reads ' + JSON.stringify(row.textContent)
+      );
+      page.ok(
+        row.textContent.indexOf('Invalid Date') === -1,
+        'the row reads ' + JSON.stringify(row.textContent)
+      );
+    }
   }
 ];
 

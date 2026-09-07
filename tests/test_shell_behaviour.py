@@ -198,6 +198,9 @@ SCENARIOS = [
     "opening_a_row_shows_every_share_and_the_total_they_are_shares_of",
     "a_payer_who_is_not_sharing_is_said_so_rather_than_added_to_the_split",
     "a_member_the_roster_does_not_know_reads_as_words_not_as_an_id",
+    "four_people_sharing_one_expense_read_as_two_names_and_a_count",
+    "leaving_the_feed_and_coming_back_draws_each_row_once",
+    "a_created_at_that_is_not_a_date_never_reads_as_nan",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied
