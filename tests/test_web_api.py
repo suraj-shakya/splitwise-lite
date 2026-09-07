@@ -411,6 +411,11 @@ def test_no_response_carries_a_cors_header(client, path: str) -> None:
 
 
 # --- Helpers shared with the later sections ---------------------------------
+#
+# tests/test_end_to_end.py imports ten of the names in this file by name, in one
+# import statement at the top of that module. Renaming one of them is an
+# ImportError there at collection, not a silent loss of coverage. Rename both
+# or neither.
 
 
 def csrf_token(client) -> str:
