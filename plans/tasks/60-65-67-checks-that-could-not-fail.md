@@ -413,9 +413,18 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
 
 ### The rules, which is the destination all three share
 
-39. `.claude/rules/testing.md` keeps its four existing bullets **verbatim and in their existing
+39. `.claude/rules/testing.md` keeps its three existing bullets **verbatim and in their existing
     order**, and its front matter `paths` list gains `"plans/mutations/**"` alongside the two
     entries it has.
+
+    > **Corrected 2026-09-07, during implementation.** This criterion used to say "its four
+    > existing bullets". The file holds three. It was written from a line count rather than a
+    > bullet count: the first bullet wraps across two physical lines, so lines 7 to 10 of the
+    > file are four lines and three bullets. Measured on the commit this task branches from,
+    > `72b86c0`: the file is 317 bytes and `grep -c '^- ' .claude/rules/testing.md` returns 3.
+    > The three are the `uv run python -m pytest` bullet, the exact-integer settle-up bullet
+    > and the never-skip-or-xfail bullet. Nothing else about the criterion changes: every
+    > existing bullet is still kept verbatim and in its existing order.
 40. It gains a section holding six rules, each stated as the rule in bold followed by the defect
     that produced it, because a rule without its scar is one nobody believes:
     a. **Message pins are anchored.** `pytest.raises(match=)` is an `re.search`, not a full match.
@@ -444,9 +453,19 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
        `(mtime, size)`, so two same-size mutations within one second run stale bytecode. Scar: a
        false mutation result on PR #62 that looked exactly like a genuine finding. The JavaScript
        harness is immune, because it substitutes into source text at run time and caches nothing.
-41. `test_the_testing_rules_keep_the_four_they_had` asserts the four existing bullets are present
-    as four exact strings. Nothing is removed from that file by this task or a later one without
-    this test going red.
+41. `test_the_testing_rules_keep_the_three_they_had` asserts the three existing bullets are
+    present as three exact strings. Nothing is removed from that file by this task or a later one
+    without this test going red.
+
+    > **Corrected 2026-09-07, during implementation.** This criterion used to name the test
+    > `test_the_testing_rules_keep_the_four_they_had` and to ask for "four exact strings", for
+    > the same line-versus-bullet reason recorded under criterion 39. The name is corrected
+    > along with the count rather than kept for continuity, because a test named
+    > `..._keep_the_four_they_had` whose body asserts three strings is a test whose name
+    > overclaims its body, and it would have sat inside the very module this task adds to stop
+    > tests whose names overclaim their bodies. It would also have been invisible: three exact
+    > strings all present, the suite green, and the only tell a word in a function name. That
+    > is the defect of #67 in miniature, so the name moves.
 42. `test_the_testing_rules_name_the_mechanisms_that_enforce_them` asserts the file contains the
     strings `tests/test_suite_integrity.py`, `plans/mutations/`, `# unanchored:`,
     `PYTHONDONTWRITEBYTECODE`, `re.search` and `match=r"^`. A rule whose mechanism was renamed or
