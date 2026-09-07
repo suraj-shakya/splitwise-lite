@@ -875,6 +875,8 @@ named is checkable by reading a file or running the suite.
     `.balances-action-status`, and both carry `overflow-wrap: break-word`, so
     `test_every_line_that_carries_a_name_can_break_a_long_one` passes over the widened list.
     `.balances-figure` is still the only selector in the block carrying `white-space: nowrap`.
+
+    > **Stale 2026-09-07 for issue #58**, per `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`: `CARRIES_A_NAME` and `test_every_line_that_carries_a_name_can_break_a_long_one` no longer exist, and neither class carries `overflow-wrap` of its own; one `overflow-wrap: anywhere` on `body` covers both, `test_one_declaration_lets_every_long_word_in_the_shell_break` and `test_no_balances_rule_declares_a_break_of_its_own` are what enforce that, and the `white-space: nowrap` sentence widened from the block to the whole file in `test_nothing_in_the_shell_takes_the_break_rule_back`.
 63. No `animation`, `transition` or `@keyframes` is added, no `row-reverse`,
     `column-reverse`, `order` or absolute positioning, and no `content:` declaration, so
     `test_the_balances_block_adds_no_animation` and
