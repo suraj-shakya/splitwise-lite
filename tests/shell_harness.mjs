@@ -7890,11 +7890,15 @@ const WHEN = '2026-09-04T08:00:00.000000+00:00';
    relative label, or a second format. A hard-coded string could not, because the
    day a given instant falls on depends on the machine running the suite.
 
-   Reading the feed's own spelling of the same instant would be the independent
-   check, and it is not available: feedRender calls document.createDocumentFragment,
-   which this stub does not fake, so no scenario in this repo has ever rendered a
-   feed row. Issue #14's task file forbids widening the stub for anything but the two
-   properties it names, so that stays for whoever covers the feed. */
+   Corrected by issue #57, which fakes document.createDocumentFragment and renders
+   feed rows: this comment used to say that reading the feed's own spelling of the
+   same instant would be the independent check and was unavailable because no scenario
+   had ever rendered a row. The rows render now, and the check is still not available,
+   for a different and permanent reason. The feed's own spelling is feedDate
+   (app/app.js:526), and the drill-down rows call feedDate too (app/app.js:1898, :2200
+   and :2425), so comparing one to the other compares f(x) to f(x). spelledDate stays:
+   a second copy of the rule is a weaker oracle than an independent one and a stronger
+   one than a tautology. No assertion here is switched to a feed-derived date. */
 const SPELLED_MONTHS = [
   'Jan',
   'Feb',

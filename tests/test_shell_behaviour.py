@@ -285,10 +285,31 @@ MUTANT_F = {
     "replace": "if (false) {",
 }
 
+# Mutant G: the row names whoever recorded the expense instead of whoever paid for
+# it. On a shared ledger the payer is who is owed the money, so this is the wrong
+# person being owed, said out loud on the screen everybody opens the app on. It is one
+# token, of the kind a later task makes while tidying two nearby field reads, and it
+# survived everything in this repo until now: tests/test_feed_screen.py reads the
+# static committed document and cannot see a rendered row, and no scenario rendered
+# one, because feedRender's document.createDocumentFragment threw and loadFeed's
+# .then(done, done) absorbed the throw. The row fixture therefore has payer_id
+# different from created_by, and this mutant is what proves the new scenarios kill
+# something in code that was dead before this task.
+MUTANT_G = {
+    "file": "app/app.js",
+    "find": "'Paid by ' + feedNameFor(names, entry.payer_id)",
+    "replace": "'Paid by ' + feedNameFor(names, entry.created_by)",
+}
+
 REFUSED = "a_refused_sign_in_tells_the_person_why"
 # Named, and unrelated to either mutation: a mutant has to leave a working app with
 # one specific behaviour broken, not a smoking crater.
 UNRELATED = "an_unknown_hash_is_replaced_not_pushed"
+# The two feed scenarios named from more than one place below. THE_EMPTY_FEED is the
+# one that never reaches feedRender, so it is the named survivor of anything that
+# breaks the render path.
+THE_ROW = "a_feed_row_names_the_payer_the_amount_and_what_it_was_for"
+THE_EMPTY_FEED = "a_feed_with_nothing_recorded_says_so_and_draws_no_row"
 
 
 def node() -> str:
@@ -551,6 +572,23 @@ def test_mutant_f_a_resume_that_hands_one_persons_draft_to_another_is_killed() -
     assert found[THE_DRAFT]["passed"], found[THE_DRAFT]["failures"]
 
 
+def test_mutant_g_a_row_that_names_the_recorder_rather_than_the_payer_is_killed() -> None:
+    found = killed(MUTANT_G)
+    assert not found[THE_ROW]["passed"]
+    messages = " ".join(found[THE_ROW]["failures"])
+    # The right failure, and it is the money one: the row names Sam, who typed the
+    # expense in, where it must name Cass, who paid for it and is owed for it.
+    assert "Paid by Cass" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # A working app with one line of one screen wrong, not a crater: the empty feed,
+    # which never reaches feedRender, is untouched.
+    assert found[THE_EMPTY_FEED]["passed"], found[THE_EMPTY_FEED]["failures"]
+    # And app/api.js is not where a display name is chosen, so the mutation lands in
+    # one file and leaves the client exactly as it ships.
+    loaded = loaded_under(MUTANT_G)
+    assert loaded["app/api.js"] == (REPO / "app" / "api.js").read_text(encoding="utf-8")
+
+
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------
 
 
@@ -603,10 +641,6 @@ def test_hiding_a_document_member_the_stub_does_not_define_refuses_the_run() -> 
     assert completed.stdout == ""
     assert typo in completed.stderr
     assert "hideDocumentMembers" in completed.stderr
-
-
-THE_ROW = "a_feed_row_names_the_payer_the_amount_and_what_it_was_for"
-THE_EMPTY_FEED = "a_feed_with_nothing_recorded_says_so_and_draws_no_row"
 
 
 def test_hiding_the_fragment_maker_shows_what_the_feed_was_hiding() -> None:
