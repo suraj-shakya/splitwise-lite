@@ -3,6 +3,8 @@ paths:
   - "tests/**"
   - "**/test_*.py"
   - "plans/mutations/**"
+  - "plans/tasks/**"
+  - "plans/*.md"
 ---
 
 - Tests are pytest, run with `uv run python -m pytest` (plain `uv run pytest` fails on
@@ -10,10 +12,10 @@ paths:
 - Test settle-up with exact integer assertions, never approximate
 - Never mark a test skipped or xfail to make the suite green
 
-## Six rules, each with the defect that produced it
+## Seven rules, each with the defect that produced it
 
 A rule without its scar is one nobody believes, so each of these carries the failure it
-was learned from. All six are about one thing: a check that reported success without
+was learned from. All seven are about one thing: a check that reported success without
 exercising what it named.
 
 - **Message pins are anchored.** `pytest.raises(match=)` is an `re.search`, not a full
@@ -62,3 +64,28 @@ exercising what it named.
   mutation result on PR #62 that looked exactly like a genuine finding. The JavaScript
   harness is immune, because it substitutes into source text at run time and caches
   nothing.
+- **A manual check names the element it measures, and comes with a way to make it
+  fail.** "No horizontal scroll" is not a check; `el.scrollWidth > el.clientWidth` over
+  a named element is. And a sweep that cannot be made to fail on demand is not
+  evidence, so write its positive control down beside it. Scar: `app/styles.css` sets
+  `overflow: hidden` on `body` and the element that scrolls is `.content`, so the root
+  element's scrollable area can never grow and
+  `document.documentElement.scrollWidth === clientWidth` is constant rather than weak.
+  Four task specs asked for exactly that comparison, in a browser, as the test for
+  horizontal overflow. The PR #56 branch then shipped three name-bearing classes with
+  no break rule at all, and every one of those criteria would have gone green on it,
+  which is the same defect as an unanchored pin one level up: the check reported
+  success in precisely the case it was written to catch. `tests/test_suite_integrity.py`
+  refuses `documentElement` in any document under `plans/`, in `README.md` or in
+  `CLAUDE.md` unless it sits inside a blockquote carrying a **date**, so a dated
+  correction note may quote the old wording and a new criterion cannot be written with
+  it. The date is the exemption, and that is the second scar on this rule: the first
+  version of that check accepted any line starting with `>`, which is one character a
+  criterion can write next to itself, so the check had a hole where its own comment
+  claimed a hatch. The exemption now costs placing your criterion inside somebody's
+  dated note, where it reads as part of that note. That is weaker than the reason
+  `# unanchored:` demands, and unlike that hatch it enforces no minimum prose, so do not
+  describe the two as equals; it is a placement cost rather than a written
+  justification, and it is enough. The positive control for the corrected sweep is
+  `document.body.style.overflowWrap = 'normal'` in the console: re-run the sweep and it
+  must find something.

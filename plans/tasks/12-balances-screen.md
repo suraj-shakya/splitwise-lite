@@ -370,7 +370,24 @@ side is already pinned by task 9a's tests, named in the criteria, and this task 
 - All new CSS is appended to `app/styles.css` in one block, every selector prefixed
   `.balances-`, and no existing rule is edited.
 - At 320, 360 and 390 CSS px wide, with a 40-character display name in the roster, there is
-  no horizontal scroll: `document.documentElement.scrollWidth` equals `clientWidth`.
+  no horizontal scroll: `el.scrollWidth > el.clientWidth` is false for `.content`, for
+  every element inside it, and for each rendered row container, and the sweep records how
+  many elements it examined.
+
+  > **Corrected 2026-09-07 for issue #58**, per
+  > `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`. This line used
+  > to read "there is no horizontal scroll: `document.documentElement.scrollWidth` equals
+  > `clientWidth`". In this shell that comparison is constant rather than weak:
+  > `app/styles.css` sets `overflow: hidden` on `body`, and the element that scrolls is
+  > `.content`, which carries `overflow-y: auto`. The viewport's scrolling area is
+  > propagated from the root element and the root clips, so nothing inside `.content` can
+  > extend the root's scrollable area and the equality holds whether or not content
+  > overflows. Running it in a browser would have gone green on the PR #56 defect, which
+  > was three of this screen's own classes shipping with no break rule. There is no record
+  > of anybody ever running it, so the false assurance was potential rather than realised.
+  > The `40-character` name in this line is also short of the schema's cap: `display_name`
+  > is capped at 100 characters in `src/splitwise_lite/store.py`, not 40, and the sweep in
+  > issue #58's criterion 33 uses 100.
 - A long display name wraps onto another line. It is never clipped, never ellipsised and
   never overlapped by the amount.
 - An amount never breaks across lines and never wraps mid-number.

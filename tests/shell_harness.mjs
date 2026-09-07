@@ -1433,6 +1433,18 @@ const ADD_SUM_REFUSED = 'the shares add up to 9.50, but the total is 10.00';
    was typed, with money.format_amount deciding the 0.00. */
 const ADD_ZERO_REFUSED = 'the amount must be more than zero, but it is 0.00';
 
+/* web.py's own refusal for a split naming somebody who is not in the group: the other
+   code this screen prints, and the one PR #62's reviewer pointed at. #39 justified
+   printing every server sentence here by auditing invalid_split and finding every
+   reachable one id-free, which covers one code while the screen shows all of them.
+   Issue #61 settled the whole 4xx surface instead, so this sentence names the field
+   and not the member, and the scenario below renders it verbatim.
+
+   This literal is a fixture with a producer, and
+   tests/test_web_api.py::test_the_shell_harness_malformed_fixture_is_the_sentence_the_api_sends
+   reads it out of this file and compares it against a live 400. */
+const ADD_MALFORMED = 'a split names a member id that is not a member of this group';
+
 /* Every body spelled out rather than rebuilt from the values a scenario typed in: a
    request whose payload is asserted against a copy of the code that built it asserts
    nothing. Four keys, in this order, and never currency, id, created_at, created_by
@@ -2784,6 +2796,49 @@ const SCENARIOS = [
         'GET /api/session',
         'GET /api/members',
         { method: 'POST', path: '/expenses', body: ADD_UNEVEN_SHORT }
+      ]);
+    }
+  },
+
+  {
+    /* The same rendering, on the other code this screen can be refused with. The
+       screen prints what the server said with no rewording, no truncation and no
+       per-code substitution, so `malformed_request` reaches #add-error-server the way
+       `invalid_split` above it does. What makes that safe is a property of the server
+       rather than of this screen: after issue #61 no message this repo sends with a
+       4xx status carries a member id, a user id, a group id, an expense id, a
+       settlement id or an event id, and tests/test_error_messages.py enumerates every
+       4xx raise site in the package and drives every reachable one to keep it that
+       way. This is that sentence going through the shipped api.js and app.js into the
+       shipped index.html, under Node, with nothing in between reformatting it. */
+    name: 'a_save_refused_as_malformed_shows_the_servers_sentence_with_no_id',
+    async run(page) {
+      await addBoot(page, ADD_ROSTER);
+      page.respond(
+        'POST',
+        '/expenses',
+        failure(400, CODES.malformedRequest, ADD_MALFORMED)
+      );
+      page.el('add-amount').value = '12.50';
+      await page.dispatch(page.el('add-form'), 'submit');
+      appIsUp(page, 'a save refused as malformed');
+      page.is(page.el('add-error').hidden, false, '#add-error');
+      page.is(
+        page.el('add-error-server').textContent,
+        ADD_MALFORMED,
+        '#add-error-server text'
+      );
+      page.same(addErrorsShown(page), [false, false, true], 'the three error children');
+      page.is(page.el('add-saved').hidden, true, '#add-saved');
+      /* The whole screen, not just the one node: the sentence is on it and no member
+         id is, and every id in ADD_ROSTER is spelled 'mem-N'. */
+      const shown = page.el('screen-add').textContent;
+      page.is(shown.indexOf(ADD_MALFORMED) !== -1, true, "the server's own sentence");
+      page.is(shown.indexOf('mem-'), -1, 'a member id as visible text');
+      page.expectRequests([
+        'GET /api/session',
+        'GET /api/members',
+        { method: 'POST', path: '/expenses', body: ADD_EQUALLY }
       ]);
     }
   },
@@ -8264,11 +8319,21 @@ function spelledDate(when) {
   return at.getDate() + ' ' + SPELLED_MONTHS[at.getMonth()] + ' ' + at.getFullYear();
 }
 
-/* The sentence _read_debt composes for its own 400, which names a member id and is
-   therefore the one this screen may never render. Spelled out here rather than
-   imported, and asserted absent from the screen character for character. */
+/* The sentence _read_debt composes for its own 400. It named the member id it
+   refused until issue #61, which reworded every 4xx body in this repo to name the
+   field rather than the value; here that is the path position, `debtor` or
+   `creditor`, which is a path-parameter name and not an identifier. So the reason
+   this screen withholds it has moved: not because it carries an id, but because this
+   screen shows one fixed sentence for all six kinds of failure in each of its three
+   regions. Whether that policy should change now is issue #61's follow-up, and the
+   comments on BALANCES_FAILED, BALANCES_NOT_RECORDED and BALANCES_NOT_ANSWERED in
+   app/app.js still give the old reason.
+
+   Spelled out here rather than imported, asserted absent from the screen character
+   for character, and pinned to its producer by
+   tests/test_web_api.py::test_the_shell_harness_debt_fixture_is_the_sentence_the_api_sends. */
 const MALFORMED_DEBT =
-  "a debt path names a member id that is not a member of this group: 'mem-9'";
+  'a debt path names a debtor that is not a member of this group';
 
 /* The commonest fixture: one payment settling one debt directly, opened, with the
    one debt row inside it left closed for the scenario to open. `answer` is the
@@ -8423,10 +8488,14 @@ const A_THIRD_MEMBER = {
 const THIRD_SIGN_IN_BODY = '{"email":"cass@example.com","password":"letmein"}';
 
 /* The sentence _create_settlement composes for an id that is not in the roster. It
-   names a member id, so it is the one this screen may never render, and a scenario
-   asserts it is absent from the screen character for character. */
+   named that id until issue #61 and now names the payload key the caller wrote, so
+   what keeps it off this screen is the screen's own one-sentence-per-region policy
+   rather than the id: see the note on MALFORMED_DEBT above. A scenario asserts it is
+   absent from the screen character for character, and
+   tests/test_web_api.py::test_the_shell_harness_settlement_fixture_is_the_sentence_the_api_sends
+   holds it against a live 400. */
 const MALFORMED_SETTLEMENT =
-  "a settlement body names a to_member_id that is not a member of this group: 'mem-9'";
+  'a settlement body names a to_member_id that is not a member of this group';
 
 /* The seven keys _settlement_view sends, born pending because no decision references
    it and this task appends none. */

@@ -257,8 +257,11 @@ def test_split_by_weight_accepts_a_zero_weight() -> None:
 
 
 def test_split_by_weight_rejects_a_negative_weight() -> None:
-    with pytest.raises(InvalidSplit):
+    # The refusal names the field and not the member: a 4xx body carries no member
+    # id, and this guard is one of the twelve sites issue #61 reworded.
+    with pytest.raises(InvalidSplit, match=r"^every weight must be zero or positive$") as raised:
         split_by_weight(1000, {ALI: -1, BO: 2}, currency=AUD)
+    assert ALI not in str(raised.value)
 
 
 def test_split_by_weight_rejects_weights_that_all_sum_to_zero() -> None:
@@ -331,8 +334,13 @@ def test_split_exact_rejects_amounts_that_overshoot() -> None:
 
 
 def test_split_exact_rejects_a_negative_amount() -> None:
-    with pytest.raises(InvalidSplit):
+    # Same guard, the other caller. Its integer used to be spelled into the message,
+    # where it was raw cents in this mode and a weight in the other, so it is dropped
+    # rather than formatted: no member id and no bare figure.
+    with pytest.raises(InvalidSplit, match=r"^every amount must be zero or positive$") as raised:
         split_exact(1000, {ALI: -100, BO: 1100}, currency=AUD)
+    assert ALI not in str(raised.value)
+    assert "100" not in str(raised.value)
 
 
 def test_split_exact_rejects_an_empty_mapping() -> None:
@@ -398,8 +406,11 @@ def test_split_equally_rejects_an_empty_member_list() -> None:
 
 
 def test_split_equally_rejects_a_repeated_member() -> None:
-    with pytest.raises(InvalidSplit, match=r"^member_ids names a member more than once"):
+    # The refusal names the payload key it is about and not the ids it was given:
+    # the whole list used to be spelled into a 400 body.
+    with pytest.raises(InvalidSplit, match=r"^member_ids names a member more than once") as raised:
         split_equally(1000, [ALI, BO, ALI], currency=AUD)
+    assert ALI not in str(raised.value)
 
 
 def test_split_equally_rejects_an_empty_member_id() -> None:

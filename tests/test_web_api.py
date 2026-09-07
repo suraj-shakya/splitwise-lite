@@ -2926,9 +2926,13 @@ def test_an_unusable_amount_carries_the_domain_layers_own_message(
     assert expense_count(seeded) == 0
 
 
-def test_a_payer_who_is_not_a_member_is_refused_by_name(app, seeded: Path) -> None:
+def test_a_payer_who_is_not_a_member_is_refused_without_naming_them(
+    app, seeded: Path
+) -> None:
     # Decided from the roster before any write, so no foreign key violation is
-    # ever reached.
+    # ever reached. The refusal names the payload key and not the value: the field
+    # is a complete locator when the request named exactly one payer, and no 4xx
+    # body this repo sends carries a member id.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     response = add_expense(
@@ -2940,14 +2944,17 @@ def test_a_payer_who_is_not_a_member_is_refused_by_name(app, seeded: Path) -> No
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert "'a-stranger'" in body["error"]["message"]
+    assert "payer_id" in body["error"]["message"]
+    assert "a-stranger" not in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
 @pytest.mark.parametrize("mode", ["equal", "weight", "exact"])
-def test_a_split_naming_someone_outside_the_group_is_refused_by_name(
+def test_a_split_naming_someone_outside_the_group_is_refused_without_naming_them(
     app, seeded: Path, mode: str
 ) -> None:
+    # All three modes, because the roster check is one branch of one helper that all
+    # three reach, and the sentence it composes names the field for every one of them.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     splits = {
@@ -2964,7 +2971,8 @@ def test_a_split_naming_someone_outside_the_group_is_refused_by_name(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert "'a-stranger'" in body["error"]["message"]
+    assert "member id" in body["error"]["message"]
+    assert "a-stranger" not in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
@@ -2983,6 +2991,8 @@ def test_a_split_naming_a_member_twice_is_refused_by_the_resolver(
     body = response.get_json()
     assert body["error"]["code"] == "invalid_split"
     assert "more than once" in body["error"]["message"]
+    # The resolver used to spell the whole member_ids list into this body.
+    assert members["Sam"] not in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
@@ -3166,6 +3176,95 @@ def test_the_shell_harness_zero_amount_fixture_is_the_sentence_the_api_sends(
     assert response.get_json()["error"]["code"] == "invalid_split"
     assert declared.group(1) == response.get_json()["error"]["message"]
     assert expense_count(seeded) == 0
+
+
+def harness_constant(name: str) -> str:
+    """The sentence ``tests/shell_harness.mjs`` declares as ``const name``.
+
+    One reader for every fixture of this kind, tolerant of the two shapes the harness
+    writes: the literal on the same line as ``const NAME =`` or on the next one, in
+    single quotes or double. A pin should not have to know how its fixture happens to
+    be wrapped, and rewrapping one should not red a test that is about a sentence.
+    """
+    import re
+
+    source = (REPO / "tests" / "shell_harness.mjs").read_text(encoding="utf-8")
+    declared = re.search(
+        rf"^const {re.escape(name)} =[ \n]+(['\"])(.*)\1;$", source, re.MULTILINE
+    )
+    assert declared is not None, (
+        f"tests/shell_harness.mjs declares no {name}, or declares it in a shape this "
+        "helper cannot read. It reads `const NAME = '...';` and the same with the "
+        "literal on the next line, in either quote."
+    )
+    return declared.group(2)
+
+
+# Three more fixtures with a producer, pinned the way ADD_SUM_REFUSED and
+# ADD_ZERO_REFUSED are above. Two of the three were the live instance of
+# .claude/rules/testing.md rule (d) that issue #61 found: MALFORMED_DEBT and
+# MALFORMED_SETTLEMENT were each both the stubbed response and the expected value,
+# with nothing holding either against a live body. Both scenarios that use them assert
+# the sentence is *absent* from the screen, so without these pins they would have
+# stayed green asserting the absence of a sentence the server no longer sends.
+
+
+def test_the_shell_harness_malformed_fixture_is_the_sentence_the_api_sends(
+    app, seeded: Path
+) -> None:
+    """The new scenario's fixture, held against the sentence ``_require_member_id``
+    composes for a split naming somebody who is not in the group.
+
+    ``malformed_request`` is the code PR #62's reviewer pointed at: the add screen
+    prints every server sentence verbatim, and #39's justification for that covered
+    ``invalid_split`` alone. This pin is the other half.
+    """
+    declared = harness_constant("ADD_MALFORMED")
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="12.50",
+        split=equal_split("a-member-id-no-roster-holds"),
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "malformed_request"
+    assert declared == response.get_json()["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+def test_the_shell_harness_debt_fixture_is_the_sentence_the_api_sends(
+    app, seeded: Path
+) -> None:
+    """``MALFORMED_DEBT`` against the sentence ``_read_debt`` really composes.
+
+    The stranger goes in the debtor position, because the sentence names the position
+    it refused and the fixture spells ``debtor``.
+    """
+    declared = harness_constant("MALFORMED_DEBT")
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = read_debt(signed, "a-member-id-no-roster-holds", members["Sam"])
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "malformed_request"
+    assert declared == response.get_json()["error"]["message"]
+
+
+def test_the_shell_harness_settlement_fixture_is_the_sentence_the_api_sends(
+    app, seeded: Path
+) -> None:
+    """``MALFORMED_SETTLEMENT`` against the sentence ``_create_settlement`` composes
+    for a ``to_member_id`` that is not in the roster."""
+    declared = harness_constant("MALFORMED_SETTLEMENT")
+    signed = linked_client(app, seeded)
+    response = mark_paid(
+        signed, to_member_id="a-member-id-no-roster-holds", amount="1.00"
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "malformed_request"
+    assert declared == response.get_json()["error"]["message"]
+    assert stored_settlements(seeded) == ()
 
 
 @pytest.mark.parametrize("mode", ["percentage", "", "EQUAL", 7])
@@ -4311,12 +4410,17 @@ def test_created_at_is_spelled_the_way_the_feed_spells_it(
 
 
 @pytest.mark.parametrize("position", ["debtor", "creditor"])
-def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_it(
+def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_the_position(
     app, seeded: Path, position: str
 ) -> None:
     # A 404 was considered and rejected: the path names members, not a stored record,
     # and web.py already refuses an out-of-group member id this way when recording an
     # expense.
+    #
+    # The path has two segments, so a constant sentence would not tell the caller
+    # which of them was refused. The position is a path-parameter name and not an
+    # identifier, so naming it keeps this parametrisation discriminating without
+    # putting a member id in a 400 body.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     stranger = "not-a-member-of-this-group"
@@ -4329,7 +4433,8 @@ def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_it(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert stranger in body["error"]["message"]
+    assert position in body["error"]["message"]
+    assert stranger not in body["error"]["message"]
     assert members["Sam"] not in body["error"]["message"]
 
 
@@ -4343,6 +4448,7 @@ def test_a_member_may_not_ask_what_they_owe_themselves(app, seeded: Path) -> Non
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
     assert "themselves" in body["error"]["message"]
+    assert members["Sam"] not in body["error"]["message"]
 
 
 def test_an_id_that_needs_percent_encoding_reaches_the_right_member(
@@ -4593,7 +4699,7 @@ def test_a_settlement_is_stamped_with_the_servers_own_clock(
     assert settlement["created_at"] == at(9, 30).isoformat(timespec="microseconds")
 
 
-def test_a_settlement_to_somebody_outside_the_group_is_refused_by_name(
+def test_a_settlement_to_somebody_outside_the_group_is_refused_without_naming_them(
     app, seeded: Path
 ) -> None:
     signed = linked_client(app, seeded)
@@ -4601,7 +4707,8 @@ def test_a_settlement_to_somebody_outside_the_group_is_refused_by_name(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert "mem-nobody" in body["error"]["message"]
+    assert "to_member_id" in body["error"]["message"]
+    assert "mem-nobody" not in body["error"]["message"]
     assert stored_settlements(seeded) == ()
 
 
@@ -4615,7 +4722,11 @@ def test_a_settlement_to_yourself_is_refused_before_the_event_is_built(
     members = by_name(signed)
     response = mark_paid(signed, to_member_id=members["Sam"], amount="1.00")
     assert response.status_code == 400
-    assert response.get_json()["error"]["code"] == "malformed_request"
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    # The caller never sent a payer, so the sentence says where the payer comes from
+    # instead of naming the member both halves of the pair resolved to.
+    assert members["Sam"] not in body["error"]["message"]
     assert stored_settlements(seeded) == ()
 
 

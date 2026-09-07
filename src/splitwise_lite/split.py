@@ -338,9 +338,9 @@ def _ordered_from_iterable(member_ids: object) -> tuple[MemberId, ...]:
     if not ordered:
         raise InvalidSplit("a split needs at least one member")
     if len(set(ordered)) != len(ordered):
-        raise InvalidSplit(
-            f"member_ids names a member more than once: {list(ordered)}"
-        )
+        # The payload key, not the ids: this is a mapped 400 and no 4xx body this repo
+        # sends names a member id. The caller holds the list it sent.
+        raise InvalidSplit("member_ids names a member more than once")
     return tuple(sorted(ordered))
 
 
@@ -365,14 +365,23 @@ def _ordered_from_mapping(
     for key, value in mapping.items():
         member_id = _require_member_id(key)
         if isinstance(value, bool) or not isinstance(value, int):
+            # This one keeps the id and the value. A wrong Python type is a
+            # programming error, not a refusable request: it is unmapped, so it
+            # becomes a generic 500 with the real exception logged, and the reader of
+            # that traceback is a programmer who needs to know which entry it was.
+            # Same rule as ``_require_total``'s ``TypeError`` above.
             raise TypeError(
                 f"{field} for {member_id!r} must be an int, got "
                 f"{type(value).__name__}: {value!r}"
             )
         if value < 0:
-            raise InvalidSplit(
-                f"{field} for {member_id!r} must be zero or positive, got {value}"
-            )
+            # ``InvalidSplit`` is a mapped 400, so the message names the field and
+            # nothing else. The integer is dropped rather than formatted because this
+            # function serves two callers: it is a weight for ``split_by_weight`` and
+            # cents for ``split_exact``, and rendering one branch as money would need
+            # a ``currency`` here that ``_ordered_from_mapping`` deliberately does not
+            # take.
+            raise InvalidSplit(f"every {field} must be zero or positive")
         validated[member_id] = value
 
     ordered = tuple(sorted(validated))
