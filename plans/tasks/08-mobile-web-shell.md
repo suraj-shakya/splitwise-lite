@@ -211,8 +211,23 @@ braces, so the directory stays servable by anything.
   notched iPhone and the safe-area rules below do nothing.
 - The viewport meta does not contain `user-scalable=no` or `maximum-scale`. Pinch zoom
   stays available.
-- At 320 CSS px wide there is no horizontal scroll: `document.documentElement.scrollWidth`
-  equals `clientWidth`. Checked at 320x568, 360x640 and 390x844.
+- At 320 CSS px wide there is no horizontal scroll: `el.scrollWidth > el.clientWidth` is
+  false for `.content`, for every element inside it, for each rendered row container, and
+  for whichever `.curtain` is visible and every element inside that. Checked at 320x568,
+  360x640 and 390x844, and the sweep records how many elements it examined.
+
+  > **Corrected 2026-09-07 for issue #58**, per
+  > `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`. This line used
+  > to read "there is no horizontal scroll: `document.documentElement.scrollWidth` equals
+  > `clientWidth`". In this shell that comparison is not weak, it is constant.
+  > `app/styles.css` sets `overflow: hidden` on `body`, and the element that scrolls is
+  > `.content`, which carries `overflow-y: auto`. The viewport's scrolling area is
+  > propagated from the root element and the root clips, so nothing inside `.content` can
+  > extend the root's scrollable area and the equality holds whether or not content
+  > overflows. The check reported success in exactly the case it was written to catch.
+  > There is no record of anybody ever running it, in this or any other form, so the false
+  > assurance was potential rather than realised, and this is the task file it was copied
+  > from into three others.
 - At 320 px wide all three nav labels are fully visible and unclipped, and no text
   overlaps another element.
 - Every interactive element has a hit area of at least 44x44 CSS px at every tested width,

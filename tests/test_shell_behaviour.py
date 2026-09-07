@@ -190,6 +190,18 @@ SCENARIOS = [
     "leaving_the_balances_screen_and_returning_clears_the_rejected_list",
     "confirming_the_last_claim_in_a_settled_group_reads_the_figures_again",
     "the_api_client_builds_a_decision_path_from_a_settlement_id",
+    # What a feed row shows. The first scenarios in this repo to render one.
+    "a_feed_row_names_the_payer_the_amount_and_what_it_was_for",
+    "a_feed_with_nothing_recorded_says_so_and_draws_no_row",
+    "the_rows_stay_in_the_order_the_server_sent_them",
+    "an_expense_described_in_markup_reaches_the_screen_as_text",
+    "an_expense_with_no_description_still_names_everything_else",
+    "opening_a_row_shows_every_share_and_the_total_they_are_shares_of",
+    "a_payer_who_is_not_sharing_is_said_so_rather_than_added_to_the_split",
+    "a_member_the_roster_does_not_know_reads_as_words_not_as_an_id",
+    "four_people_sharing_one_expense_read_as_two_names_and_a_count",
+    "leaving_the_feed_and_coming_back_draws_each_row_once",
+    "a_created_at_that_is_not_a_date_never_reads_as_nan",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied
@@ -274,10 +286,31 @@ MUTANT_F = {
     "replace": "if (false) {",
 }
 
+# Mutant G: the row names whoever recorded the expense instead of whoever paid for
+# it. On a shared ledger the payer is who is owed the money, so this is the wrong
+# person being owed, said out loud on the screen everybody opens the app on. It is one
+# token, of the kind a later task makes while tidying two nearby field reads, and it
+# survived everything in this repo until now: tests/test_feed_screen.py reads the
+# static committed document and cannot see a rendered row, and no scenario rendered
+# one, because feedRender's document.createDocumentFragment threw and loadFeed's
+# .then(done, done) absorbed the throw. The row fixture therefore has payer_id
+# different from created_by, and this mutant is what proves the new scenarios kill
+# something in code that was dead before this task.
+MUTANT_G = {
+    "file": "app/app.js",
+    "find": "'Paid by ' + feedNameFor(names, entry.payer_id)",
+    "replace": "'Paid by ' + feedNameFor(names, entry.created_by)",
+}
+
 REFUSED = "a_refused_sign_in_tells_the_person_why"
 # Named, and unrelated to either mutation: a mutant has to leave a working app with
 # one specific behaviour broken, not a smoking crater.
 UNRELATED = "an_unknown_hash_is_replaced_not_pushed"
+# The two feed scenarios named from more than one place below. THE_EMPTY_FEED is the
+# one that never reaches feedRender, so it is the named survivor of anything that
+# breaks the render path.
+THE_ROW = "a_feed_row_names_the_payer_the_amount_and_what_it_was_for"
+THE_EMPTY_FEED = "a_feed_with_nothing_recorded_says_so_and_draws_no_row"
 
 
 def node() -> str:
@@ -540,6 +573,23 @@ def test_mutant_f_a_resume_that_hands_one_persons_draft_to_another_is_killed() -
     assert found[THE_DRAFT]["passed"], found[THE_DRAFT]["failures"]
 
 
+def test_mutant_g_a_row_that_names_the_recorder_rather_than_the_payer_is_killed() -> None:
+    found = killed(MUTANT_G)
+    assert not found[THE_ROW]["passed"]
+    messages = " ".join(found[THE_ROW]["failures"])
+    # The right failure, and it is the money one: the row names Sam, who typed the
+    # expense in, where it must name Cass, who paid for it and is owed for it.
+    assert "Paid by Cass" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # A working app with one line of one screen wrong, not a crater: the empty feed,
+    # which never reaches feedRender, is untouched.
+    assert found[THE_EMPTY_FEED]["passed"], found[THE_EMPTY_FEED]["failures"]
+    # And app/api.js is not where a display name is chosen, so the mutation lands in
+    # one file and leaves the client exactly as it ships.
+    loaded = loaded_under(MUTANT_G)
+    assert loaded["app/api.js"] == (REPO / "app" / "api.js").read_text(encoding="utf-8")
+
+
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------
 
 
@@ -578,6 +628,58 @@ def test_a_run_that_will_not_quiesce_fails_and_names_the_scenario() -> None:
     assert completed.returncode == 2, completed.stderr
     assert scenario in completed.stderr
     assert "settle" in completed.stderr
+
+
+def test_hiding_a_document_member_the_stub_does_not_define_refuses_the_run() -> None:
+    # hideDocumentMembers exists so the createDocumentFragment gap can be reproduced
+    # without editing the harness or committing a second copy of it. A name the stub
+    # never defined would hide nothing: every scenario would pass and the run would
+    # read as a caught defect that was in fact never provoked. So a misspelling is a
+    # harness error naming the name, exit 2, and never a vacuous green.
+    typo = "createDocumentFragmnet"
+    completed = run_harness({"hideDocumentMembers": [typo]})
+    assert completed.returncode == 2, completed.stderr
+    assert completed.stdout == ""
+    assert typo in completed.stderr
+    assert "hideDocumentMembers" in completed.stderr
+
+
+def test_hiding_the_fragment_maker_shows_what_the_feed_was_hiding() -> None:
+    """The defect this task exists to close, reproduced and caught.
+
+    ``feedRender`` calls ``document.createDocumentFragment`` three lines in. The stub
+    did not fake it, the guarded proxy refuses a property it does not define, and
+    ``loadFeed`` ends ``.then(done, done)``, which absorbs a throw out of
+    ``feedRender`` exactly as it absorbs a refused request. A broken render and a
+    failed read reached the same place and looked identical from outside, and no
+    scenario asserted row content, so nothing observed it.
+
+    Hiding the member puts the harness back in that state, and two things now say so
+    that said nothing before: the guard records the refusal against the running
+    scenario at the moment it refuses, whatever the app then does with the exception,
+    and ``finish()`` refuses a scenario left with a screen in its in-flight state.
+    Neither depends on the scenario having thought to look.
+    """
+    completed = run_harness({"hideDocumentMembers": ["createDocumentFragment"]})
+    # Exactly 1, never merely non-zero: a broken configuration exits 2 and must not
+    # be mistaken for a caught defect.
+    assert completed.returncode == 1, (
+        f"expected exit 1, got {completed.returncode}.\nstderr:\n{completed.stderr}"
+    )
+    found = results(parse_report(completed))
+    assert not found[THE_ROW]["passed"]
+    messages = " ".join(found[THE_ROW]["failures"])
+    # The refused property is named, which is the guard recording as well as throwing.
+    assert "createDocumentFragment" in messages, messages
+    # And the screen is visibly stuck, which is the invariant catching a dead render
+    # without any assertion about rows at all.
+    assert "#feed-loading" in messages, messages
+    # A working app with one screen broken, not a crater.
+    assert found["boot_with_no_session_shows_the_gate"]["passed"]
+    # Criterion 17, written down where it cannot be forgotten: the empty feed never
+    # reaches feedRender, so it stays green with the member hidden. It could not have
+    # caught this defect on its own and it cannot prove the fix either.
+    assert found[THE_EMPTY_FEED]["passed"], found[THE_EMPTY_FEED]["failures"]
 
 
 # --- api.js is the only place a status is interpreted ----------------------

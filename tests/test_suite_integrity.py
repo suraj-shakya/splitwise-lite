@@ -9,7 +9,12 @@ definition, so the earlier test is deleted with nothing anywhere reporting an er
 The anchored-pin check refuses a ``pytest.raises(match=)`` whose pattern is not
 anchored with ``^`` and carries no ``# unanchored:`` reason, because ``match=`` is an
 ``re.search`` and an unanchored pattern can be satisfied by a superstring that somebody
-else's guard raised.
+else's guard raised. A fourth failure, GitHub issue #58, gets the third refusal here and
+is refused in the documents rather than in the code: no specification under ``plans/``,
+and neither ``README.md`` nor ``CLAUDE.md``, may ask outside a blockquote for
+``document.documentElement.scrollWidth`` against its ``clientWidth``, because ``body``
+clips and ``.content`` scrolls in this shell, so that equality is constant and the four
+task specs that asked for it as the test for horizontal overflow could not have failed.
 
 Neither could be a rule. Nobody can follow a rule against a duplicate name, because the
 whole difficulty is that neither author can see the other's definition; #67's own
@@ -760,6 +765,219 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
                     "mutation and a different result."
                 )
     assert not failures, "\n\n".join(failures)
+
+
+# --- The measurement that could not fail, refused in the documents (#58) ---
+
+# What is scanned: every Markdown document under plans/, plus README.md and CLAUDE.md.
+# Not tests/ and not app/, and neither omission is laziness.
+#
+# tests/ cannot be scanned because this check's own source and its own message have to
+# write the banned literal out in order to say what is banned, so a scan over tests/
+# would flag the very lines that make it work. app/ is not scanned because the shell is
+# code rather than a specification, and the one occurrence it has today is the comment
+# on `body` in app/styles.css that says what to measure instead, which is the thing
+# being asked for rather than the defect. Somebody will eventually read this scan as
+# arbitrarily narrow and reach to widen it; a check that flags itself is precisely the
+# shape of defect this module exists to refuse, so do not.
+
+# The one document the scan cannot cover, for exactly the reason given above for
+# tests/: this file is the specification of this check, so its criteria have to write
+# the banned literal out to say what is banned, and three of them name it with no
+# `document.` prefix and no quotation to put in a blockquote. Criterion 23 of that spec
+# asks for no per-file skip at all, and this is a deviation from it, recorded here
+# rather than hidden: with the spec committed under plans/tasks/ as criterion 41
+# requires, criteria 20, 23 and 41 cannot all hold at once. It is the specification of
+# the mechanism and nothing else, it is not a licence for a second entry, and a rename
+# does not quietly widen the scan: the path stops matching and the scan goes red naming
+# the renamed file.
+SPECIFIES_THE_SCAN = (
+    REPO / "plans" / "tasks" / "58-the-overflow-check-that-measured-the-wrong-element.md"
+)
+
+
+def scanned_documents() -> list[Path]:
+    """Every specification document the scan covers, taken from the filesystem.
+
+    Derived rather than written out, so a task spec written later is covered without
+    anybody remembering to add it to a list. That is the property the per-class
+    ``CARRIES_A_NAME`` list in PR #56 did not have, and its absence is why that list
+    shipped wrong and why issue #58 deleted it.
+    """
+    # An exclusion that outlives the file it excludes is dead weight nothing reports.
+    # A rename already fails loudly, because the path stops matching and the renamed
+    # file gets scanned; a deletion would not, so it is asserted here instead.
+    assert SPECIFIES_THE_SCAN.exists(), (
+        f"{posix(SPECIFIES_THE_SCAN)} is excluded from this scan but no longer "
+        "exists, so the exclusion is dead. Delete it, or point it at the document "
+        "that specifies this check."
+    )
+    found = list((REPO / "plans").rglob("*.md"))
+    found += [REPO / "README.md", REPO / "CLAUDE.md"]
+    return sorted(path for path in found if path != SPECIFIES_THE_SCAN)
+
+
+# A date, in the form every dated note in this repo already carries. Shape only: no
+# calendar validation and no minimum prose, so this recognises the form a correction
+# note takes rather than proving one was written. What it buys is that an exemption has
+# to be placed inside a dated note and shows in a diff as one, where a bare '>' is one
+# character and shows as nothing.
+DATED_NOTE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def blockquote_run(lines: list[str], index: int) -> list[str]:
+    """The contiguous run of blockquote lines containing ``lines[index]``, or nothing.
+
+    The run and not the line. A dated note opens with its marker and the wording it
+    quotes sits below that marker, so looking for the date on the line that carries the
+    banned literal would refuse every real note in this repo.
+
+    Measured 2026-09-07 rather than assumed, because that reason otherwise reads as a
+    guess. The five surviving blockquoted occurrences sit in runs of **10, 10, 12, 14
+    and 21 lines**. In all five the date is on the run's opening line and the literal is
+    **one or two lines below it**, so the date is never on the line carrying the literal
+    and a line-local predicate would have reddened all five. That is the load-bearing
+    part: the runs are long, but the distance that matters is small and it is never zero.
+
+    An earlier draft of the paragraph above said the quoted wording "usually sits several
+    lines below". The measurement does not support that, and the clause is quoted here
+    rather than silently dropped because two distances standing side by side, one of them
+    superseded and unmarked, is the defect this whole module is about.
+
+    A blank line breaks the run, which is Markdown's own rule for where a blockquote
+    ends, and that is the residual worth stating plainly: an undated ``>`` line glued
+    directly onto a dated note, with no blank line between them, is exempt, and so is an
+    indented list-level quote glued to a top-level dated one, which Markdown renders as
+    two containers while this walk sees one. Left as it is deliberately. The cost of
+    that route is writing your new criterion physically inside somebody else's dated
+    correction note, where it renders as part of that note, and a blank line anywhere
+    between restores the refusal.
+    """
+    if not lines[index].strip().startswith(">"):
+        return []
+    start = index
+    while start > 0 and lines[start - 1].strip().startswith(">"):
+        start -= 1
+    end = index
+    while end + 1 < len(lines) and lines[end + 1].strip().startswith(">"):
+        end += 1
+    return lines[start : end + 1]
+
+
+def wrong_measurement_message(where: str, line: int, text: str) -> str:
+    """What the check says about one line asking for a measurement that cannot fail."""
+    return (
+        f"{where}:{line} names `documentElement`:\n"
+        f"    {text.strip()}\n"
+        "\n"
+        "In this shell that measurement cannot fail. app/styles.css sets "
+        "`overflow: hidden` on `body`, and `.content` is the element that scrolls. The "
+        "viewport's scrolling area is propagated from the root element, and the root "
+        "clips, so nothing inside `.content` can extend it and the root's scrollable "
+        "area can never grow. `documentElement.scrollWidth` therefore equals its "
+        "`clientWidth` whether or not content overflows: the equality is not weak, it "
+        "is constant. A criterion asking for it reports success in exactly the case it "
+        "was written to catch. Four task specs asked for it, and the PR #56 defect "
+        "would have gone green on every one of them.\n"
+        "\n"
+        "Write this instead:\n"
+        "\n"
+        "    el.scrollWidth > el.clientWidth, over `.content` and every element "
+        "inside it, and over each rendered row container\n"
+        "\n"
+        "and say that the sweep reports how many elements it examined, because both "
+        "properties are integer-rounded, so a sub-pixel overflow reads as none, and a "
+        "hidden element reports 0 for both, so every collapsed region passes trivially "
+        "unless it is opened first.\n"
+        "\n"
+        "Quoting the old wording is legal, in one shape only: a blockquote carrying a "
+        "date, in the form this repo already uses for a correction note, opening "
+        "'**Corrected 2026-09-07 for issue #58**' or '**Stale ...**' and quoting the "
+        "wording that was wrong. The date is what the exemption is for. A bare '>' is "
+        "not enough and is refused, because an exemption a criterion can claim by "
+        "writing one character next to itself is not an exemption, it is a hole, and "
+        "this whole check exists because a check that does not exercise what it names "
+        "was believed."
+    )
+
+
+def test_no_document_asks_for_the_measurement_that_cannot_fail() -> None:
+    """No specification asks for `documentElement.scrollWidth` against `clientWidth`.
+
+    This is the durable half of issue #58. The stylesheet half of that issue is fixed
+    once; this is what stops the wrong measurement being copied into the next task
+    spec that thinks about small screens, which #58's own scope line predicted it
+    would be. It could not be a rule instead: a rule lasts exactly as long as the next
+    author who has not read it, which is the failure mode
+    ``plans/tasks/46-shell-precache-digest.md`` records for ``VERSION``.
+
+    A wrong measurement written into a criterion belongs in this module rather than
+    beside the stylesheet checks, because it is a check that reports success without
+    exercising what it names, which is what all three of the issues above are.
+    """
+    failures: list[str] = []
+    for path in scanned_documents():
+        where = posix(path)
+        lines = read(path).splitlines()
+        for index, text in enumerate(lines):
+            if "documentElement" not in text:
+                continue
+            # The dated-note exemption, and the only exemption a document can claim
+            # for itself. Quoting the wording that was wrong stays legal so the
+            # historical record survives; writing it into a criterion does not.
+            #
+            # The date is the whole exemption. An earlier version of this check accepted
+            # any line starting with '>', which meant a future author facing this red
+            # test could prefix one character and go green with no date and no reason,
+            # and nothing in the diff would read as a claimed exemption. That is a check
+            # that does not exercise what it names, which is the defect this module
+            # exists to refuse, so it was refusing it everywhere except in itself.
+            #
+            # What the predicate actually costs, stated exactly, because this is not the
+            # `# unanchored:` hatch above and must not be described as its equal: that
+            # hatch enforces twenty characters of real reason, while `DATED_NOTE` is
+            # shape only, so `> per 1234-56-78` is exempt with no reason and no calendar
+            # validation. The deterrent here is different and weaker: the escape route
+            # costs writing your new criterion physically inside somebody else's dated
+            # correction note, where it renders as part of that note and reads as one.
+            # That is a long way above one character and it is enough, but it is a
+            # placement cost rather than a written justification.
+            if DATED_NOTE.search("\n".join(blockquote_run(lines, index))):
+                continue
+            failures.append(wrong_measurement_message(where, index + 1, text))
+    assert not failures, "\n\n".join(failures)
+
+
+def test_the_wrong_measurement_message_says_what_to_write_instead() -> None:
+    """The message names the place, quotes the line, and gives the replacement.
+
+    Following ``stale_digest_message`` in tests/test_web_shell.py. The message is the
+    entire product of a check that fires, so it gets a test of its own rather than
+    being read once by its author and then left to rot behind a green suite.
+    """
+    message = wrong_measurement_message(
+        "plans/tasks/08-mobile-web-shell.md",
+        214,
+        "- At 320 CSS px wide there is no horizontal scroll: "
+        "`document.documentElement.scrollWidth`",
+    )
+    assert message.startswith("plans/tasks/08-mobile-web-shell.md:214")
+    # The offending line is quoted, so the reader does not have to open the file to
+    # see which of several similar checklist lines was meant.
+    assert "`document.documentElement.scrollWidth`" in message
+    # Why it cannot fail, in terms of the two declarations that cause it.
+    assert "overflow: hidden" in message
+    assert "`.content`" in message
+    # What to write instead, and the two caveats that make the replacement honest.
+    assert "el.scrollWidth > el.clientWidth" in message
+    assert "integer-rounded" in message
+    assert "reports 0 for both" in message
+    # And the one way to keep the old wording legally, stated as the dated note it
+    # actually requires rather than as the bare '>' an earlier version accepted. A
+    # message that advertises a wider hatch than the check honours sends the reader
+    # to write something that will still be refused.
+    assert "blockquote carrying a date" in message
+    assert "A bare '>' is not enough and is refused" in message
 
 
 # --- The rules the three issues land in ------------------------------------
