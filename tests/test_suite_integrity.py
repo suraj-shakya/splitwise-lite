@@ -1,7 +1,8 @@
 """The suite's check on itself.
 
-Three failures in this repo reported success without exercising the thing they named,
-and this module answers them with something that runs: GitHub issues #67, #65 and #60.
+Four failures in this repo reported success without exercising the thing they named,
+and this module answers them with something that runs: GitHub issues #67, #65, #70
+and #60.
 
 The duplicate-definition check refuses a test module that binds one name twice at
 module level, because Python rebinds silently and pytest then collects only the last
@@ -9,7 +10,14 @@ definition, so the earlier test is deleted with nothing anywhere reporting an er
 The anchored-pin check refuses a ``pytest.raises(match=)`` whose pattern is not
 anchored with ``^`` and carries no ``# unanchored:`` reason, because ``match=`` is an
 ``re.search`` and an unanchored pattern can be satisfied by a superstring that somebody
-else's guard raised. A fourth failure, GitHub issue #58, gets the third refusal here and
+else's guard raised. The unanchored-block check, GitHub issue #70, states the converse
+for the commoner form: a ``pytest.raises`` block that reads the exception's message has
+to carry an anchor somewhere, because ``"x" in str(exc.value)`` is the same operation
+``match="x"`` performs and there were sixteen pins against a hundred-odd of those. It
+carries the blocks that were already loose in a declared baseline that only shrinks, so
+**it makes no existing assertion able to fail**; that is the audit, issue #70's slices
+70b to 70h, and reading this module's green run as covering them is the misreading it is
+written to prevent. A further failure, GitHub issue #58, gets the last refusal here and
 is refused in the documents rather than in the code: no specification under ``plans/``,
 and neither ``README.md`` nor ``CLAUDE.md``, may ask outside a blockquote for
 ``document.documentElement.scrollWidth`` against its ``clientWidth``, because ``body``
@@ -1575,6 +1583,23 @@ def test_every_recorded_mutation_is_machine_readable() -> None:
     assert not failures, "\n\n".join(failures)
 
 
+def record_sections(text: str) -> list[tuple[str, str]]:
+    """Each ``##`` section of a record file, as ``(heading, section text)``.
+
+    Whatever a file writes above its first ``##`` is its introduction rather than a
+    record, and is not returned. That is the residual of the check below, stated rather
+    than left to be discovered: a node id named in an introduction is nobody's ``kills``
+    and could not be checked against one.
+    """
+    starts = [match.start() for match in SECTION.finditer(text)]
+    sections: list[tuple[str, str]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(text)
+        section = text[start:end]
+        sections.append((section.split("\n", 1)[0].strip(), section))
+    return sections
+
+
 def test_a_mutation_record_holds_no_prose_only_section() -> None:
     """Every section carries the record itself, not a description of one.
 
@@ -1584,12 +1609,7 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
     failures: list[str] = []
     for path in record_files():
         where = posix(path)
-        text = read(path)
-        starts = [match.start() for match in SECTION.finditer(text)]
-        for position, start in enumerate(starts):
-            end = starts[position + 1] if position + 1 < len(starts) else len(text)
-            section = text[start:end]
-            heading = section.split("\n", 1)[0].strip()
+        for heading, section in record_sections(read(path)):
             if not JSON_BLOCK.search(section):
                 failures.append(
                     f"{where} section {heading!r} holds no fenced JSON block, so it "
@@ -1598,6 +1618,154 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
                     "mutation and a different result."
                 )
     assert not failures, "\n\n".join(failures)
+
+
+# A record's prose and its JSON have to agree about which tests a mutation touched.
+# mutation_record_problems type-checks `kills` and `survives` and never reads the list
+# of covered tests written beside them, so a wrong entry there is invisible to the
+# suite. plans/mutations/65-message-pins.md is the worked example of the shape that goes
+# wrong: it numbers its pins 1 to 13 across sections, so an entry is bound to its
+# subject only by its position in a list that lives in a different section from the
+# guard it describes. At thirteen that survives; at the fifty-odd guards issue #70's
+# audit will delete, it is a defect generator, and this repo has already published a
+# number attached to the wrong mutation for exactly that reason.
+#
+# So a node id is the vocabulary: it is unique, it carries its own subject, and it is
+# already what `kills` and `survives` hold. This check makes the two agree in the one
+# direction that matters, prose to JSON. It does not require the reverse: a record may
+# list a node id in `kills` and not mention it in prose, because `kills` is the complete
+# list and the prose is commentary on it.
+#
+# REQUIRED_KEYS does not change and no new JSON key is added; this reads the seven that
+# exist.
+NODE_ID_SEPARATOR = "::"
+
+
+def prose_node_ids(prose: str) -> set[str]:
+    """Every pytest node id the prose names, recognised by holding ``::``.
+
+    Markdown decoration is stripped from both ends, and sentence punctuation from the
+    end only, so a parametrised id keeps its trailing ``]``.
+    """
+    found: set[str] = set()
+    for token in re.split(r"[\s`]+", prose):
+        candidate = token.strip("`\"'*()").rstrip(".,;:")
+        if NODE_ID_SEPARATOR in candidate:
+            found.add(candidate)
+    return found
+
+
+def stray_node_ids(section: str) -> list[str]:
+    """Node ids this section's prose names that its JSON blocks do not list."""
+    listed: set[str] = set()
+    for block in JSON_BLOCK.findall(section):
+        try:
+            record = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        for key in ("kills", "survives"):
+            value = record.get(key)
+            if isinstance(value, list):
+                listed.update(item for item in value if isinstance(item, str))
+    prose = JSON_BLOCK.sub("", section)
+    return sorted(prose_node_ids(prose) - listed)
+
+
+def stray_node_id_message(where: str, heading: str, identifier: str) -> str:
+    """What the check says about a node id a record names but does not list."""
+    return (
+        f"{where} section {heading!r} names {identifier} in its prose, and neither "
+        "kills nor survives in that section's record lists it.\n"
+        "\n"
+        "So the claim and the record disagree about which tests the mutation touched, "
+        "and only the record is checked by anything. Put the id in kills if the "
+        "mutation reddened that test, or in survives if it stayed green. If the prose "
+        "meant a different test, the id is the thing to correct: a claim bound to its "
+        "subject by position in a list is how a correct number ended up against the "
+        "wrong mutation in this repo."
+    )
+
+
+def test_every_node_id_a_record_names_is_one_it_lists() -> None:
+    """A record's prose names no test that its own kills and survives do not."""
+    failures: list[str] = []
+    for path in record_files():
+        where = posix(path)
+        for heading, section in record_sections(read(path)):
+            failures += [
+                stray_node_id_message(where, heading, identifier)
+                for identifier in stray_node_ids(section)
+            ]
+    assert not failures, "\n\n".join(failures)
+
+
+RECORD_WITH_A_STRAY_NODE_ID = """\
+## A guard
+
+```json
+{
+  "id": "g1",
+  "file": "src/splitwise_lite/example.py",
+  "find": "raise X",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+
+Covers `tests/test_example.py::test_one` and `tests/test_example.py::test_three`.
+"""
+
+RECORD_WITH_ONLY_LISTED_NODE_IDS = """\
+## A guard
+
+```json
+{
+  "id": "g1",
+  "file": "src/splitwise_lite/example.py",
+  "find": "raise X",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one[a-case]"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+
+Covers `tests/test_example.py::test_one[a-case]`, and
+**tests/test_example.py::test_two** stayed green.
+"""
+
+
+def test_the_node_id_check_still_bites() -> None:
+    """The positive control: a stray id is a finding and a listed one is not.
+
+    Every record on the branch today names no node id in prose at all, so without these
+    two the check would be green over the whole directory whatever it did.
+    """
+    stray = stray_node_ids(RECORD_WITH_A_STRAY_NODE_ID)
+    assert stray == ["tests/test_example.py::test_three"]
+    # Not the ids that are listed, and a parametrised id keeps its trailing bracket
+    # rather than being trimmed into a different id that would then read as stray.
+    assert stray_node_ids(RECORD_WITH_ONLY_LISTED_NODE_IDS) == []
+    assert "tests/test_example.py::test_one[a-case]" in prose_node_ids(
+        RECORD_WITH_ONLY_LISTED_NODE_IDS
+    )
+
+
+def test_the_stray_node_id_message_says_what_happened() -> None:
+    """The message names the file, the section, the id, and what to do about it."""
+    message = stray_node_id_message(
+        "plans/mutations/70a-pretend.md", "## A guard", "tests/test_x.py::test_y"
+    )
+    assert "plans/mutations/70a-pretend.md" in message
+    assert "## A guard" in message
+    assert "tests/test_x.py::test_y" in message
+    assert "neither kills nor survives" in message
+    assert "Put the id in kills" in message
+    assert "wrong mutation" in message
 
 
 # --- The measurement that could not fail, refused in the documents (#58) ---
