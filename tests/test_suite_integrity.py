@@ -780,18 +780,6 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
 # being asked for rather than the defect. Somebody will eventually read this scan as
 # arbitrarily narrow and reach to widen it; a check that flags itself is precisely the
 # shape of defect this module exists to refuse, so do not.
-def scanned_documents() -> list[Path]:
-    """Every specification document the scan covers, taken from the filesystem.
-
-    Derived rather than written out, so a task spec written later is covered without
-    anybody remembering to add it to a list. That is the property the per-class
-    ``CARRIES_A_NAME`` list in PR #56 did not have, and its absence is why that list
-    shipped wrong and why issue #58 deleted it.
-    """
-    found = list((REPO / "plans").rglob("*.md"))
-    found += [REPO / "README.md", REPO / "CLAUDE.md"]
-    return sorted(path for path in found if path != SPECIFIES_THE_SCAN)
-
 
 # The one document the scan cannot cover, for exactly the reason given above for
 # tests/: this file is the specification of this check, so its criteria have to write
@@ -806,6 +794,19 @@ def scanned_documents() -> list[Path]:
 SPECIFIES_THE_SCAN = (
     REPO / "plans" / "tasks" / "58-the-overflow-check-that-measured-the-wrong-element.md"
 )
+
+
+def scanned_documents() -> list[Path]:
+    """Every specification document the scan covers, taken from the filesystem.
+
+    Derived rather than written out, so a task spec written later is covered without
+    anybody remembering to add it to a list. That is the property the per-class
+    ``CARRIES_A_NAME`` list in PR #56 did not have, and its absence is why that list
+    shipped wrong and why issue #58 deleted it.
+    """
+    found = list((REPO / "plans").rglob("*.md"))
+    found += [REPO / "README.md", REPO / "CLAUDE.md"]
+    return sorted(path for path in found if path != SPECIFIES_THE_SCAN)
 
 
 def wrong_measurement_message(where: str, line: int, text: str) -> str:
