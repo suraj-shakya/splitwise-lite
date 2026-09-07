@@ -579,6 +579,20 @@ def test_a_run_that_will_not_quiesce_fails_and_names_the_scenario() -> None:
     assert "settle" in completed.stderr
 
 
+def test_hiding_a_document_member_the_stub_does_not_define_refuses_the_run() -> None:
+    # hideDocumentMembers exists so the createDocumentFragment gap can be reproduced
+    # without editing the harness or committing a second copy of it. A name the stub
+    # never defined would hide nothing: every scenario would pass and the run would
+    # read as a caught defect that was in fact never provoked. So a misspelling is a
+    # harness error naming the name, exit 2, and never a vacuous green.
+    typo = "createDocumentFragmnet"
+    completed = run_harness({"hideDocumentMembers": [typo]})
+    assert completed.returncode == 2, completed.stderr
+    assert completed.stdout == ""
+    assert typo in completed.stderr
+    assert "hideDocumentMembers" in completed.stderr
+
+
 # --- api.js is the only place a status is interpreted ----------------------
 
 # A status read in order to be compared, either way round, and a comparison against

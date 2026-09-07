@@ -53,10 +53,17 @@
 
        node tests/shell_harness.mjs < /dev/null
 
+   Configuration keys: scenarios, a subset to run; substitutions, the anchored
+   mutations above; provokeRunawayTimer, a self-rescheduling timer proving settle()
+   is bounded; and hideDocumentMembers, a list of names deleted from the document
+   stub before the run, so a gap in the stub can be reproduced without editing this
+   file or committing a second copy of it. A name the stub does not define is a
+   harness error rather than a hiding that hides nothing.
+
    Exit status is 0 when every requested scenario passed, 1 when one or more failed,
    and 2 for a harness error: unparseable stdin, an anchor that did not match exactly
-   once, a missing file, a script that threw while loading, or a run that would not
-   quiesce. The 1 and 2 distinction is not decoration: the mutant tests assert exit 1
+   once, a hideDocumentMembers name the document stub does not define, a missing
+   file, a script that threw while loading, or a run that would not quiesce. The 1 and 2 distinction is not decoration: the mutant tests assert exit 1
    so that a substitution which broke a file into a syntax error cannot be mistaken
    for a killed mutant. */
 
@@ -530,7 +537,7 @@ function networkFailure() {
 
 const SETTLE_STEPS = 1000;
 
-function page(scripts, name, provokeRunawayTimer) {
+function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
   const sink = { focused: null };
   const parsed = parseDocument(readFileSync(join(APP, 'index.html'), 'utf8'), sink);
   const failures = [];
@@ -650,6 +657,20 @@ function page(scripts, name, provokeRunawayTimer) {
     },
     'document'
   );
+
+  /* Deleted from the stub after it is built rather than left out of it, so the list
+     is checked against what this file really fakes: a misspelled name would hide
+     nothing, every scenario would pass, and the run would read as a caught defect
+     that was never provoked. That is a harness error, not a green run. */
+  hideDocumentMembers.forEach((member) => {
+    if (!(member in documentStub)) {
+      throw new HarnessError(
+        'hideDocumentMembers names ' + member + ', which the document stub does not ' +
+          'define; hiding a name that is already absent hides nothing'
+      );
+    }
+    delete documentStub[member];
+  });
 
   const fetchStub = (url, options) => {
     const method = String(options.method);
@@ -7805,7 +7826,12 @@ async function main() {
     /* A fresh context and a freshly parsed document per scenario: api.js holds cached
        and handlers, app.js holds current and creating, and no scenario may inherit
        another's state. */
-    const driver = page(scripts, scenario.name, Boolean(config.provokeRunawayTimer));
+    const driver = page(
+      scripts,
+      scenario.name,
+      Boolean(config.provokeRunawayTimer),
+      config.hideDocumentMembers || []
+    );
     running = driver;
     try {
       await scenario.run(driver);
