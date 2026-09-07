@@ -312,6 +312,34 @@ MUTANT_G = {
     "replace": "'Paid by ' + feedNameFor(names, entry.created_by)",
 }
 
+# Mutant H: the `never` arm is removed and every state that is not `fresh` takes the
+# age arm. This is the #44 defect in this feature's own shape, and #44 is the reason
+# the wire carries a three-valued state at all: a roster known to be empty was rendered
+# with the words for a roster that had not arrived. Here a ledger known to hold nothing
+# is rendered with the words for a ledger of known age, and because there is no age the
+# number printed into the sentence is the word `null`.
+#
+# It is one line of tidying, of exactly the kind a later task makes: three states, so
+# "not fresh" reads as "old", and the two branches collapse into one. It qualifies
+# under all three of plans/mutations/README.md's tests. It is the only evidence the
+# `never` scenario bites, because that scenario passed the moment it was written and a
+# scenario that passes proves nothing on its own. It survives against the code as it
+# was before that scenario existed, because nothing in this repository rendered a
+# staleness state until this task. And it leaves a working app with one sentence wrong
+# rather than a smoking crater: every figure still draws, the quiet list still draws,
+# the feed is untouched, and only the balances screen's own account of what it does not
+# know is false.
+# The anchor is one line, and that is not incidental: MUTANT_F records that a
+# multi-line anchor rots on a checkout whose line endings differ, and this one was
+# first written across three lines and matched zero times on this working tree, which
+# is CRLF. The two arms of the toggler are ordered stale-then-never so that one line
+# carries the whole mutation.
+MUTANT_H = {
+    "file": "app/app.js",
+    "find": "    if (state === 'stale') {",
+    "replace": "    if (state !== 'fresh') {",
+}
+
 REFUSED = "a_refused_sign_in_tells_the_person_why"
 # Named, and unrelated to either mutation: a mutant has to leave a working app with
 # one specific behaviour broken, not a smoking crater.
@@ -598,6 +626,81 @@ def test_mutant_g_a_row_that_names_the_recorder_rather_than_the_payer_is_killed(
     # one file and leaves the client exactly as it ships.
     loaded = loaded_under(MUTANT_G)
     assert loaded["app/api.js"] == (REPO / "app" / "api.js").read_text(encoding="utf-8")
+
+
+NOTHING_RECORDED_SCENARIO = "a_group_with_nothing_recorded_says_so_beside_the_figures"
+THE_STALE_BALANCE = "a_stale_balance_names_who_has_entered_nothing"
+
+
+def test_mutant_h_a_ledger_with_no_expense_rendered_as_one_of_known_age_is_killed() -> None:
+    found = killed(MUTANT_H)
+    assert not found[NOTHING_RECORDED_SCENARIO]["passed"]
+    messages = " ".join(found[NOTHING_RECORDED_SCENARIO]["failures"])
+    # The right failure, and it is the #44 one: the sentence that states an age is on
+    # screen for a ledger that has no age, with the word `null` where the number goes.
+    assert "null" in messages, messages
+    assert "balances-stale" in messages or '"stale":true' in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # A working app with one sentence wrong, not a crater: a ledger that does have an
+    # age still reads correctly, which is what makes this the `never` arm's defect
+    # rather than the toggler having stopped working.
+    assert found[THE_STALE_BALANCE]["passed"], found[THE_STALE_BALANCE]["failures"]
+    # And app/api.js is not where a sentence is chosen, so the mutation lands in one
+    # file and leaves the client exactly as it ships.
+    loaded = loaded_under(MUTANT_H)
+    assert loaded["app/api.js"] == (REPO / "app" / "api.js").read_text(encoding="utf-8")
+
+
+# --- Task 16: the harness fixtures cannot drift from the contract ----------
+
+# The four keys and the three state values the harness stubs. Rule (d) of
+# .claude/rules/testing.md is exactly this defect: a fixture that is both the stubbed
+# response and the expected value cannot detect its own drift, and a harness constant
+# set to nonsense once stayed green across three scenarios. So each of these is
+# asserted against src/splitwise_lite/web.py as text, in the shape
+# test_every_error_code_the_harness_names_appears_in_web_py already uses.
+STALENESS_KEYS = (
+    "state",
+    "days_since_last_expense",
+    "quiet_after_days",
+    "quiet_member_ids",
+)
+STALENESS_STATES = ("never", "fresh", "stale")
+
+
+def web_py() -> str:
+    return (REPO / "src" / "splitwise_lite" / "web.py").read_text(encoding="utf-8")
+
+
+def test_every_staleness_key_the_harness_stubs_appears_in_web_py() -> None:
+    web = web_py()
+    harness = HARNESS.read_text(encoding="utf-8")
+    for key in STALENESS_KEYS:
+        assert f'"{key}"' in web, key
+        assert f"{key}:" in harness, key
+
+
+def test_every_staleness_state_the_harness_stubs_appears_in_web_py() -> None:
+    # The three the wire can carry. `ancient`, which one scenario stubs on purpose, is
+    # deliberately absent from both: that scenario is about a state no server sends.
+    web = web_py()
+    harness = HARNESS.read_text(encoding="utf-8")
+    for state in STALENESS_STATES:
+        assert f'"{state}"' in web, state
+        assert f"'{state}'" in harness, state
+    assert '"ancient"' not in web
+    assert "'ancient'" in harness
+
+
+def test_the_shipped_client_reads_the_same_three_states_the_server_sends() -> None:
+    # The other end of the same pin. app/app.js branches on these strings, so a wire
+    # value renamed in web.py alone would leave the screen drawing nothing at all,
+    # silently, which is the one failure this signal must not have.
+    app_js = (APP / "app.js").read_text(encoding="utf-8")
+    web = web_py()
+    for state in STALENESS_STATES:
+        assert f"'{state}'" in app_js, state
+        assert f'"{state}"' in web, state
 
 
 # --- Harness errors, which are exit 2 and not exit 1 -----------------------

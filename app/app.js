@@ -1748,11 +1748,11 @@
     if (STALENESS_STATES.indexOf(state) === -1) {
       return;
     }
-    if (state === 'never') {
-      neverNote.hidden = false;
-    } else if (state === 'stale') {
+    if (state === 'stale') {
       staleDays.textContent = String(signal.days_since_last_expense);
       staleNote.hidden = false;
+    } else if (state === 'never') {
+      neverNote.hidden = false;
     }
     balancesQuietFill(signal, names, actingId);
   }
