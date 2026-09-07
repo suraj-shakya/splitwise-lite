@@ -40,7 +40,7 @@ writing and will drift; the function name and the sentence are the stable handle
 | 9 | `web.py::_decide_settlement` `no settlement in this group with that id: {settlement_id!r}` | 404 `record_not_found` | a **settlement** id |
 | 10 | `web.py::_read_debt` `a debt path names a member id that is not a member of this group: {value!r}` | 400 `malformed_request` | a member id |
 | 11 | `web.py::_read_debt` `a member cannot owe themselves: {debtor_id!r} was asked about as both the debtor and the creditor` | 400 `malformed_request` | a member id, and a **current roster** one |
-| 12 | `groups.py::resolve_member` `no member of group {group_id!r} is linked to user {user_id!r}; ...` | 403 `member_not_linked` | a **group** id and a **user** id |
+| 12 | `groups.py::acting_member` `no member of group {group_id!r} is linked to user {user_id!r}; ...` | 403 `member_not_linked` | a **group** id and a **user** id |
 
 Rows 5, 6, 8, 9, 11 and 12 were found while writing this spec. Rows 5 and 6 matter more
 than they look: their `{key!r}` is a member id that **is** in the roster, so unlike rows
@@ -393,7 +393,8 @@ raise MalformedRequest(
 
 ### `src/splitwise_lite/groups.py`
 
-**12.** `resolve_member`:
+**12.** `acting_member` (this spec first wrote `resolve_member` here; see the correction
+at criterion 15):
 
 ```python
 raise MemberNotLinked(
@@ -570,13 +571,82 @@ including case and the absence of a trailing full stop.
 14. `web.py::_read_debt`'s self-pair check raises `MalformedRequest` whose message is
     exactly
     `a member cannot owe themselves; the debtor and the creditor in the path are the same member`.
-15. `groups.py::resolve_member` raises `MemberNotLinked` whose message is exactly
+15. `groups.py::acting_member` raises `MemberNotLinked` whose message is exactly
     `no member of this group is linked to your account; an operator links a member with 'setup_group.py link'`.
     Its signature and its store call are unchanged, and the `from error` chaining stays.
+
+    > **Correction, 2026-09-07.** This criterion used to open "`groups.py::resolve_member`
+    > raises `MemberNotLinked` whose message is exactly". There is no such function.
+    > `grep -rn resolve_member src/ scripts/ tests/ app/` returns nothing, so the
+    > criterion named a site that does not exist and could not be satisfied as written.
+    >
+    > The real site is `acting_member`, and the substitution is unambiguous rather than a
+    > guess: an `ast` walk over `src/splitwise_lite/groups.py` finds exactly one
+    > `raise MemberNotLinked` in the package, at line 780, inside `def acting_member`.
+    > One raise, one candidate. What the criterion protects, that this one 403's sentence
+    > is the id-free one, is unchanged, and the sentence quoted above was already right.
+    >
+    > The wrong name appeared **three** times in this file and all three are now
+    > corrected: this criterion, row 12 of the twelve-site table under "What was measured,
+    > and where the issue is wrong", and the `groups.py` entry under "What each message
+    > becomes", which also carries a pointer back here. It was corrected in the PR body
+    > for #81 before it was corrected here, which is why it is written down: the PR body
+    > is not what the next reader of this spec finds.
 16. Every one of the twelve is lower case at the start and has no trailing full stop.
 17. No message in `split.py`, `web.py` or `groups.py` that reaches a 4xx body interpolates
     a name or attribute ending in `_id`, nor a bare `key`, `value`, `debtor` or
     `creditor`. Checked by reading, and enforced by criteria 27 to 31.
+
+    > **Resolution, 2026-09-07.** This criterion's clause "nor a bare `key`, `value`,
+    > `debtor` or `creditor`" contradicts this spec's own section "Payload key names are
+    > not identifiers, and stay", which says of `payer_id`, `to_member_id`, `member_ids`,
+    > `weight`, `amount`, `debtor` and `creditor` that they "stay in the messages". Taken
+    > literally the clause forbids exactly what that section mandates. The contradiction
+    > is recorded here rather than left for the next reader to re-derive, because it was
+    > re-derived once already, in the PR body for #81, and a PR body is not what the next
+    > reader of this spec finds.
+    >
+    > **It is resolved by this criterion's own closing words**, "enforced by criteria 27
+    > to 31". Those criteria are about identifier **values** the store holds: criterion 32
+    > builds the identifier set from the group id, the member ids, the user ids and the
+    > event ids, and criterion 31 asserts no 4xx body contains one of them. A payload key
+    > **name** is not in that set and never can be. So where the name heuristic in this
+    > criterion points at a key name rather than at a stored value, the heuristic is what
+    > is wrong, and the enforcement mechanism defines the scope.
+    >
+    > That reading is backed by measurement, not by preference. The five helpers whose
+    > messages interpolate a bare `key` are `_require_keys`, `_require_str`,
+    > `_require_amount_str`, `_require_object` and `_require_list`. An `ast` walk over
+    > `src/splitwise_lite/web.py` finds **24** call sites of those five, and at every one
+    > of the 24 the key argument is a string literal: 16 a single literal, and 8 a tuple
+    > of literals to `_require_keys`. There is no call site at which the interpolated
+    > `key` could be an identifier value.
+    >
+    > The decisive evidence is what honouring the clause literally would have cost. The
+    > same walk finds **6** pre-existing `raise` sites in `web.py` whose message
+    > interpolates a bare `key`, across 5 functions: two in `_require_keys` (the missing
+    > key and the unrecognised key) and one each in `_require_str`,
+    > `_require_amount_str`, `_require_object` and `_require_list`. None of the six is one
+    > of the twelve this task rewords. Editing them is precisely what the Constraints
+    > section forbids under "Tidying", so the literal reading requires this spec to breach
+    > itself. That is the evidence the value reading is the intended one.
+    >
+    > Which is not to say the clause was pointless: it was right about two sites and wrong
+    > about six, and the two are why it was written. Rows 5 and 6 of the twelve-site table,
+    > `_require_weight` and `_require_exact_amount`, interpolated a bare `key` that really
+    > was a member id, and they are the reason a static scan for the token cannot tell a
+    > leak from a key name. Those two are the sites the clause was reaching for, and
+    > criteria 7 and 8 discharge it for them structurally rather than by wording, by
+    > removing the parameter so that no identifier is in scope to interpolate. So read
+    > this way the clause is satisfied everywhere it was true and dropped only where it
+    > pointed at a literal, which is why nothing it protected is lost.
+    >
+    > The same resolution covers the `debtor` and `creditor` half of the clause, which
+    > criterion 13 separately **requires** a message to name, and for the same reason: in
+    > `_read_debt` those are path parameter names in the published wire contract, not
+    > values out of the store. `value` needs no resolution for messages: after this task
+    > no 4xx message interpolates it, though `_require_member_id` still takes the
+    > identifier in a parameter of that name.
 
 ### The error contract does not move
 
@@ -735,9 +805,26 @@ including case and the absence of a trailing full stop.
 
 42. These pre-existing tests change. Every one of them keeps its subject, keeps its
     `expense_count` / `stored_settlements` assertion where it had one, and **gains** an
-    assertion that no id is present. Five are renamed because their current names assert
+    assertion that no id is present. Four are renamed because their current names assert
     the defect; each rename is recorded in the PR body, and
     `tests/test_suite_integrity.py`'s duplicate check catches any collision.
+
+    > **Correction, 2026-09-07.** This criterion's prose used to read "Five are renamed
+    > because their current names assert the defect". The table below lists **four**, and
+    > the table is the operative specification here, because each row names one test and
+    > its own must-become state while the prose is only a summary of them.
+    >
+    > Counted mechanically off this file rather than by eye: the table holds 10 rows, of
+    > which 4 say "renamed", 4 say "keeps its name", and 2 say neither and keep their
+    > names, those two being the `test_split.py` rows that only gain an anchored
+    > `match`. So six of the ten keep their names and four change.
+    >
+    > Four is also what shipped, checked against the tests rather than against the
+    > table: each of the four old names now has **0** `def` sites in
+    > `tests/test_web_api.py` and each of the four new names has exactly **1**. Nothing
+    > was lost by following the table, since the six tests that keep their names are
+    > precisely the ones that gain the new negative assertion, which is what this
+    > criterion exists to add.
 
     | test | today | must become |
     |---|---|---|
@@ -793,7 +880,23 @@ including case and the absence of a trailing full stop.
     `src/splitwise_lite/groups.py`, `tests/test_split.py`, `tests/test_web_api.py`,
     `tests/test_shell_behaviour.py`, `tests/shell_harness.mjs`,
     `tests/test_error_messages.py` (new), `plans/mutations/61-identifiers-in-4xx-bodies.md`
-    (new), and this spec if it needs correcting. Two files are created; none is deleted.
+    (new), and this spec if it needs correcting. Three files are created; none is deleted.
+
+    > **Correction, 2026-09-07.** This criterion used to close "Two files are created;
+    > none is deleted." Three are.
+    >
+    > Measured from the diff rather than from the list above:
+    > `git diff --name-status $(git merge-base master HEAD)..HEAD` reports **10** paths,
+    > **3** of them `A` and **7** `M`, with **0** `D`. The ten paths are exactly the ten
+    > named above and nothing is deleted, so the operative constraint held; only the
+    > created count was wrong.
+    >
+    > The uncounted third creation is this spec. It is the tenth path in the list, added
+    > as "this spec if it needs correcting", and it arrived in the working tree untracked,
+    > so the commit that carries it records it as created rather than modified. The two
+    > halves of this criterion, "exactly ten" and "two are created", therefore could not
+    > both hold from the moment the spec was untracked. The half to follow is the ten
+    > named paths, since that is the constraint about what the task may touch.
 47. **Do not run the whole suite in one command.** `master` collects 2484, nothing skipped
     and nothing xfailed, and at that size under contention a single run exceeds the agent
     watchdog; it has killed nine agents in one day. Run it in chunks by module
@@ -905,8 +1008,10 @@ including case and the absence of a trailing full stop.
   `plans/mutations/61-identifiers-in-4xx-bodies.md`, in the README's seven-key format,
   never as a sentence. Every run sets `PYTHONDONTWRITEBYTECODE=1`. Per rule (e).
 * **Existing tests are not loosened.** Only the ten in criterion 42 change, every one of
-  them keeps its subject and gains a negative assertion, and the five renames are only of
-  names that assert the defect. Nothing is deleted, reordered, skipped or xfailed.
+  them keeps its subject and gains a negative assertion, and the four renames are only of
+  names that assert the defect. Nothing is deleted, reordered, skipped or xfailed. This
+  bullet used to say "the five renames", the same wrong count corrected at criterion 42;
+  the table there lists four and four is what shipped.
 * **Punctuation matches the family:** lower-case opening, no trailing full stop. `app/app.js`
   adds none, so the punctuation is the server's to get right.
 * **Python 3.12 target.** A docstring on every new function, and a one-line comment where a
@@ -925,10 +1030,34 @@ Small in `src/`: twelve message edits, two private signatures each losing one pa
 two call sites losing one argument each, and one loop gaining a position. Perhaps thirty
 lines replaced across three files, none of them adding a function.
 
-The bulk is `tests/test_error_messages.py`, which is one table of about twenty rows, one
+The bulk is `tests/test_error_messages.py`, which is one table of **106** rows, one
 `ast` walk, one pure function, and five tests over them. Then ten strengthened tests, one
 harness scenario with its `SCENARIOS` row, three cross-language pins behind one shared
 helper, two harness constants, and one mutation record.
+
+> **Correction, 2026-09-07.** This paragraph used to read "which is one table of about
+> twenty rows". The table is **106** rows, so the estimate was wrong by a factor of five
+> and the criteria are what to follow.
+>
+> Measured, not taken from anyone's report: importing `FOUR_HUNDRED_SITES` from
+> `tests/test_error_messages.py` gives **106** rows with **106** distinct keys, of which
+> **50** carry `NO_REQUEST_REACHES_IT` and the remaining **56** carry a driver; and
+> `four_hundred_raise_sites()`, the walk criterion 28 specifies, finds **106** 4xx raise
+> sites in `src/splitwise_lite/`. Table and walk agree, which is the equality criterion
+> 28 asserts.
+>
+> Nothing had to give for that to be right, because **criterion 27 is not scoped to three
+> files**: it says one row per `raise` site in `src/splitwise_lite/` whose exception class
+> maps to a 4xx status, and the package is eight modules. Counted per module off the same
+> import: `web.py` 33, `store.py` 29, `accounts.py` 17, `groups.py` 9, `split.py` 9,
+> `money.py` 7, `balances.py` 1, `simplify.py` 1. The estimate reads as though only
+> `web.py`, `split.py` and `groups.py` were in scope, and it was low even then: those
+> three alone are 51 rows.
+>
+> This is the same lesson as the count corrections above, and worth stating once as a
+> rule rather than three times as an incident. **A count written into a spec is a
+> measurement, not a guess.** Estimate the size in prose if that helps, but a figure a
+> criterion will be checked against has to come from a command somebody ran.
 
 If this task grows a new module in `src/`, a new exception class, a new error code, a
 second display helper, an edit under `app/`, an allowlist inside the check, or a
