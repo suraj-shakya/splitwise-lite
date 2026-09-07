@@ -716,6 +716,174 @@ def test_motion_is_disabled_when_the_reader_asks_for_less() -> None:
     assert "@media (prefers-reduced-motion: reduce)" in styles()
 
 
+# --- The one break rule, and the ways it could be taken back ---------------
+#
+# These three replace a hand-maintained list of nine `.balances-*` class names. The
+# list could not be right: it derived nothing from app/app.js, and on the day it
+# shipped it named a description-bearing class as name-bearing, protected two classes
+# that carry no server string at all, and missed `.curtain-error` and `.curtain-text`,
+# which carry the server's own prose and sit outside all three screens. These derive
+# from the stylesheet instead, and cover the file rather than one block of it.
+
+
+def test_one_declaration_lets_every_long_word_in_the_shell_break() -> None:
+    """`overflow-wrap: anywhere` is declared once, on `body`, and nowhere else.
+
+    `overflow-wrap` is inherited, so one declaration on `body` covers all three
+    screens, the gate, the notice, the header, the tab bar, and every text-bearing
+    class nobody has written yet: a class a later task adds is protected without its
+    author remembering anything. That is the property a per-class list cannot have,
+    and PR #56 is the proof it needed one. Three `.balances-*` classes carrying a
+    display name shipped there with no break rule of their own, on a branch whose
+    author had read the comment naming the hazard, and the list of nine meant to
+    catch them named neither `.curtain-error` nor `.curtain-text`, which render the
+    server's own sentences at unbounded length.
+
+    `anywhere` and not `break-word`. The two differ only in intrinsic sizing, and that
+    difference is the whole hazard: under `break-word` the soft wrap opportunities the
+    property introduces are not counted when min-content is computed, so a flex item
+    still takes an unbroken 100-character name as its width floor and pushes its
+    container wide unless `min-width: 0` is remembered beside it. Under `anywhere`
+    they are counted, so one declaration is sufficient on its own and there is no
+    second thing to remember.
+    """
+    css = styles()
+    values = re.findall(r"overflow-wrap:\s*([a-z-]+)", css)
+    if values != ["anywhere"]:
+        found = (
+            "no overflow-wrap declaration was found in app/styles.css"
+            if not values
+            else (
+                f"app/styles.css declares overflow-wrap {len(values)} times, with "
+                f"values {values}"
+            )
+        )
+        pytest.fail(
+            f"{found}.\n"
+            "\n"
+            "It must declare it exactly once, as `overflow-wrap: anywhere`, in the "
+            "`body` rule. Once, because a second declaration is a second place to "
+            "update and a per-class copy is how PR #56 shipped three unprotected "
+            "classes. On `body`, because that is the only selector that reaches "
+            "everything the shell renders, the gate and the notice included. "
+            "`anywhere`, because only `anywhere` counts its own break opportunities "
+            "when min-content is computed, so only `anywhere` stops a flex item "
+            "taking an unbroken name as its width floor."
+        )
+    rule = re.search(r"(?<![-\w])body\s*\{[^}]*\}", css)
+    assert rule is not None, "app/styles.css declares a `body` rule"
+    assert "overflow-wrap: anywhere;" in rule.group(0), (
+        "The one overflow-wrap declaration in app/styles.css is not inside the `body` "
+        "rule, so it is not inherited by everything the shell renders. The `body` "
+        f"rule found was:\n{rule.group(0)}"
+    )
+
+
+def test_nothing_in_the_shell_takes_the_break_rule_back() -> None:
+    """Nothing in app/styles.css suppresses, revokes or hides an inherited break.
+
+    Five declarations could, and each defeats it differently. `white-space` set to
+    `nowrap` suppresses every soft wrap opportunity in a box, so the inherited rule
+    has nothing left to act on. `overflow-wrap` set back to `normal` revokes the rule
+    outright. `word-break` is the neighbouring property whose values move where a
+    break may fall, so it can undo the effect while leaving the declaration in place.
+    `text-overflow` and `-webkit-line-clamp` do something worse than overflowing:
+    they hide the part that did not fit, and a silently truncated name or amount on a
+    money screen is a wrong answer rather than an ugly one.
+
+    `.balances-figure` and `.tab` are the two selectors allowed to refuse a wrap, and
+    both hold text of fixed shape: a server-formatted amount that must never break
+    mid-number, and the three literal tab labels. A sorted equality and not a
+    membership, so a third selector reaching for `nowrap` fails here rather than
+    passing because the two named ones still have theirs.
+    """
+    css = styles()
+    block = without_comments(css)
+    spacing = re.findall(r"white-space:\s*([a-z-]+)", block)
+    assert spacing == ["nowrap", "nowrap"], (
+        f"app/styles.css declares white-space {len(spacing)} times, with values "
+        f"{spacing}. Exactly two are allowed, both `nowrap`."
+    )
+    refusing = sorted(
+        head.strip()
+        for head in re.findall(r"([^{}]*)\{[^}]*white-space:\s*nowrap", block)
+    )
+    assert refusing == [".balances-figure", ".tab"], (
+        f"The selectors in app/styles.css refusing a wrap are {refusing}. Exactly "
+        "two are allowed, .balances-figure and .tab, because both hold text of fixed "
+        "shape. Anything else carrying `white-space: nowrap` cannot use the inherited "
+        "`overflow-wrap: anywhere`, because nowrap leaves it no soft wrap opportunity "
+        "to take, which is the form the PR #56 defect can still take."
+    )
+    revoked = re.findall(r"overflow-wrap:\s*normal", block)
+    assert not revoked, (
+        f"app/styles.css takes the break rule back {len(revoked)} times with "
+        "`overflow-wrap: normal`. Implied by "
+        "test_one_declaration_lets_every_long_word_in_the_shell_break, and asserted "
+        "here too, because this is the test whose name says it."
+    )
+    for prop in ("text-overflow", "-webkit-line-clamp", "word-break"):
+        assert prop not in block, (
+            f"app/styles.css declares `{prop}`. It hides or relocates an overflow "
+            "instead of letting the text wrap, and on a money screen a name or an "
+            "amount that is quietly cut short is a wrong answer."
+        )
+    clipping = re.findall(r"(?<![-\w])overflow:\s*hidden", block)
+    assert len(clipping) == 1, (
+        f"app/styles.css declares `overflow: hidden` {len(clipping)} times. Exactly "
+        "one is allowed, on `body`, and it is what makes the document element the "
+        "wrong thing to measure. A second one clips text somewhere else."
+    )
+    rule = re.search(r"(?<![-\w])body\s*\{[^}]*\}", css)
+    assert rule is not None, "app/styles.css declares a `body` rule"
+    assert "overflow: hidden;" in rule.group(0), (
+        "The one `overflow: hidden` in app/styles.css is not on `body`, so it clips "
+        f"something other than the viewport. The `body` rule found was:\n"
+        f"{rule.group(0)}"
+    )
+
+
+def test_the_scroll_container_is_the_content_area_and_not_the_document() -> None:
+    """`body` clips and `.content` scrolls, so the root's scrollable area cannot grow.
+
+    Which is the whole of issue #58. The viewport's scrolling area is propagated from
+    the root element; `body` clips, so nothing inside `.content` can extend it, and
+    `document.documentElement.scrollWidth` equals its `clientWidth` whether or not
+    content overflows. Four task specs asked an implementer to confirm exactly that
+    equality in a browser as the test for horizontal overflow, so the check would
+    have reported success in precisely the case it was written to catch. The
+    measurement that works is `el.scrollWidth > el.clientWidth` on `.content` and on
+    each rendered row container.
+
+    This test is also what says so when it stops being true. If either declaration is
+    ever removed, the dated correction notes in `plans/tasks/` stop describing this
+    shell, and this is the check that goes red rather than nine documents quietly
+    going stale.
+    """
+    css = styles()
+    body_rule = re.search(r"(?<![-\w])body\s*\{[^}]*\}", css)
+    assert body_rule is not None, "app/styles.css declares a `body` rule"
+    assert "overflow: hidden;" in body_rule.group(0), (
+        "`body` no longer sets `overflow: hidden`, so the root element may now scroll "
+        f"and the notes in plans/tasks/ are stale. The `body` rule found was:\n"
+        f"{body_rule.group(0)}"
+    )
+    content_rule = re.search(r"(?<![-\w])\.content\s*\{[^}]*\}", css)
+    assert content_rule is not None, "app/styles.css declares a `.content` rule"
+    assert "overflow-y: auto;" in content_rule.group(0), (
+        "`.content` no longer sets `overflow-y: auto`, so it is no longer the scroll "
+        f"container the notes in plans/tasks/ name. The `.content` rule found was:\n"
+        f"{content_rule.group(0)}"
+    )
+    horizontal = re.findall(r"overflow-x\s*:\s*([a-z-]+)", css)
+    assert not horizontal, (
+        f"app/styles.css declares overflow-x, with values {horizontal}. Per CSS "
+        "Overflow, `.content`'s `visible` horizontal axis already computes to `auto` "
+        "beside its `overflow-y: auto`; declaring overflow-x explicitly changes which "
+        "box scrolls and makes the corrected measurement in plans/tasks/ wrong again."
+    )
+
+
 def test_the_worker_precaches_exactly_the_shell() -> None:
     assert precache_entries() == SHELL_PRECACHE
 
@@ -1901,17 +2069,33 @@ def test_every_transfer_row_clears_the_hit_area_floor() -> None:
     assert min(heights) >= 44
 
 
-def test_a_long_display_name_wraps_rather_than_being_cut_off() -> None:
-    # A 40-character name at 320px must wrap onto another line, never be clipped,
-    # ellipsised or overlapped, and never push the page into a horizontal scroll.
-    block = without_comments(balances_styles())
-    assert "overflow-wrap: break-word" in block
-    for forbidden in ("text-overflow", "overflow: hidden"):
-        assert forbidden not in block, forbidden
-    # The amount is the one thing kept whole, so a figure never breaks mid-number,
-    # and its rule is the only one in the block allowed to refuse a wrap.
-    refusing = re.findall(r"([^{}]*)\{[^}]*white-space:\s*nowrap", block)
-    assert [head.strip() for head in refusing] == [".balances-figure"]
+def test_no_balances_rule_declares_a_break_of_its_own() -> None:
+    """No rule on this screen declares `overflow-wrap`. The root declares it once.
+
+    This inverts the test it replaces. `test_a_long_display_name_wraps_rather_than_
+    being_cut_off` asserted that `overflow-wrap: break-word` appeared somewhere in
+    this block, and that was satisfied by one declaration anywhere in it, which is
+    how three name-bearing classes shipped on PR #56 with no break rule at all. It
+    is now one inherited declaration on `body`, so a copy here is not belt and
+    braces: it is a second place to update, and the class of defect the deleted test
+    was written to catch was a class that fell off a hand-maintained list.
+
+    The three things the replaced test asserted are all still asserted, wider. That
+    `break-word` appears in this block is inverted here. That nothing in this block
+    carries `text-overflow` or `overflow: hidden`, and that `.balances-figure` is the
+    only selector refusing a wrap, both widen from this block to the whole file in
+    `test_nothing_in_the_shell_takes_the_break_rule_back`.
+    """
+    declaring = sorted(
+        selector
+        for selector, body in balances_declarations().items()
+        if "overflow-wrap" in body
+    )
+    assert not declaring, (
+        f"The balances block declares overflow-wrap on {declaring}. The root "
+        "declaration on `body` already covers every one of them, so a per-class copy "
+        "here is a second place to update and nothing else. Delete it."
+    )
 
 
 def balances_declarations() -> dict[str, str]:
@@ -1931,40 +2115,6 @@ def balances_declarations() -> dict[str, str]:
             if name:
                 rules[name] = rules.get(name, "") + body
     return rules
-
-
-# Every class on this screen that a display name is interpolated into. A name is the
-# one string here of unbounded length that the group chose rather than this repo, and
-# 40 unbroken characters at 16px runs 300 to 330px against a content box of 258px at
-# the narrowest supported width and 228px three levels in. Add to this list when a new
-# line carries a name.
-CARRIES_A_NAME = (
-    ".balances-line",
-    ".balances-shape-note",
-    ".balances-debt-label",
-    ".balances-entry-description",
-    ".balances-entry-effect",
-    # Task 14. The pending row names both ends of the payment, and the status line
-    # names the receiver in the sentence it shows after a claim is recorded.
-    ".balances-pending-line",
-    ".balances-action-status",
-    # Task 15. The rejected row names both ends too, and the outcome sentence at the
-    # top of the screen names both of them again.
-    ".balances-rejected-line",
-    ".balances-decision",
-)
-
-
-def test_every_line_that_carries_a_name_can_break_a_long_one() -> None:
-    # The test above is satisfied by one `overflow-wrap` anywhere in the block, which
-    # is how three of these five shipped without it. This one names them, because the
-    # check criterion 68 states cannot see the difference: body sets `overflow:
-    # hidden` and the scroll container is `.content`, so `documentElement.scrollWidth`
-    # equals `clientWidth` whether or not a name is running out of its box.
-    rules = balances_declarations()
-    for selector in CARRIES_A_NAME:
-        assert selector in rules, selector
-        assert "overflow-wrap: break-word" in rules[selector], selector
 
 
 def test_no_row_carries_its_meaning_in_colour_alone() -> None:
