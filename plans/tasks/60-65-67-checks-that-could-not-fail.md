@@ -552,18 +552,117 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
 
 ## Findings
 
-*Filled in by the implementer before the PR is opened. Leave the headings; replace the italics.*
+**Audit results.** All thirteen pins reached **rung 1**. In every case the guard the test names
+is real, fires first, and is the only thing that refuses the arrangement: with it deleted the
+call either raised nothing at all or died somewhere unrelated, and never produced a different
+exception that the loose pattern would have accepted. Nothing reached rung 2 or rung 3, so no
+test's arrangement was changed and nothing was escalated. Seven guard deletions covered the
+thirteen pins, each recorded with its anchor, its replacement and the message it printed in
+`plans/mutations/65-message-pins.md`.
 
-**Audit results.** *One line per pin from criterion 25: rung reached, and for rung 2 and rung 3
-what was found and what was done.*
+| # | test | guard deleted | rung | what the deletion produced |
+|---|---|---|---|---|
+| 1 | `test_split_by_weight_rejects_weights_that_all_sum_to_zero` | `split._allocate` | 1 | `ZeroDivisionError: integer division or modulo by zero` |
+| 2 | `test_split_equally_rejects_a_repeated_member` | `split._ordered_from_iterable` | 1 | `DID NOT RAISE InvalidSplit` |
+| 3 | `test_an_element_that_is_not_a_ledger_event_raises_type_error_naming_it` | `balances._partition` | 1 | `DID NOT RAISE TypeError` |
+| 4 | the same test, second block | `balances._partition` | 1 | nothing raised (see note below) |
+| 5 | `test_a_group_id_that_is_not_a_str_raises_type_error` | `balances._require_group_id` | 1 | `DID NOT RAISE TypeError` |
+| 6 | `test_a_currency_that_is_not_a_currency_raises_type_error` | `balances._require_currency` | 1 | `DID NOT RAISE TypeError` |
+| 7 | `test_a_foreign_settlement_is_rejected_too` | `balances._require_group` | 1 | `DID NOT RAISE InvalidLedger` |
+| 8 | `test_a_repeated_expense_id_is_a_domain_error_naming_the_id` | `balances._sorted_unique` | 1 | `DID NOT RAISE InvalidLedger` |
+| 9 | `test_a_repeated_settlement_id_is_a_domain_error_naming_the_id` | `balances._sorted_unique` | 1 | `DID NOT RAISE InvalidLedger` |
+| 10 | the same test, `settlement_states` block | `balances._sorted_unique` | 1 | nothing raised (see note below) |
+| 11 | `test_a_repeated_decision_id_is_a_domain_error_naming_the_id` | `balances._sorted_unique` | 1 | `DID NOT RAISE InvalidLedger` |
+| 12 | `test_both_public_functions_refuse_a_log_that_double_counts_an_expense` | `balances._sorted_unique` | 1 | `DID NOT RAISE InvalidLedger` |
+| 13 | the same test, `settlement_states` block | `balances._sorted_unique` | 1 | nothing raised (see note below) |
 
-**Tests whose shape changed.** *Name, before, after, why. "None" if none.*
+*Pins 4, 10 and 13 are second blocks of tests whose first block reds first, so the node-id run
+cannot show them failing on their own. Each was audited by performing its exact call under the
+same guard deletion — `settlement_states([None])`, `settlement_states` over the repeated
+settlement ledger, and `settlement_states` over the double-counted expense ledger — and each
+raised nothing at all. A masked pin is not an audited pin, so these were run rather than
+inferred from the guard they share.*
 
-**Unanchored markers now in the suite.** *Count, and one line per marker: where it is and why the
-substring is deliberate. "None" if none.*
+**The two pins criterion 26 flagged in advance.**
 
-**Count arithmetic.** *2343 on master, plus N added, equals the number the suite reports. Show the
-N broken down by test.*
+*Pin 6, `match="str"`, `test_a_currency_that_is_not_a_currency_raises_type_error`.* **Not** the
+PR #62 shape, although the collision it warns about is real in the abstract:
+`balances._require_currency` says `currency must be a Currency, got str: 'AUD'` and `Money` would
+say `Money currency must be a Currency, got str: 'AUD'`, which contains `str` just as readily.
+What saves this pin is the arrangement rather than the pattern. The test calls
+`derive_balances([], group_id=GROUP, currency="AUD")` with an **empty** event list, so nothing
+downstream ever constructs a `Money` with the bad currency. With the guard deleted the call
+raised nothing at all rather than raising `Money`'s superstring, so the pin did depend on the
+guard its name claims. Rung 1. The pattern was nevertheless weak enough that the same test over a
+non-empty ledger would have gone green on `Money`'s refusal, which is exactly why it is now
+`match=r"^currency must be a Currency, got str"`.
+
+*Pin 13, `match="e1"` on the `settlement_states` block.* Holds, for a similar reason. The worry
+was that `"e1"` cannot tell "the same expense id appears twice" from any other message naming
+`e1`. With `_sorted_unique`'s refusal deleted, `settlement_states` over that ledger raised
+**nothing at all**, so there was no other message naming `e1` standing in for it. Rung 1. The
+anchored pattern now names the label as well as the id
+(`^the same expense id appears twice in the ledger: 'e1'$`), so an expense collision can no longer
+be satisfied by a settlement or a decision one.
+
+**Tests whose shape changed.** None. Thirteen `match=` pattern strings changed and nothing else:
+no test added, deleted, renamed, reordered, loosened, skipped, xfailed or reparametrised.
+`uv run python -m pytest --collect-only -q tests/test_split.py tests/test_balances.py` reports the
+identical 332 ids before and after; the two listings were diffed and are byte-identical.
+
+**Unanchored markers now in the suite.** **None.** Zero `# unanchored:` markers. Every one of the
+thirteen pins was anchorable against the message its guard really prints, so no pin needed the
+escape hatch. The marker mechanism is exercised only by the synthetic sources in
+`test_the_pin_check_still_bites`, which is where its accept and refuse cases are pinned.
+
+**Count arithmetic.** 2343 on master, plus 49 added by `tests/test_suite_integrity.py`, equals
+**2392**, which is what the suite reports with 0 failed, 0 skipped and 0 xfailed. The pin work
+adds none and removes none. The 49 are **15 single tests plus 2 checks parametrised over 17 test
+modules** (2 x 17 = 34; 15 + 34 = 49):
+
+* Parametrised, 17 cases each, one per `*.py` file under `tests/` (16 modules on master plus
+  `tests/test_suite_integrity.py` itself): `test_no_test_module_defines_a_name_twice`,
+  `test_every_message_pin_is_anchored_or_says_why`.
+* Single: `test_test_sources_is_every_test_module`,
+  `test_the_duplicate_check_catches_a_duplicate_test`,
+  `test_the_duplicate_check_catches_a_duplicate_fixture`,
+  `test_the_duplicate_check_leaves_a_nested_definition_alone`,
+  `test_the_duplicate_check_looks_at_one_module_at_a_time`,
+  `test_the_duplicate_check_reads_async_and_class_definitions`,
+  `test_a_module_that_will_not_parse_names_the_file_and_quotes_the_error`,
+  `test_the_duplicate_definition_message_says_what_happened`,
+  `test_the_pin_check_still_bites`,
+  `test_a_pin_whose_pattern_is_not_a_literal_is_flagged`,
+  `test_the_unanchored_pin_message_says_what_happened`,
+  `test_every_recorded_mutation_is_machine_readable`,
+  `test_a_mutation_record_holds_no_prose_only_section`,
+  `test_the_testing_rules_keep_the_three_they_had`,
+  `test_the_testing_rules_name_the_mechanisms_that_enforce_them`.
+
+Because both parametrised checks are driven by `TESTS.rglob("*.py")`, this number moves on its
+own: a later task that adds one test module adds three tests, its own plus one case in each check.
+
+**A criterion that did not hold as written: 44c.** Criterion 44c predicts that after appending a
+second `def test_a_repeated_expense_id_is_a_domain_error_naming_the_id`, the count from
+`uv run python -m pytest -q tests/test_balances.py` is "exactly one lower" than in 44a. It is
+**not**. Measured: **152 passed before, 152 passed after** — unchanged. The test the criterion
+names is a single, non-parametrised test, so shadowing it removes one test and adds one test and
+the arithmetic is invariant. Shadowing a **parametrised** test does move the count, which is
+presumably the shape the criterion was written from: appending a single
+`def test_an_empty_member_id_is_a_domain_error` over the two-case parametrised test of that name
+takes the module from 152 to 151, green both times.
+
+Everything else in demonstration 44 holds, and the substance of it holds more strongly than the
+criterion claims: the damaged module reports success, and the deleted test really is gone. With
+the duplicate in place, deleting `balances._sorted_unique`'s guard — the very guard
+`test_a_repeated_expense_id_is_a_domain_error_naming_the_id` exists to pin — leaves that node id
+**green**, because the name now resolves to `assert True`.
+
+This is worth recording rather than filing as a nit, because it qualifies the discipline #67 was
+found by. Reconciling a pass count arithmetically catches a duplicate that shadows a parametrised
+test; it does **not** catch one that shadows a single test, where the count never moves. That is
+an argument for the mechanism over the discipline, which is what this task builds. Criterion 44c
+is left as written pending a decision, and this entry is the record of the measurement.
 
 ## Out of scope
 
