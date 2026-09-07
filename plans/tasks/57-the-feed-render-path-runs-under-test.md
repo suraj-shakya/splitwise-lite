@@ -441,8 +441,25 @@ fires on the original defect.
 
 ## Constraints
 
-- Files to modify: `tests/shell_harness.mjs` and `tests/test_shell_behaviour.py`. No other
-  file in the repository is created, modified or deleted.
+- Files to modify: `tests/shell_harness.mjs`, `tests/test_shell_behaviour.py` and one
+  record under `plans/mutations/`. No other file in the repository is created, modified or
+  deleted.
+
+  **Corrected 2026-09-07.** This constraint used to read "Files to modify:
+  `tests/shell_harness.mjs` and `tests/test_shell_behaviour.py`. No other file in the
+  repository is created, modified or deleted." It now admits one file under
+  `plans/mutations/`. Why: rule (e) of `.claude/rules/testing.md` and
+  `plans/mutations/README.md`, both merged after this file was written, require a mutation
+  claimed anywhere in this repo to be recorded there as an anchor and a replacement, with
+  its scar attached - a mutation described in prose was reconstructed into a different
+  mutation with a different result. This task claims one such mutation, the flattening
+  switch-off that shows criterion 2 is pinned rather than assumed, and it is recorded in
+  `plans/mutations/57-fragment-flattening.md`. The constraint was aimed at scope creep and
+  never contemplated a mechanism the repo adopted afterwards, so it yields to the newer and
+  considered decision rather than the other way round. `MUTANT_G` needs no record: the
+  README states that a committed mutant is the alternative to one, and criterion 18 asks for
+  a committed mutant. Nothing else in the file list changes, and no criterion is sharpened,
+  re-scoped or softened by this correction.
 - **Append; do not restructure.** New scenario objects go at the end of the `SCENARIOS` array
   in the harness. New fixtures and helpers go at the end of the file, under a header naming
   issue #57, the way the task 13, 14, 15 and 43 blocks did; module-level function declarations

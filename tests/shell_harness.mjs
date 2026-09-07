@@ -985,7 +985,17 @@ function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
          render died. It lives here rather than in the scenarios that thought to look
          because that is the whole lesson of this defect: feedState('list') is the last
          line of feedRender, so a throw out of it left #feed-loading up forever and no
-         assertion anywhere in this file asked. */
+         assertion anywhere in this file asked.
+
+         Know its one limit before relying on it: main() calls finish() only when a
+         scenario body returns, so a body that throws skips this check along with the
+         rest of finish(), and "in every scenario" means in every scenario that
+         returns. That is why the feed scenarios below reach their rows through
+         feedRows(), which records the count failure and returns rather than
+         dereferencing a row that is not there. A scenario that dies on an unrelated
+         exception will not report a screen left mid-flight, and widening this to catch
+         that means moving finish() into a finally in main(), which is its own change
+         with its own blast radius. */
       ['feed-loading', 'balances-busy'].forEach((id) => {
         if (!byId(id).hidden) {
           failures.push(
