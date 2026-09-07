@@ -2254,10 +2254,12 @@ def test_a_declared_route_the_app_does_not_serve_is_refused() -> None:
     #
     # The withheld row is chosen by endpoint, not by position. It used to be
     # ``_API_ROUTES[:-1]``, which made this test's subject whichever row happened to
-    # sit last, so appending a route repointed it at the new endpoint and it stayed
-    # green while asserting about something it was never written about. It also
-    # handed everyone who adds a route an obligation nothing enforced: keep the debts
-    # row last. Selecting by name retires both.
+    # sit last. Appending a route repointed it at the new endpoint, and the two
+    # assertions below then failed on a message naming that endpoint: red about list
+    # position, in a test whose subject is route declaration. That is the whole defect,
+    # and it handed everyone who adds a route an obligation nothing enforced, to keep
+    # the debts row last. Selecting by name retires both. It was never a silent pass,
+    # and an earlier version of this comment said it was.
     withheld = "read_debt"
     declared = [row for row in web._API_ROUTES if row.endpoint != withheld]
     assert len(declared) == len(web._API_ROUTES) - 1, withheld
@@ -4631,9 +4633,18 @@ def test_a_receiver_that_is_not_a_json_string_is_refused(app, seeded: Path) -> N
     assert stored_settlements(seeded) == ()
 
 
-def test_an_amount_that_is_a_json_number_is_refused(app, seeded: Path) -> None:
+def test_a_settlement_amount_that_is_a_json_number_is_refused(
+    app, seeded: Path
+) -> None:
     # A number is something a client could have done arithmetic on, so money crosses
     # this wire as a string or not at all.
+    #
+    # Named for its endpoint because the expense path already owns
+    # ``test_an_amount_that_is_a_json_number_is_refused``, four parametrised cases near
+    # the top of this file. This function carried that name until QA caught it: a
+    # second definition rebinds the first at module scope, pytest collects only the
+    # later one, and those four cases stopped running with the suite green and no
+    # warning from anything.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     response = post(
