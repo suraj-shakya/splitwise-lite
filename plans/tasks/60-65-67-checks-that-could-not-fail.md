@@ -488,8 +488,29 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
        `def test_a_repeated_expense_id_is_a_domain_error_naming_the_id() -> None:` whose body is
        `assert True`.
     c. `uv run python -m pytest -q tests/test_balances.py` is **green**, and its passed count is
-       exactly one lower than in (a). This is the silence the whole issue is about: the module
-       that just lost a test reports success.
+       **unchanged** from (a). This is the silence the whole issue is about, and it is quieter
+       than this criterion first claimed: the module that just lost a test reports success, and
+       the count does not even move.
+
+       > **Corrected 2026-09-07, during implementation.** This criterion used to read "and its
+       > passed count is exactly one lower than in (a)". Measured on this branch: **152 passed
+       > before, 152 passed after — unchanged**. The prediction was wrong because
+       > `test_a_repeated_expense_id_is_a_domain_error_naming_the_id` is a single,
+       > non-parametrised test, so shadowing it removes one collected test and adds one, and the
+       > arithmetic is invariant. The count does move when the shadowed test is **parametrised**,
+       > which was verified rather than assumed: appending a single
+       > `def test_an_empty_member_id_is_a_domain_error` over the two-case parametrised test of
+       > that name takes `tests/test_balances.py` from 152 to 151, green both times. That is what
+       > makes the distinction real rather than inferred.
+       >
+       > The consequence is larger than the correction, and is recorded in rule (b) of
+       > `.claude/rules/testing.md`: reconciling a test count catches a duplicate that shadows a
+       > parametrised test and does not catch one that shadows a single test. **The PR #64
+       > collision was only ever caught because the shadowed test happened to be parametrised.**
+       > Had those four cases been one, nobody would have noticed, the suite would have been
+       > green, and the test would simply have stopped existing. That is the argument for
+       > criterion 7's check rather than for the discipline, and it exists because a prediction
+       > was measured instead of trusted.
     d. `uv run python -m pytest` is **red**, with the failure coming from
        `tests/test_suite_integrity.py::test_no_test_module_defines_a_name_twice[tests/test_balances.py]`,
        and its message names `tests/test_balances.py`, the duplicated name and **both** line
@@ -661,8 +682,16 @@ the duplicate in place, deleting `balances._sorted_unique`'s guard — the very 
 This is worth recording rather than filing as a nit, because it qualifies the discipline #67 was
 found by. Reconciling a pass count arithmetically catches a duplicate that shadows a parametrised
 test; it does **not** catch one that shadows a single test, where the count never moves. That is
-an argument for the mechanism over the discipline, which is what this task builds. Criterion 44c
-is left as written pending a decision, and this entry is the record of the measurement.
+an argument for the mechanism over the discipline, which is what this task builds.
+
+Put at its sharpest: **the PR #64 collision was only ever caught because the shadowed test
+happened to be parametrised.** Had those four cases been one, nobody would have noticed, the
+suite would have been green, and the test would simply have stopped existing. "It happened
+twice" is the weaker justification for criterion 7's check; this is the strong one.
+
+Criterion 44c has been amended in place to what was measured, with a dated marker, and the
+consequence is recorded in rule (b) of `.claude/rules/testing.md`, where somebody deciding
+whether the check earns its place will read it rather than having to find it in a spec.
 
 ## Out of scope
 

@@ -31,6 +31,16 @@ exercising what it named.
   somebody reconciled a pass count arithmetically. `tests/test_suite_integrity.py`
   refuses it now, with no allowlist and no marker, because a duplicate module-level
   definition is always a bug and an exemption is how a check stops being one.
+
+  Do not read that scar as saying arithmetic is a reliable backstop. Reconciling a test
+  count catches a duplicate that shadows a **parametrised** test, because the case count
+  moves. It does not catch one that shadows a single test, because the module count is
+  unchanged: one collected test is removed and one is added. Only the check catches that.
+  Measured rather than assumed: shadowing a single test left `tests/test_balances.py` at
+  152 passed either way, and shadowing a two-case parametrised test took it from 152 to
+  151. So the PR #64 collision was only ever caught because the shadowed test happened to
+  be parametrised. Had those four cases been one, nobody would have noticed, the suite
+  would have been green, and the test would simply have stopped existing.
 - **If a test's name mentions concurrency, staleness or a guard, its body has a second
   actor.** Scar: a 409 described as a race guard whose test only ever ran the sequential
   case, so it could not have failed for the reason its name gave.
