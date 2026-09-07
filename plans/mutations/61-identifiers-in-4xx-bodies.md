@@ -13,6 +13,35 @@ interpolation changes the message skeleton, so the walked key no longer equals t
 declared one. Either check alone would catch a restored leak here; both catch it, and
 the enumeration would also catch a *new* site nobody had thought about.
 
+> **Re-verification, 2026-09-07.** All five records were re-applied from their own `find`
+> and `replace`, one at a time, each anchor asserted to match exactly once, each reverted
+> with `git checkout -- <file>` before the next, `PYTHONDONTWRITEBYTECODE=1` on every
+> run. Rather than run each `kills` node id alone, each mutation was measured by running
+> whole modules, which yields the complete kill set inside them instead of only
+> confirming the ids already listed. Four records measured exactly as recorded. The
+> fifth, `make-the-identifier-search-total`, did not, and carries its own correction.
+>
+> | record | modules run | measured | against the record |
+> |---|---|---|---|
+> | `restore-the-payer-id` | `test_error_messages.py test_web_api.py` | 3 failed, 539 passed | exactly the 3 listed kills, both listed survivors green |
+> | `restore-the-member-id-and-the-figure` | `test_error_messages.py test_split.py` | 4 failed, 240 passed | exactly the 4 listed kills, both listed survivors green |
+> | `restore-the-group-and-user-ids` | `test_error_messages.py test_groups.py` | 2 failed, 263 passed | exactly the 2 listed kills, both listed survivors green |
+> | `blind-the-identifier-search` | `test_error_messages.py` | 3 failed, 61 passed | exactly the 3 listed kills, both listed survivors green |
+> | `make-the-identifier-search-total` | `test_error_messages.py` | 58 failed, 6 passed | **understated**, see the correction below |
+>
+> Two prose claims above were re-measured with the same runs and both hold. The claim
+> that each of the three source mutations kills two kinds of test at once is true of all
+> three: every one of them reds its driven row and
+> `test_every_four_hundred_raise_site_is_declared`. And the claim under mutations 4 and 5
+> that blinding the search passes all 56 driven rows was re-run as
+> `PYTHONDONTWRITEBYTECODE=1 uv run python -m pytest tests/test_error_messages.py -q -k
+> "no_four_hundred_body_names_an_identifier"`, which reports `56 passed, 8 deselected`.
+>
+> One further claim was measured as a side effect, and it holds. Record 3 says no test in
+> `tests/test_groups.py` asserts that message's text, so the driven row is the only thing
+> holding it. Under that mutation the whole of `tests/test_groups.py` stayed green, which
+> is that claim measured rather than read.
+
 ## 1. The payer, in `web.py`
 
 The site the spec numbers 3, and the one criterion 35 names. `{payer_id!r}` is a member
@@ -125,8 +154,42 @@ the shape of defect `.claude/rules/testing.md` rule (d) is about, one level up.
 ```
 
 The other direction, so the four tests pin the function from both sides rather than
-only rewarding a search that finds things. The id-free case is the control, and it is
-the only one of the four that this mutation kills.
+only rewarding a search that finds things.
+
+> **Correction, 2026-09-07.** This section used to close: "The id-free case is the
+> control, and it is **the only one of the four** that this mutation kills." That is
+> wrong, and it understates the mutation in both halves.
+>
+> Re-measured by applying this record's own `find` and `replace` through the recipe in
+> `README.md`, which reported the anchor matching exactly once, and then running
+> `PYTHONDONTWRITEBYTECODE=1 uv run python -m pytest tests/test_error_messages.py -q`:
+> **58 failed, 6 passed**. Of the four `identifiers_in` unit tests this mutation kills
+> **two**, not one: `test_identifiers_in_finds_nothing_in_an_id_free_message`, which is
+> the control, and `test_identifiers_in_reports_both_identifiers_when_two_are_present`,
+> which reds because a total function also reports the third identifier the message does
+> not contain. It also kills **all 56 driven rows** of
+> `test_no_four_hundred_body_names_an_identifier`, which the retracted sentence implies
+> stay green. The six survivors, listed from the same run under `-v`, are the other two
+> unit tests plus `test_every_four_hundred_raise_site_is_declared`,
+> `test_the_skeleton_of_a_message_drops_its_interpolations`,
+> `test_stored_identifiers_gathers_every_id_the_store_holds` and
+> `test_every_site_no_request_reaches_says_what_would_have_to_be_true`.
+>
+> The block below was extended in the same pass, from one entry in each list to three.
+> `kills` gained `test_identifiers_in_reports_both_identifiers_when_two_are_present` and
+> one driven row, the `_create_expense` payer row, standing for all 56. `survives` gained
+> `test_identifiers_in_finds_an_identifier_wrapped_in_punctuation` and
+> `test_every_four_hundred_raise_site_is_declared`. Neither list is exhaustive even now,
+> since writing out all 56 driven rows would bury the shape; the run above is the
+> exhaustive record. `result` is unchanged: the mutation was killed either way, and the
+> block was legal before, because the format does not require a list to be exhaustive.
+> What was wrong was the sentence claiming that it was.
+>
+> The asymmetry this section was reaching for is real, but it runs the other way.
+> Blinding the search is caught **only** by the unit tests, because all 56 driven rows
+> pass vacuously under mutation 4. Making it total is caught by the control **and** by
+> all 56 rows. So it is mutation 4, not mutation 5, that those unit tests are the sole
+> guard against, which is the claim criterion 30 rests on and which mutation 4 measures.
 
 ```json
 {
@@ -135,10 +198,14 @@ the only one of the four that this mutation kills.
   "find": "    return [found for found in identifiers if found in message]",
   "replace": "    return list(identifiers)",
   "kills": [
-    "tests/test_error_messages.py::test_identifiers_in_finds_nothing_in_an_id_free_message"
+    "tests/test_error_messages.py::test_identifiers_in_finds_nothing_in_an_id_free_message",
+    "tests/test_error_messages.py::test_identifiers_in_reports_both_identifiers_when_two_are_present",
+    "tests/test_error_messages.py::test_no_four_hundred_body_names_an_identifier[web.py::_create_expense::names_a_payer_id_that_is_not_a_member_of_this_gr]"
   ],
   "survives": [
-    "tests/test_error_messages.py::test_identifiers_in_finds_an_identifier_that_is_present"
+    "tests/test_error_messages.py::test_identifiers_in_finds_an_identifier_that_is_present",
+    "tests/test_error_messages.py::test_identifiers_in_finds_an_identifier_wrapped_in_punctuation",
+    "tests/test_error_messages.py::test_every_four_hundred_raise_site_is_declared"
   ],
   "result": "killed"
 }
