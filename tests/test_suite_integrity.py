@@ -39,6 +39,7 @@ import json
 import re
 import tokenize
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -618,6 +619,496 @@ def test_the_unanchored_pin_message_says_what_happened() -> None:
     other = unanchored_pin_message("tests/test_pretend.py", 12, None)
     assert "not a string literal" in other
     assert "has to be a literal for this check to read it" in other
+
+
+# --- The unanchored-block check (#70) --------------------------------------
+#
+# The guarantee here is one sentence and it is the converse of the one above: a
+# `match=` (or an equivalent whole-message comparison) EXISTS wherever a block reads
+# the exception's message. `test_every_message_pin_is_anchored_or_says_why` owns the
+# other half, that any `match=` which exists is anchored. Neither check restates the
+# other's guarantee, and neither re-decides the other's question: nothing here reads a
+# pattern for a leading `^`.
+#
+# What this check does NOT do, stated where a reader will hit it before drawing the
+# wrong conclusion from a green run: it makes no existing assertion able to fail. Every
+# block carried in CARRIED_UNANCHORED_BLOCKS below is exactly as loose after this check
+# as before it. Making them able to fail is the audit, issue #70's slices 70b to 70h,
+# one deleted guard at a time. This is the mechanism only.
+
+# The unit is the block, not the assertion, and the reason is measurable. A block
+# routinely asserts several fragments about one message — tests/test_store.py:2983 and
+# :2984 assert "u1" and "u2" — and at most one fragment can be at the start of a
+# message, so "put ^ on each" is unsatisfiable. Once one anchor in a block has
+# established which guard raised, every fragment assertion beside it stops being a pin
+# and becomes documentation.
+#
+# WHAT A BLOCK IS HERE, and this is a correction to the wording of criterion 5 of
+# plans/tasks/70-substring-assertions-on-exception-messages.md, recorded rather than
+# quietly applied. That criterion says the candidate is a `with` "whose body reads that
+# name's message". Measured on this branch 2026-09-08 over tests/*.py: of the 132
+# `str(NAME.value)` calls in the suite, **zero** are inside the `with` body and 132 are
+# after it. They cannot be inside: pytest populates `excinfo.value` in `__exit__`, and
+# the body has already been left by the exception in any case. Read literally, that
+# criterion finds nothing anywhere, CARRIED_TOTAL is 0, and this becomes a fourth check
+# that cannot fail — the exact defect this module exists to refuse. So the block is the
+# `with` statement TOGETHER WITH the statements that follow it in the same suite, up to
+# the next `raises`-binding `with` in that suite or the end of the suite: the region in
+# which that block's bound name is the live one. Criterion 15 already assumes this
+# reading, because it asks the baseline to notice "one of two blocks in a function"
+# being anchored, which only has a referent when a function's statements are divided
+# between its blocks.
+#
+# Shapes deliberately NOT seen, with the count each has on this branch, in the manner
+# message_pins' docstring lists its exclusions. Measured 2026-09-08 over tests/*.py:
+#   NAME.value.args                     0 occurrences
+#   repr(NAME.value)                    0 occurrences
+#   an f-string holding {NAME.value}    0 occurrences
+#   an annotated assignment `m: str = str(NAME.value)`   0 occurrences
+#   a walrus `(m := str(NAME.value))`   0 occurrences
+#   pytest.warns(...) as NAME           0 occurrences
+# A future occurrence of any of them is invisible to this check: the block would not be
+# a candidate at all, so it would be neither flagged nor carried, and nothing anywhere
+# would report it. Two levels of local binding are also not followed, and a binding made
+# outside the block is not followed across the function boundary.
+
+
+class MessageBlock(NamedTuple):
+    """One ``pytest.raises`` block that reads the exception's message.
+
+    ``lineno`` and ``end_lineno`` are the block's first and last physical lines, the
+    last being the end of the region described above rather than the end of the ``with``
+    suite. ``header_end`` is the last line of the ``with`` header, which is where the
+    marker is looked for. ``enclosing`` is the innermost definition's name, or
+    ``"<module>"``, taken the way ``four_hundred_raise_sites`` takes it.
+    """
+
+    lineno: int
+    end_lineno: int
+    header_end: int
+    name: str
+    enclosing: str
+    anchored: bool
+
+
+def message_call(node: ast.AST, name: str) -> bool:
+    """``node`` is a call to ``str`` whose single argument is ``NAME.value``."""
+    return (
+        isinstance(node, ast.Call)
+        and callee_name(node) == "str"
+        and not node.keywords
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Attribute)
+        and node.args[0].attr == "value"
+        and isinstance(node.args[0].value, ast.Name)
+        and node.args[0].value.id == name
+    )
+
+
+def message_locals(region: list[ast.stmt], name: str) -> set[str]:
+    """Names an assignment in this block binds to ``str(NAME.value)``.
+
+    One level of binding. A local bound to another local is not followed, and neither is
+    a binding made outside the block, so nothing here crosses a function boundary.
+    """
+    bound: set[str] = set()
+    for statement in region:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Assign) and message_call(node.value, name):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bound.add(target.id)
+    return bound
+
+
+def is_message(node: ast.AST, name: str, bound: set[str]) -> bool:
+    """``node`` is the exception's message, in either of the two shapes seen."""
+    if message_call(node, name):
+        return True
+    return (
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in bound
+    )
+
+
+def region_reads_message(region: list[ast.stmt], name: str) -> bool:
+    """The block reads the message, which is what makes it a candidate at all."""
+    bound = message_locals(region, name)
+    return any(
+        is_message(node, name, bound)
+        for statement in region
+        for node in ast.walk(statement)
+    )
+
+
+def region_is_anchored(call: ast.Call, region: list[ast.stmt], name: str) -> bool:
+    """Whether anything in the block establishes which guard raised.
+
+    Three of the four accepted anchors; the fourth, the ``# unanchored:`` marker, is a
+    comment and is applied by ``unanchored_message_blocks``. The ``match=`` keyword is
+    read off the ``raises`` call itself and never off some other call in the block, for
+    the same reason ``NOT_A_PIN_OTHER_CALL`` exists. Whether that pattern starts with
+    ``^`` is not re-decided here: the sibling check owns that guarantee.
+    """
+    if any(keyword.arg == "match" for keyword in call.keywords):
+        return True
+    bound = message_locals(region, name)
+    for statement in region:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Compare) and any(
+                isinstance(op, ast.Eq) for op in node.ops
+            ):
+                if is_message(node.left, name, bound) or any(
+                    is_message(other, name, bound) for other in node.comparators
+                ):
+                    return True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "startswith"
+                and is_message(node.func.value, name, bound)
+            ):
+                return True
+    return False
+
+
+def raises_bindings(
+    statements: list[ast.stmt],
+) -> list[tuple[int, ast.With | ast.AsyncWith, ast.Call, ast.Name]]:
+    """Every ``with ... raises(...) as NAME:`` directly in one suite, in order."""
+    found: list[tuple[int, ast.With | ast.AsyncWith, ast.Call, ast.Name]] = []
+    for index, statement in enumerate(statements):
+        if not isinstance(statement, (ast.With, ast.AsyncWith)):
+            continue
+        for item in statement.items:
+            call, bound = item.context_expr, item.optional_vars
+            if (
+                isinstance(call, ast.Call)
+                and callee_name(call) == "raises"
+                and isinstance(bound, ast.Name)
+            ):
+                found.append((index, statement, call, bound))
+                break
+    return found
+
+
+def message_blocks(source: str, where: str) -> list[MessageBlock]:
+    """One entry per candidate block in ``source``, ordered by line."""
+    tree = parsed(source, where)
+    found: list[MessageBlock] = []
+    stack: list[str] = []
+
+    def read_suite(statements: list[ast.stmt]) -> None:
+        starts = raises_bindings(statements)
+        for order, (index, statement, call, bound) in enumerate(starts):
+            end = starts[order + 1][0] if order + 1 < len(starts) else len(statements)
+            region = statements[index:end]
+            if not region_reads_message(region, bound.id):
+                continue
+            found.append(
+                MessageBlock(
+                    statement.lineno,
+                    max(node.end_lineno or node.lineno for node in region),
+                    max(
+                        call.end_lineno or call.lineno,
+                        bound.end_lineno or bound.lineno,
+                    ),
+                    bound.id,
+                    stack[-1] if stack else "<module>",
+                    region_is_anchored(call, region, bound.id),
+                )
+            )
+
+    def walk(node: ast.AST) -> None:
+        named = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        if named:
+            stack.append(node.name)  # type: ignore[attr-defined]
+        for field in ("body", "orelse", "finalbody"):
+            suite = getattr(node, field, None)
+            if isinstance(suite, list) and suite and isinstance(suite[0], ast.stmt):
+                read_suite(suite)
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+        if named:
+            stack.pop()
+
+    walk(tree)
+    found.sort()
+    return found
+
+
+def unanchored_message_blocks(source: str, where: str) -> list[MessageBlock]:
+    """The candidate blocks that are neither anchored nor marked."""
+    marked = marked_lines(source, where)
+    return [
+        block
+        for block in message_blocks(source, where)
+        if not block.anchored
+        and not any(
+            line in marked for line in range(block.lineno, block.header_end + 1)
+        )
+    ]
+
+
+def unanchored_block_message(where: str, line: int, name: str) -> str:
+    """What the check says about one block that pins nothing."""
+    return (
+        f"{where}:{line} opens a pytest.raises block that reads {name}.value's "
+        "message, and nothing in the block establishes which guard raised it.\n"
+        "\n"
+        f'\'"x" in str({name}.value)\' is the same operation match="x" performs. For a '
+        "pattern with no metacharacters an re.search is a substring test, so the PR #62 "
+        "collision applies to it unchanged: the assertion passes for any message "
+        "holding that fragment, including one somebody else's guard raised.\n"
+        "\n"
+        "The fix goes on the block, not on each assertion. A block routinely asserts "
+        "several fragments about one message and at most one can start the message, so "
+        "there is no per-assertion form of it. Once one anchor has established which "
+        "guard raised, every fragment assertion beside it stops being a pin and becomes "
+        "documentation, and none of them has to change.\n"
+        "\n"
+        "A negative assertion is weaker still rather than safer: any message lacking "
+        "the string satisfies it, including one from an entirely different guard.\n"
+        "\n"
+        "Any one of these anchors the block, and they are the whole accepted set:\n"
+        "\n"
+        '    match=r"^..." on the pytest.raises call\n'
+        f'    assert str({name}.value) == "..."\n'
+        f'    assert str({name}.value).startswith("...")\n'
+        "    # unanchored: <why> on the with statement, with a reason of at least "
+        f"{MINIMUM_REASON} characters\n"
+        "\n"
+        "Whether a match= pattern really starts with ^ is not decided here. "
+        "test_every_message_pin_is_anchored_or_says_why already guarantees that, and "
+        "these two checks state one guarantee each."
+    )
+
+
+BLOCK_FLAGGED_PLAIN = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert "currency must be a Currency" in str(raised.value)\n'
+)
+# That constant is not a hypothetical shape. Measured on this branch 2026-09-08,
+# src/splitwise_lite/money.py raises "currency must be a Currency, got ..." at line 246
+# and "Money currency must be a Currency, got ..." at line 148, and the shorter sentence
+# sits inside the longer one from index 6. So that one assertion is satisfied by either
+# of two live guards, and it is the `in` spelling of the repair PR #62 approved and then
+# found defective. Quoted as measured on that date and not re-read from source: if the
+# wording has changed the collision is a different one and the check is unchanged.
+BLOCK_ACCEPTED_MATCH = (
+    'with pytest.raises(TypeError, match=r"^currency must be a Currency") as raised:\n'
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_ACCEPTED_EQUALITY = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert str(raised.value) == "currency must be a Currency, got NoneType: None"\n'
+)
+BLOCK_ACCEPTED_STARTSWITH = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert str(raised.value).startswith("currency must be a Currency")\n'
+)
+BLOCK_FLAGGED_BOUND = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    "message = str(raised.value)\n"
+    'assert "currency must be a Currency" in message\n'
+)
+BLOCK_ACCEPTED_BOUND_EQUALITY = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    "message = str(raised.value)\n"
+    'assert message == "currency must be a Currency, got NoneType: None"\n'
+)
+BLOCK_ACCEPTED_MARKED = (
+    "with pytest.raises(TypeError) as raised:  "
+    "# unanchored: the arrangement can raise nothing else\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_EMPTY_MARKER = (
+    "with pytest.raises(TypeError) as raised:  # unanchored:\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_SHORT_MARKER = (
+    "with pytest.raises(TypeError) as raised:  # unanchored: too short\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_ACCEPTED_MARKER_ON_LAST_LINE = (
+    "with pytest.raises(\n"
+    "    TypeError,\n"
+    ") as raised:  # unanchored: the arrangement can raise nothing else\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_NOT_A_CANDIDATE_NO_BINDING = (
+    "with pytest.raises(TypeError):\n    Money(1, None)\n"
+)
+BLOCK_NOT_A_CANDIDATE_UNREAD = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    "assert raised.type is TypeError\n"
+)
+BLOCK_FLAGGED_NEGATIVE_ONLY = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert "the secret" not in str(raised.value)\n'
+)
+BLOCK_ACCEPTED_MANY_FRAGMENTS = (
+    "def test_it() -> None:\n"
+    "    with pytest.raises("
+    'TypeError, match=r"^currency must be a Currency") as raised:\n'
+    "        Money(1, None)\n"
+    '    assert "NoneType" in str(raised.value)\n'
+    '    assert "None" in str(raised.value)\n'
+    '    assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_MANY_FRAGMENTS = (
+    "def test_it() -> None:\n"
+    "    with pytest.raises(TypeError) as raised:\n"
+    "        Money(1, None)\n"
+    '    assert "NoneType" in str(raised.value)\n'
+    '    assert "None" in str(raised.value)\n'
+    '    assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_OTHER_CALL_MATCH = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'record = dict(match="^currency must be a Currency")\n'
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_TWO_IN_ONE_FUNCTION = (
+    "def test_two() -> None:\n"
+    "    with pytest.raises(TypeError) as first:\n"
+    "        Money(1, None)\n"
+    '    assert "Currency" in str(first.value)\n'
+    "    with pytest.raises("
+    'ValueError, match=r"^cents must be an int") as second:\n'
+    "        Money(None, AUD)\n"
+    '    assert "int" in str(second.value)\n'
+)
+
+
+def test_the_message_block_check_still_bites() -> None:
+    """Proof that the check refuses what it must and accepts what it must not refuse.
+
+    Every accepted case below is labelled with the branch of the accepted set it is the
+    positive control for, so removing that branch reds a named assertion here. The two
+    cases that hold by construction say so and say what they do guard against instead. A
+    section of self-tests that cannot fail is the defect this module exists to refuse.
+    """
+    # a. A bare substring assertion on the message is flagged. Positive control for the
+    #    walk itself: if message_blocks stops finding candidates, this reds first.
+    flagged = unanchored_message_blocks(BLOCK_FLAGGED_PLAIN, "<a>")
+    assert len(flagged) == 1
+    assert flagged[0].name == "raised"
+    assert flagged[0].enclosing == "<module>"
+    assert flagged[0].lineno == 1
+    # b. match= on the raises call is accepted. Positive control for branch (a) of the
+    #    accepted set; delete that branch and this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MATCH, "<b>") == []
+    # c. An equality against the message is accepted. Positive control for branch (b);
+    #    delete that branch and this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_EQUALITY, "<c>") == []
+    # d. .startswith on the message is accepted. Positive control for branch (c);
+    #    delete that branch and this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_STARTSWITH, "<d>") == []
+    # e. The bound form is a candidate and is flagged.
+    #
+    #    This one is flagged by construction under any mutation of the local-binding
+    #    walk, because `message = str(raised.value)` is itself the str() call shape, so
+    #    the block is a candidate whether or not the local is followed. What it guards
+    #    against is a walk that only looks at `assert` statements. The case that really
+    #    exercises the local-binding walk is the one below it.
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_BOUND, "<e>")) == 1
+    # e2. An equality against a local the block bound to the message is accepted.
+    #     Positive control for the one level of local binding in criterion 6(b): stop
+    #     following the local and this block is no longer anchored, so this reds. That
+    #     is 27 lines of the real population, so a walk that misses it misses a quarter
+    #     of the job.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_BOUND_EQUALITY, "<e2>") == []
+    # f. The marker with a real reason is accepted; empty or too short is not a reason.
+    #    Positive control for branch (d) and for MINIMUM_REASON.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MARKED, "<f1>") == []
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_EMPTY_MARKER, "<f2>")) == 1
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_SHORT_MARKER, "<f3>")) == 1
+    # g. The marker may sit on the last line of a raises call wrapped over several
+    #    lines. Positive control for the header range: narrow it to the first line and
+    #    this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MARKER_ON_LAST_LINE, "<g>") == []
+    # h. A raises that binds no name is not a candidate.
+    #
+    #    Partly by construction: with no name bound there is no message expression to
+    #    find either, so this stays empty under a mutation of the `as` condition alone.
+    #    What it guards against is a future rewrite that treats every raises block as a
+    #    candidate and then asks separately whether it is anchored, which would report a
+    #    finding on every `with pytest.raises(X):` in the suite.
+    assert message_blocks(BLOCK_NOT_A_CANDIDATE_NO_BINDING, "<h>") == []
+    # i. A block that binds a name and never reads its message is not a candidate.
+    #    Positive control for the reads-the-message condition: drop it and this reds.
+    #    A block that asserts nothing about a message has nothing to anchor.
+    assert message_blocks(BLOCK_NOT_A_CANDIDATE_UNREAD, "<i>") == []
+    # j. A block holding only a negative assertion is still a candidate and is still
+    #    flagged, because reading the message is what makes it one.
+    #
+    #    By construction here, since this walk never looks at the `in` operator at all.
+    #    What it guards against is the rewrite issue #70 itself proposes, which keys on
+    #    `assert X in str(Y)`: that shape would drop all 17 negative assertions in the
+    #    suite, and a negative is the weaker case, not the safer one — any message
+    #    lacking the string satisfies it, including one from an entirely different
+    #    guard.
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_NEGATIVE_ONLY, "<j>")) == 1
+    # k. Several fragment assertions with one anchor are accepted once, and the same
+    #    block without the anchor is one finding rather than one per fragment. Positive
+    #    control for the unit being the block: count per assertion and both of these
+    #    read 3.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MANY_FRAGMENTS, "<k1>") == []
+    assert len(message_blocks(BLOCK_ACCEPTED_MANY_FRAGMENTS, "<k1>")) == 1
+    many = unanchored_message_blocks(BLOCK_FLAGGED_MANY_FRAGMENTS, "<k2>")
+    assert len(many) == 1
+    assert many[0].enclosing == "test_it"
+    # l. A match= on a call that is not the raises is not an anchor, for the same reason
+    #    NOT_A_PIN_OTHER_CALL exists. Positive control for reading the keyword off the
+    #    context expression rather than off any call in the region.
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_OTHER_CALL_MATCH, "<l>")) == 1
+    # m. Two blocks in one function are two candidates, and anchoring one moves the
+    #    count from two to one. This is the case criterion 15 keys the baseline on a
+    #    count for, and a baseline keyed by name alone would miss it.
+    assert len(message_blocks(BLOCK_TWO_IN_ONE_FUNCTION, "<m>")) == 2
+    two = unanchored_message_blocks(BLOCK_TWO_IN_ONE_FUNCTION, "<m>")
+    assert len(two) == 1
+    assert two[0].name == "first"
+    assert two[0].enclosing == "test_two"
+
+
+def test_the_unanchored_block_message_says_what_happened() -> None:
+    """Every element the message has to carry, fed a synthetic path, line and name."""
+    message = unanchored_block_message("tests/test_pretend.py", 12, "raised")
+    assert "tests/test_pretend.py" in message
+    assert "12" in message
+    assert "raised" in message
+    # `in` is the same operation, so the PR #62 collision applies to it unchanged.
+    assert "re.search" in message
+    assert "no metacharacters" in message
+    assert "PR #62" in message
+    # The anchor goes on the block, and why.
+    assert "on the block" in message
+    assert "several fragments" in message
+    assert "at most one can start the message" in message
+    # A negative assertion is weaker still.
+    assert "any message lacking the string satisfies it" in message
+    # All four accepted anchors, spelled.
+    assert "match=" in message
+    assert "==" in message
+    assert ".startswith" in message
+    assert "# unanchored:" in message
+    assert str(MINIMUM_REASON) in message
 
 
 # --- The mutation records (#60) --------------------------------------------
