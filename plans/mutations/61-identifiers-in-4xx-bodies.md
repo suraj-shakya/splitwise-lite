@@ -1,6 +1,6 @@
 # Issue #61: identifiers in 4xx bodies
 
-Three mutations, one per source file this task edits, each restoring exactly the
+Five mutations. Three, one per source file this task edits, each restoring exactly the
 interpolation the task removed. Each was applied with the recipe in `README.md`,
 `PYTHONDONTWRITEBYTECODE=1` set on every run, the node ids in `kills` run alone, and
 `git checkout -- <file>` before the next.
@@ -87,6 +87,58 @@ recorded here: the mutation is the evidence that the row bites.
   "survives": [
     "tests/test_groups.py::test_an_unlinked_user_and_an_unknown_group_are_told_apart_by_type",
     "tests/test_error_messages.py::test_every_site_no_request_reaches_says_what_would_have_to_be_true"
+  ],
+  "result": "killed"
+}
+```
+
+## 4 and 5. The check itself, in both directions
+
+The three above mutate the code under test. These two mutate the **check**, because
+criterion 30 claims the four `identifiers_in` unit tests are what prove the property
+half bites, and that claim is worth measuring rather than asserting.
+
+**Blinding it passes all 56 driven rows vacuously.** That was measured, not reasoned:
+under mutation 4, `uv run python -m pytest tests/test_error_messages.py -k
+"no_four_hundred_body_names_an_identifier"` reports **56 passed**. So the driven
+parametrisation cannot police its own instrument, and the four unit tests are the only
+thing standing between a green suite and a check that inspects nothing. That is exactly
+the shape of defect `.claude/rules/testing.md` rule (d) is about, one level up.
+
+```json
+{
+  "id": "blind-the-identifier-search",
+  "file": "tests/test_error_messages.py",
+  "find": "    return [found for found in identifiers if found in message]",
+  "replace": "    return []",
+  "kills": [
+    "tests/test_error_messages.py::test_identifiers_in_finds_an_identifier_that_is_present",
+    "tests/test_error_messages.py::test_identifiers_in_finds_an_identifier_wrapped_in_punctuation",
+    "tests/test_error_messages.py::test_identifiers_in_reports_both_identifiers_when_two_are_present"
+  ],
+  "survives": [
+    "tests/test_error_messages.py::test_identifiers_in_finds_nothing_in_an_id_free_message",
+    "tests/test_error_messages.py::test_no_four_hundred_body_names_an_identifier[web.py::_create_expense::names_a_payer_id_that_is_not_a_member_of_this_gr]"
+  ],
+  "result": "killed"
+}
+```
+
+The other direction, so the four tests pin the function from both sides rather than
+only rewarding a search that finds things. The id-free case is the control, and it is
+the only one of the four that this mutation kills.
+
+```json
+{
+  "id": "make-the-identifier-search-total",
+  "file": "tests/test_error_messages.py",
+  "find": "    return [found for found in identifiers if found in message]",
+  "replace": "    return list(identifiers)",
+  "kills": [
+    "tests/test_error_messages.py::test_identifiers_in_finds_nothing_in_an_id_free_message"
+  ],
+  "survives": [
+    "tests/test_error_messages.py::test_identifiers_in_finds_an_identifier_that_is_present"
   ],
   "result": "killed"
 }
