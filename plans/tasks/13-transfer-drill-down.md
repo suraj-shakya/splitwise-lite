@@ -890,6 +890,8 @@ reading a file or running the suite.
 64. `.balances-figure` stays the only selector in the balances block carrying
     `white-space: nowrap`, so `test_a_long_display_name_wraps_rather_than_being_cut_off`
     passes unchanged, and no new rule adds `text-overflow` or `overflow: hidden`.
+
+    > **Stale 2026-09-07 for issue #58**, per `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`: `test_a_long_display_name_wraps_rather_than_being_cut_off` no longer exists. All three of the properties this criterion names are now asserted over the whole of `app/styles.css` rather than over the balances block, by `test_nothing_in_the_shell_takes_the_break_rule_back`; the `white-space: nowrap` half is also still asserted block-locally by `test_the_figure_is_still_the_only_thing_that_refuses_to_wrap`.
 65. `cursor: pointer` appears only on `.balances-transfer-button` and `.balances-debt-button`,
     and `pointer` is the only `cursor` value in the block.
 66. No `animation`, `transition` or `@keyframes` is added, so the reduced-motion block at the
@@ -971,6 +973,8 @@ reading a file or running the suite.
     `test_only_the_api_client_calls_the_back_end`, `test_the_narrowed_rule_still_bites`,
     `test_app_holds_exactly_the_promised_files` and
     `test_the_worker_precaches_exactly_the_shell`.
+
+    > **Stale 2026-09-07 for issue #58**, per `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`: `test_a_long_display_name_wraps_rather_than_being_cut_off` no longer exists in this list of tests that must pass unchanged. It was replaced by `test_no_balances_rule_declares_a_break_of_its_own`, which asserts the opposite of what it asserted, so read this entry as that name. Every other test named here is unchanged and still passes.
 74. **No new test asserts that a string is present in `app/app.js` in order to claim a
     rendering behaviour is covered.** Bans are permitted, because a ban is falsified by one
     occurrence. No test in `tests/test_web_api.py` or `tests/test_balances.py` is added or

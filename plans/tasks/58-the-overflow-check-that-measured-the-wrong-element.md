@@ -369,6 +369,19 @@ refuse a collision, so run that module before settling on one.
     `.balances-figure` and `.tab` are allowed because both hold text of fixed shape: a
     server-formatted amount that must never break mid-number, and three literal tab
     labels.
+
+    > **Clarified 2026-09-07, after the QA verification of this PR.** This criterion says
+    > the assertions run "over `styles()`", and four of the five run over
+    > `without_comments(styles())` instead. The distinction is load-bearing rather than
+    > incidental, so it is recorded rather than glossed: `overflow: hidden` appears
+    > **twice** in the raw file, once as the declaration on `body` and once as prose about
+    > it inside the comment criterion 4 requires, so a count over the raw text would see
+    > two and this criterion asks for exactly one. Comment-stripped is the correct text to
+    > count over, because a commented declaration is not applied. Criterion 1 is the
+    > exception and deliberately runs over the raw file including comments, which is what
+    > forces the comment on `body` to spell its two counter-examples as "`white-space` set
+    > to `nowrap`" and "`overflow-wrap` set back to `normal`" rather than with colons; the
+    > Findings section records that trade. Nothing about the assertions changes.
 12. `test_the_scroll_container_is_the_content_area_and_not_the_document` asserts that
     `body` carries `overflow: hidden`, that `.content` carries `overflow-y: auto`, and
     that no rule in the file declares `overflow-x`. Its comment states the consequence:
@@ -421,6 +434,27 @@ refuse a collision, so run that module before settling on one.
     line containing the literal `documentElement` whose stripped form does not start with
     `>`. It asserts the collected list is empty, in the shape
     `assert not failures, "\n\n".join(failures)` the module already uses.
+
+    > **Tightened 2026-09-07, after the senior review of this PR.** This criterion asked
+    > for the exemption to be "every line containing the literal `documentElement` whose
+    > stripped form does not start with `>`", and it shipped that way first. The review
+    > found it enforced less than its own comment claimed: the comment said the exemption
+    > was for dated correction notes and argued that "an exemption a criterion could claim
+    > by writing a magic word next to itself is how a check stops being one", while the
+    > predicate was one character a criterion can write next to itself. A future author
+    > facing the red test could prefix `>` and go green with no date and no reason, and
+    > the failure message advertised that route in its closing paragraph.
+    >
+    > The predicate is now the **enclosing blockquote run**, meaning the contiguous run of
+    > `>` lines containing the finding, carrying a **date**. The run and not the line,
+    > because a dated note opens with its marker and the wording it quotes usually sits
+    > several lines below. This is the bar the `# unanchored:` hatch in this module
+    > already sets: an exemption costs a written, reviewable claim that shows up in a
+    > diff. It is strictly tightening and turned nothing red, because all five surviving
+    > blockquoted occurrences already open `**Corrected 2026-09-07 for issue #58**`,
+    > `**Stale ...**` or `**Followed up 2026-09-07.**`. Shown both ways before landing: a
+    > bare `>` with no date is refused, and a dated note with the literal three lines
+    > below its marker is accepted.
 21. Each finding names the file in POSIX form, the line number, and the line, and the
     message says what to write instead: `el.scrollWidth > el.clientWidth` on `.content`
     and on each rendered row container, because `body` sets `overflow: hidden` and
@@ -431,9 +465,68 @@ refuse a collision, so run that module before settling on one.
     source and message contain the banned literal, so a scan over `tests/` would flag
     itself. `app/` contains no occurrence today and the shell is code, not a
     specification.
+
+    > **Corrected 2026-09-07, after the QA verification of this PR.** This criterion used
+    > to say "`app/` contains no occurrence today". That is no longer true, and it was
+    > made untrue by criterion 4 of this same task: `app/styles.css:67` now carries
+    > `document.documentElement.scrollWidth` inside the comment on `body`, because
+    > criterion 4 requires that comment to say what the wrong thing to measure is. The
+    > true rationale for omitting `app/` is the second half of the sentence and not the
+    > first: the shell is code rather than a specification, and the occurrence it now has
+    > is the instruction being asked for rather than the defect being refused. No
+    > behaviour changes, because `app/` is out of scope either way, and the
+    > implementation's own comment already states the corrected reason.
+    >
+    > **Also recorded, 2026-09-07:** `.claude/rules/testing.md` names the literal on an
+    > ordinary non-blockquote line, in the seventh rule this task adds, and it is the one
+    > file the mechanism cannot reach, since criterion 20 fixes the scope at `plans/`,
+    > `README.md` and `CLAUDE.md`. **It should stay out of scope**, for the same reason
+    > `tests/` and this spec are out of scope: a rule has to name the thing it forbids in
+    > order to forbid it, and a scan that flags the statement of its own rule is the
+    > self-flagging shape this module exists to refuse. Widening the scan to reach it
+    > would force the rule to describe the measurement without naming it, which is how a
+    > rule stops being followed. The asymmetry is worth knowing rather than fixing: the
+    > file that carries the rule is the file the mechanism trusts.
 23. The blockquote exemption is deliberate and its comment says so: dated correction notes
     live in blockquotes, so the historical record stays legal while the next criterion
     cannot be written. There is no allowlist, no per-file skip and no marker comment.
+
+    > **Amended 2026-09-07 by PM ruling, after QA returned FAIL on this criterion and the
+    > senior review reached the same conclusion from the other direction.** This criterion
+    > used to end: "There is no allowlist, no per-file skip and no marker comment." **The
+    > implementation has one per-file skip, `SPECIFIES_THE_SCAN` in
+    > `tests/test_suite_integrity.py`, holding this file's path and nothing else. The
+    > code stays and this claim changes.**
+    >
+    > Criteria 20, 23 and 41 cannot all hold, because the document that *specifies* a scan
+    > necessarily contains the literal the scan forbids. QA measured the collision rather
+    > than accepting it, by running the scan's own logic with the exclusion removed: **12
+    > non-blockquote findings, all 12 in this file, and zero in every other document.** At
+    > head `c10a0f5`, where that was measured, the lines were 29, 180, 263, 327, 421, 447,
+    > 481, 538, 603, 798, 802 and 905; these amendments have since shifted the numbers
+    > below 327, so the count is what to read and the lines are quoted as at that commit.
+    > Three of them
+    > name the bare identifier with no `document.` prefix and no old wording to quote, so
+    > no blockquote can legitimately hold them and no narrower pattern misses them.
+    > Blockquoting this file's own criteria would rewrite criteria 20 and 46 into
+    > something that cannot state its own rule; shipping the scan red fails criterion 32.
+    >
+    > Why this is not the hatch the sentence was written to forbid: it is **one path, in
+    > the code rather than in a document**, so a second entry is a reviewable diff and not
+    > a magic word a criterion can claim for itself; it holds the specification of the
+    > scan and nothing else; and it fails **loud** rather than silent, because a rename
+    > stops the path matching and the renamed file gets scanned and reddens naming itself,
+    > while a deletion trips an `assert SPECIFIES_THE_SCAN.exists()` added for that case
+    > after the review. What the sentence was written to forbid — a per-document opt-out a
+    > future criterion can award itself — is still forbidden, and the exemption a document
+    > *can* claim is now stricter than when this criterion was written: a dated note, per
+    > criterion 20's own amendment above.
+    >
+    > The reason this is amended rather than left standing: a committed spec asserting a
+    > property the committed code knowingly violates is the exact drift this repo dates
+    > and annotates everywhere else, and this task adds eleven such notes to other
+    > people's files. It would be the one document in the change that does to its reader
+    > what `plans/tasks/42-what-the-documents-claim.md` exists about.
 24. The module docstring gains one sentence naming issue #58 and stating this third
     refusal, so the module still describes what it does.
 25. `test_the_testing_rules_keep_the_three_they_had` and
@@ -514,6 +607,32 @@ refuse a collision, so run that module before settling on one.
     is reconciled before the PR is called ready, because reconciling a count arithmetically
     is the only thing that has ever caught a silently deleted test in this repo.
 
+    > **Corrected 2026-09-07 with the measured figures.** This criterion used to say
+    > "`master` is 2481 passing ... for **2485 passing**". Both numbers were stale, and the
+    > second was stale twice over, because `master` moved twice while this task was in
+    > flight: `889399a` collected 2481, `38ebc1e` (issue #19) took it to 2484, and
+    > `c685cee` (issue #57) took it to **2498**. The correct figure for this branch is
+    > **2502 passing, 0 skipped, 0 xfailed**, and the clause about reconciling before the
+    > PR is called ready is what produced this note rather than a quiet mismatch.
+    >
+    > It closes against two independent readings, which is the point of reconciling at
+    > all. **The absolute**, from `--collect-only -q`: `master` at `c685cee` collects
+    > 2498, the branch collects 2502, both measured rather than assumed, and QA measured
+    > `master` again in its own worktree and got 2498. **The delta**, read off the diff of
+    > the two collected id sets rather than off the composition claimed here: two ids out
+    > (`test_a_long_display_name_wraps_rather_than_being_cut_off` and
+    > `test_every_line_that_carries_a_name_can_break_a_long_one`) and six in
+    > (`test_one_declaration_lets_every_long_word_in_the_shell_break`,
+    > `test_nothing_in_the_shell_takes_the_break_rule_back`,
+    > `test_the_scroll_container_is_the_content_area_and_not_the_document`,
+    > `test_no_balances_rule_declares_a_break_of_its_own`,
+    > `test_no_document_asks_for_the_measurement_that_cannot_fail` and
+    > `test_the_wrong_measurement_message_says_what_to_write_instead`), so net **+4** and
+    > nothing hidden. 2498 − 1 + 0 + 3 + 2 = 2502 = 2498 + 4. **CI is the oracle and
+    > agreed on both legs at head `c10a0f5`:** `ubuntu-latest` 2502 collected, 2502 passed
+    > in 91.53s; `windows-latest` 2502 collected, 2502 passed in 235.01s. No skips, no
+    > xfails.
+
 ### The browser checklist `(browser check, unrun)`
 
 33. The fixture, so the sweep is reproducible: a group of six members, one whose
@@ -588,6 +707,15 @@ refuse a collision, so run that module before settling on one.
     issue #58 and this file. No criterion is renumbered and no criterion body is rewritten
     without its old wording appearing in the note.
 
+    > **Corrected 2026-09-07:** **eleven** notes, not nine. Criterion 47's own amendment
+    > records the two QA found that its enumeration missed, both in
+    > `plans/tasks/13-transfer-drill-down.md`. Everything else in this criterion is
+    > unchanged and holds: the blockquote shape, the date, the naming of issue #58 and this
+    > file, no criterion renumbered, and no criterion body rewritten without its old
+    > wording appearing in the note. The dated notes added to **this** file by the review
+    > of this PR follow the same shape and the same rule, which is why criterion 23's
+    > amendment quotes the sentence it replaces rather than editing it away.
+
 ### `plans/tasks/`
 
 45. The four wrong-measurement places are corrected, and each note states three things:
@@ -613,11 +741,55 @@ refuse a collision, so run that module before settling on one.
     * `plans/tasks/14-mark-as-paid.md:874-877` — criterion 62's `CARRIES_A_NAME` no longer
       exists; what replaces it, by test name.
     * `plans/tasks/15-receiver-confirmation.md:1000-1003` — the same for criterion 84.
+
+    > **Extended 2026-09-07, after QA reported two the enumeration missed.** This criterion
+    > said "The five stale-mechanism places", and there are **seven**. QA found two more
+    > references to `test_a_long_display_name_wraps_rather_than_being_cut_off`, which this
+    > task deletes:
+    >
+    > * `plans/tasks/13-transfer-drill-down.md:890-892` — criterion 64 says the test
+    >   "passes unchanged". All three properties it names are now asserted file-wide by
+    >   `test_nothing_in_the_shell_takes_the_break_rule_back`, and the `nowrap` half is
+    >   still asserted block-locally by
+    >   `test_the_figure_is_still_the_only_thing_that_refuses_to_wrap`.
+    > * `plans/tasks/13-transfer-drill-down.md:966` — the same name inside criterion 71's
+    >   list of tests that must pass unchanged; it was replaced by
+    >   `test_no_balances_rule_declares_a_break_of_its_own`.
+    >
+    > Both get a one-line dated note in the same shape, so the total for criteria 45 to 47
+    > is **eleven** notes rather than nine.
+    >
+    > They land in **seven** task files, and decision 6's "Nine places, eight files" was
+    > already off by one before these two: the nine places it enumerates fall in tasks 08,
+    > 10, 11, 12, 13, 14 and 15, which is seven files, because tasks 10 and 11 each carry
+    > two of them. Counted mechanically after landing: 08 one, 10 two, 11 two, 12 one, 13
+    > three, 14 one, 15 one. Eleven notes, seven files. The thirteen-file list in criterion
+    > 41 is unaffected, since it counts files edited rather than notes added and both of
+    > these are in a file it already names.
+    >
+    > **Nothing in this task could have caught these, and that is the finding.** The new
+    > scan refuses one literal, `documentElement`; it has no opinion about a document
+    > naming a test that no longer exists. That is the same class of defect
+    > `plans/tasks/42-what-the-documents-claim.md` exists about, and the argument criterion
+    > 47 already makes for tasks 14 and 15 applies to these two word for word. A check that
+    > refuses a reference to a deleted test name is a real follow-up candidate and is not
+    > built here: it needs a definition of "name that should exist", which is a different
+    > and larger design than a banned literal.
 48. The Findings section of this file is filled in before the PR is opened: the outcome of
     each part of criterion 27, the digest line pasted, the CI count and the arithmetic that
     reaches it, and any place the audit table above turned out to be wrong. An audit table
     written by a PM and never re-checked by the implementer is a description standing in
     for the thing itself.
+
+    > **Corrected 2026-09-07.** This criterion asks for the CI count "before the PR is
+    > opened", which is not obtainable in that order: the workflow triggers on
+    > `pull_request`, so no CI run exists until the PR does, and the available token cannot
+    > dispatch a `workflow_dispatch` run. The Findings were filled in first with the
+    > measured local figures and the arithmetic, the PR was opened, and the CI count was
+    > pasted in on the first head that both legs reported: **2502 collected and 2502 passed
+    > on `ubuntu-latest` and on `windows-latest` at `c10a0f5`**, matching the arithmetic
+    > exactly. QA scored this criterion PARTIAL for the placeholder that stood in the
+    > meantime, which was the right call; it is no longer a placeholder.
 
 ## Out of scope
 
@@ -849,12 +1021,16 @@ So the arithmetic reaching this branch's number is **2498 − 1 + 3 + 2 = 2502**
 * `tests/test_suite_integrity.py` — 54 passed (52 + 2)
 * `tests/test_shell_behaviour.py` — 172 passed, unchanged by this task
 
-CI, both legs, is the oracle for the total. **CI: to be recorded on the PR the moment both
-legs report.** The workflow triggers on `pull_request` and the available token cannot
-dispatch a `workflow_dispatch` run, so the CI number is not obtainable before the PR exists;
-criterion 48 asks for it before the PR is opened, which is not possible in that order. The
-arithmetic above is what CI is being reconciled against, and if CI reports anything other
-than 2502 the difference is chased before this is called ready.
+**CI, both legs, agreed at head `c10a0f5`:** `ubuntu-latest` 2502 collected, `2502 passed
+in 91.53s`; `windows-latest` 2502 collected, `2502 passed in 235.01s`. No skips, no xfails.
+QA measured `master` independently in its own worktree and also got 2498, and diffed the
+two `--collect-only` id sets to confirm the composition: two ids out, six in, net +4, with
+nothing hidden. So the count closes against two independent readings, the absolute and the
+delta, rather than against this section's assumption.
+
+The workflow triggers on `pull_request` and the available token cannot dispatch a
+`workflow_dispatch` run, so the CI number was not obtainable before the PR existed;
+criterion 48 asked for it in that order and now carries a dated note saying so.
 
 ### The audit table, re-checked against the tree
 
@@ -898,19 +1074,22 @@ Three refinements, none of which changes a decision:
    now covers both. The 258px and 228px measurements are preserved in criterion 35 as
    criterion 7 requires, so neither is lost even if that comment is later trimmed.
 
-### One criterion could not be satisfied: criterion 23's "no per-file skip"
+### Criterion 23's "no per-file skip": flagged, ruled on, and amended
 
 **Criteria 20, 23 and 41 cannot all hold at once, and the collision is in this file.**
 
 Criterion 20 scans every `*.md` under `plans/` for the literal `documentElement` outside a
 blockquote. Criterion 41 requires this spec to be committed, under `plans/tasks/`. This
-spec names that literal on **nine** ordinary, non-blockquote lines above this section — 29,
-180, 263, 327, 421, 447, 481, 538 and 603 — because its criteria have to write out what is
-banned in order to ban it, and this section adds three more, for twelve in the file as
-committed. Three of the nine (263, 421, 603) name the bare identifier with no
-`document.` prefix and no old wording to quote, so no blockquote can hold them and no
-narrower pattern can miss them. Criterion 23 then forbids the one remaining resolution:
-"There is no allowlist, no per-file skip and no marker comment."
+spec names that literal on **nine** ordinary, non-blockquote lines above this section,
+because its criteria have to write out what is banned in order to ban it, and this section
+adds three more, for **twelve** in the file. At head `c10a0f5`, where QA measured them, they
+were lines 29, 180, 263, 327, 421, 447, 481, 538 and 603 plus 798, 802 and 905; the dated
+amendments added by the review of this PR have shifted every number after 327, so the counts
+are the durable half and the line numbers are quoted as at that commit. Three of the nine
+name the bare identifier with no `document.` prefix and no old wording to quote, so no
+blockquote can hold them and no narrower pattern can miss them. Criterion 23 then forbids
+the one remaining resolution: "There is no allowlist, no per-file skip and no marker
+comment."
 
 The three ways out and why two are worse:
 
@@ -926,8 +1105,64 @@ This is exactly the reason criterion 22 already gives for not scanning `tests/`:
 own source and message must name the literal to work. The spec that *specifies* the check is
 in the same position, and the criteria did not anticipate it. The failure mode of the
 exclusion is loud rather than quiet: rename the file and the path stops matching, so the
-scan goes red naming the renamed file. **This needs a ruling rather than a reader's
-assumption, and it is flagged on the PR.**
+scan goes red naming the renamed file.
+
+**Ruled on 2026-09-07, and criterion 23 is amended rather than the code changed.** QA
+returned FAIL on criterion 23 and the senior review reached the same conclusion from the
+other direction, that the deviation is correct and should not be undone. QA proved the
+collision instead of accepting it, by running the scan's own logic with the exclusion
+removed: 12 non-blockquote findings, all 12 in this file, at exactly the lines named above
+plus the three this section adds, and **zero in every other document**. The PM ruling is
+that the code stays and the claim changes, because a committed spec asserting a property
+the committed code knowingly violates is the drift this repo dates and annotates
+everywhere else — and this task adds eleven such notes to other people's files. Criterion
+23 now carries a dated amendment quoting the sentence it replaces. Two things were
+tightened at the same time, both from the review: the exemption a document can claim is
+now a **dated** note rather than a bare `>` (criterion 20's amendment), and
+`scanned_documents()` asserts the excluded file still exists, so a deletion cannot leave
+the exclusion silently dead the way a rename already could not.
+
+### What the review round changed, and what it did not
+
+QA returned FAIL on criterion 23 and PARTIAL on 48, PASS on everything else in 1 to 32,
+and the senior review returned REQUEST CHANGES on one blocking finding. Both are answered
+above and in the dated amendments to criteria 11, 20, 22, 23, 32, 44, 47 and 48. Three
+things are worth separating out.
+
+**The blocking finding was real and was in the new check, not in the stylesheet.** The
+exemption predicate was `text.strip().startswith(">")`, one character, sitting directly
+beneath a comment arguing that "an exemption a criterion could claim by writing a magic
+word next to itself is how a check stops being one". The comment refuted the code it
+introduced, and the failure message advertised the route in its closing paragraph, so a
+future author hitting the red test did not even have to find it. In the one module whose
+subject is checks that do not exercise what they name, the new check was exempting itself
+from its own thesis. It is now the enclosing blockquote run carrying a date, which is the
+bar `# unanchored:` already sets, and it turned nothing red.
+
+**Criterion 27a paid for itself twice.** It caught the message that named no selector on
+the first run, and QA confirmed the reorder holds and that `['nowrap', 'nowrap', 'nowrap']`
+appears nowhere in the output now. The review then found that the count assertion is not
+redundant for a better reason than the comment gave: the selector regex only matches rules
+containing `white-space: nowrap`, so `white-space: pre` on a new class passes the selector
+equality and only the count catches it. Verified by probe before landing —
+`['nowrap', 'nowrap', 'pre']` — and the comment now says so, because a reader who believed
+the old wording would have deleted the line as a duplicate.
+
+**Two things were reported and deliberately not built.** A check that refuses a document
+reference to a deleted test name would have caught the two stale references QA found in
+task 13, and nothing here does: this scan refuses one literal and has no notion of a name
+that ought to exist. That is a follow-up, and so is the review's larger point, which is
+worth recording plainly: **the harness proves the stylesheet says the right thing and
+cannot prove the shell lays out.** `overflow-wrap: anywhere` on `body` is necessary and not
+sufficient — a fixed-width child, a padding sum over 320px, or a `flex-shrink: 0` item
+wider than its container would each produce the exact user-visible defect these criteria
+were written to catch, and no check in this task or in the suite sees any of them.
+Criterion 40 does not create that gap, it inherits it, but it does convert it from an
+embarrassment into a policy. The resolution named is not a headless browser: it is one
+dated manual sweep, executed once against criterion 33's fixture and recorded under
+`plans/`, so criterion 40's status becomes "last swept, result, scope.length" instead of
+"never run, by design" — a staleness measure rather than a blind spot, which is the move
+this repo already made for `SHELL_DIGEST`.
 
 ### Criteria 33 to 39: **not run**
 

@@ -77,7 +77,12 @@ exercising what it named.
   which is the same defect as an unanchored pin one level up: the check reported
   success in precisely the case it was written to catch. `tests/test_suite_integrity.py`
   refuses `documentElement` in any document under `plans/`, in `README.md` or in
-  `CLAUDE.md` unless the line is a blockquote, so a dated correction note may quote the
-  old wording and a new criterion cannot be written with it. The positive control for
-  the corrected sweep is `document.body.style.overflowWrap = 'normal'` in the console:
+  `CLAUDE.md` unless it sits inside a blockquote carrying a **date**, so a dated
+  correction note may quote the old wording and a new criterion cannot be written with
+  it. The date is the exemption, and that is the second scar on this rule: the first
+  version of that check accepted any line starting with `>`, which is one character a
+  criterion can write next to itself, so the check had a hole where its own comment
+  claimed a hatch. An exemption costs a written, reviewable claim, for the same reason
+  `# unanchored:` demands a reason of real length. The positive control for the
+  corrected sweep is `document.body.style.overflowWrap = 'normal'` in the console:
   re-run the sweep and it must find something.
