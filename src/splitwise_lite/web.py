@@ -1550,13 +1550,25 @@ paid for, with a uniqueness constraint or a transaction the store does not have 
 It guards the ledger read as well as the append, not the append alone: a lock taken
 after the read would let both requests read first and change nothing.
 
+**It is not reentrant, and that is the one way to misuse it.** ``threading.Lock``, not
+``RLock``: taking it twice on one thread hangs that request for good, with no exception
+and no log line, and every later request for the same rule hangs behind it. So take it
+once per request, at the outermost point that needs it, and never inside a function
+that a holder of the lock might call. The rule that keeps that easy: a helper that
+counts is handed a ledger and takes no lock, and the caller holds the lock around it.
+A helper that both counts and locks is the shape that deadlocks. ``RLock`` would make
+the nesting harmless, and is the wrong trade here, because the value of this lock is
+one unbroken span from the read to the append and a nested acquire would read like a
+second span while being no such thing.
+
 **For issue #16.** Do not read "at most one pending claim per pair" as given. Confirming
 is the same check-then-act shape, so #16 should take *this* lock across its own read
 and its own append, and count the pair's pending claims inside it rather than trusting
 this endpoint to have kept it to one. Under one process that count is a cheap
 restatement of what is already true; under two it is the only thing standing between a
 duplicated claim and a debt cleared twice. Sharing the lock is deliberate: two locks
-for one invariant is one lock too many.
+for one invariant is one lock too many. Share the counting the way the paragraph above
+says, by passing the ledger rather than by taking the lock in two places.
 """
 
 
@@ -1908,9 +1920,14 @@ _API_ROUTES: Final[tuple[_ApiRoute, ...]] = (
         ("GET",),
         _Access.MEMBER,
     ),
-    # Task 14, appended. Nothing reads this order, and now nothing does in the suite
-    # either: the audit test that withholds one row picks it by endpoint, so a route
-    # added after this one inherits no obligation about where it sits.
+    # Task 14, appended. Nothing at run time reads this order: the policy map is keyed
+    # by endpoint and Flask routes by rule. One test does, and says so plainly:
+    # ``test_the_route_tables_hold_exactly_the_routes_the_app_serves`` compares this
+    # table against an ordered list literal, so a row added here is added to that
+    # literal in the same position. That is an obligation about a declaration, which
+    # is what the test is for. What is gone is the other kind: the audit test that
+    # withholds one row now picks it by endpoint, so no row has to sit anywhere in
+    # particular to keep a test testing the route it was written about.
     _ApiRoute(
         "/api/settlements",
         "create_settlement",

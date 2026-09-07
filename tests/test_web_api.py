@@ -5370,9 +5370,14 @@ def test_the_rule_is_held_by_one_lock_the_whole_module_shares() -> None:
     # two threads of one process, and a lock either of them could take alone guards
     # nothing. ``RateLimiter``'s lock is built per limiter because a limiter is one
     # object the app owns; this one has no such object to live on.
+    #
+    # ``Lock`` and not ``RLock``, and the second assertion holds that: the docstring
+    # tells issue #16 the lock is not reentrant and how to share the counting without
+    # nesting an acquire, so the promise and the check belong in the same place.
     import threading
 
     assert isinstance(web._SETTLEMENT_LOCK, type(threading.Lock()))
+    assert not isinstance(web._SETTLEMENT_LOCK, type(threading.RLock()))
     source = web_source()
     assert source.count("_SETTLEMENT_LOCK: Final = threading.Lock()") == 1
     assert "with _SETTLEMENT_LOCK:" in source

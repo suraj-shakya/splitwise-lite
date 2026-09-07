@@ -1126,8 +1126,24 @@ re-read of the renderer.
   `derive_balances` and `_read_balances`.
 * The receiver-only rule is #16's to enforce, in the layer that can load both records:
   `events.py` and `store.py` both say so in as many words, and both refuse to check it.
-* This task's 409 means at most one pending settlement per ordered pair. #16 should note that
-  rejecting one frees that pair for a fresh claim, and decide whether that is what it wants.
+* This task's 409 means at most one pending settlement per ordered pair **in one process, and
+  nowhere else**. #16 should note that rejecting one frees that pair for a fresh claim, and
+  decide whether that is what it wants.
+
+  > **Correction, 2026-09-07.** This bullet used to open "This task's 409 means at most one
+  > pending settlement per ordered pair", with no qualification. As shipped, the check reads
+  > the ledger and the append writes it, and `scripts/serve.py` serves with `threaded=True`,
+  > so the rule is enforced by `web._SETTLEMENT_LOCK`, a module-level `threading.Lock` held
+  > across both halves. That lock is exact within one process and worth nothing across two
+  > processes or two hosts, and `store.append_settlement` has no uniqueness constraint that
+  > could catch a second claim, because pending is derived rather than stored. So the
+  > unqualified sentence claimed more than the code delivers. **What #16 must do:** take
+  > `web._SETTLEMENT_LOCK` across its own read and its own append, and count the pair's
+  > pending claims inside it rather than trusting this endpoint to have kept it to one. The
+  > lock is not reentrant, so count with a helper that is handed a ledger and takes no lock;
+  > a helper that both counts and locks self-deadlocks the moment it is called from inside a
+  > block that already holds it. `_SETTLEMENT_LOCK`'s docstring carries the same instruction
+  > next to the code.
 
 **On the wire.**
 * `GET /api/balances` already carries `pending`, and each row already carries `id`,
