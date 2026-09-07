@@ -195,6 +195,9 @@ SCENARIOS = [
     "the_rows_stay_in_the_order_the_server_sent_them",
     "an_expense_described_in_markup_reaches_the_screen_as_text",
     "an_expense_with_no_description_still_names_everything_else",
+    "opening_a_row_shows_every_share_and_the_total_they_are_shares_of",
+    "a_payer_who_is_not_sharing_is_said_so_rather_than_added_to_the_split",
+    "a_member_the_roster_does_not_know_reads_as_words_not_as_an_id",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

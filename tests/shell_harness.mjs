@@ -7476,6 +7476,141 @@ const SCENARIOS = [
         'the datetime attribute'
       );
     }
+  },
+  {
+    /* The disclosure, and the whole of what it discloses. An inline region, not a
+       modal and not a fourth route: it pushes nothing onto the history stack, so Back
+       still leaves the app from the feed. The screen never adds the shares up and
+       neither does this scenario: every figure is compared as the string the payload
+       carried. */
+    name: 'opening_a_row_shows_every_share_and_the_total_they_are_shares_of',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_DINNER] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const summary = summaryIn(rows[0]);
+      const detail = regionFor(page, summary);
+      page.is(summary.getAttribute('aria-expanded'), 'false', 'aria-expanded, closed');
+      page.is(detail.hidden, true, 'the region, closed');
+
+      await page.dispatch(summary, 'click');
+      page.is(summary.getAttribute('aria-expanded'), 'true', 'aria-expanded, open');
+      page.is(detail.hidden, false, 'the region, open');
+      page.is(indicatorIn(summary).textContent, '-', 'the indicator, open');
+      /* Every share, in roster order, with the zero included and none dropped,
+         blanked or dashed out. Ali paid nothing and is still a participant, because a
+         detail that disagrees with the split line is a bug the reader cannot see. */
+      page.same(
+        sharesIn(detail),
+        [['Ali', '0.00'], ['Sam', '15.00'], ['Cass', '15.00']],
+        'the shares'
+      );
+      /* The total those shares are shares of, labelled, and with no sentence claiming
+         a relationship between the two: the front end is in no position to have
+         checked one. */
+      const total = onlyOne(detail, '.expense-total');
+      page.is(onlyOne(total, '.expense-total-label').textContent, 'Total', 'the label');
+      page.is(onlyOne(total, '.expense-figure').textContent, '30.00', 'the total');
+      /* Cass paid and is sharing, so the only note is who recorded it. */
+      page.same(noteLinesIn(detail), ['Recorded by Sam.'], 'the notes');
+
+      await page.dispatch(summary, 'click');
+      page.is(summary.getAttribute('aria-expanded'), 'false', 'aria-expanded, closed again');
+      page.is(detail.hidden, true, 'the region, closed again');
+      page.is(indicatorIn(summary).textContent, '+', 'the indicator, closed again');
+
+      page.is(page.hash, '#/feed', 'the hash');
+      page.same(page.pushStates, [], 'history entries');
+    }
+  },
+
+  {
+    /* Task 4 supports paying for a meal you did not eat. The payer is not quietly
+       added to the participant list and no share is implied for them; the fact is
+       stated instead, which is the difference between a screen that reports the ledger
+       and one that improves on it. */
+    name: 'a_payer_who_is_not_sharing_is_said_so_rather_than_added_to_the_split',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_TREAT] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const summary = summaryIn(row);
+      await page.dispatch(summary, 'click');
+      const detail = regionFor(page, summary);
+      page.is(onlyOne(row, '.expense-payer').textContent, 'Paid by Cass', 'the payer');
+      /* Exactly the one sentence, naming that payer. */
+      page.same(
+        noteLinesIn(detail),
+        ['Cass paid and is not sharing this expense.'],
+        'the notes'
+      );
+      /* The shares are exactly the participants, and Cass is not among them, in the
+         detail or on the split line. */
+      page.same(sharesIn(detail), [['Ali', '10.00'], ['Sam', '10.00']], 'the shares');
+      page.same(
+        detail.querySelectorAll('.expense-share-name').map((node) => node.textContent),
+        ['Ali', 'Sam'],
+        'the share names'
+      );
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Ali and Sam',
+        'the split line'
+      );
+    }
+  },
+
+  {
+    /* A member row can go while the expenses that name it stay, which store.Member
+       allows on purpose. An unresolvable id must not stop its row or any other row
+       from rendering, must not reach the reader as a UUID, and must not vanish: it
+       keeps its place at the end of the shares, because a share silently dropped is a
+       total that no longer explains itself. */
+    name: 'a_member_the_roster_does_not_know_reads_as_words_not_as_an_id',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_STRANGER] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const summary = summaryIn(row);
+      await page.dispatch(summary, 'click');
+      const detail = regionFor(page, summary);
+      page.is(
+        onlyOne(row, '.expense-payer').textContent,
+        'Paid by Unknown member',
+        'the payer'
+      );
+      /* The known share first, in roster order, and the one the roster cannot place
+         last rather than missing. */
+      page.same(
+        sharesIn(detail),
+        [['Sam', '5.00'], ['Unknown member', '5.00']],
+        'the shares'
+      );
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Sam and Unknown member',
+        'the split line'
+      );
+      /* And the id itself is nowhere a person can read it. */
+      page.ok(
+        row.textContent.indexOf(FEED_UNKNOWN_ID) === -1,
+        'the row reads ' + JSON.stringify(row.textContent)
+      );
+    }
   }
 ];
 
