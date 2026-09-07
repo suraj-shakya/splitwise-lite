@@ -90,9 +90,18 @@ PASSWORD: Final = "correct horse battery staple"
 ROSTER: Final = ("Sam", "Ali", "Jo")
 CURRENCY: Final = "AUD"
 
-STRANGER: Final = "not-a-member-of-this-group"
-"""An id no roster holds. Long enough to be recognisable in a failure and no shorter
-than the eight characters :func:`stored_identifiers` insists real ids reach."""
+NOT_IN_THE_ROSTER: Final = "{group}"
+"""What a row sends where it means "an id this group's roster does not hold".
+
+It is the **group's own id**, and that is not incidental. A driver that sent a made-up
+string would reach the same refusal and prove nothing: :func:`identifiers_in` searches
+for the ids the store holds, so a made-up string cannot be seen leaking, and restoring
+one of the interpolations this task removed would leave the driven row green. A group
+id is stored, is at least eight characters, is refused by exactly the same branch as
+any other non-member, and **is** in the identifier set. Do not tidy this back into a
+literal: the mutation records in plans/mutations/61-identifiers-in-4xx-bodies.md are
+the evidence that these rows bite, and they bite because of this.
+"""
 
 MIN_REASON: Final = 30
 """How long an unreachability reason has to be, the way ``tests/test_suite_integrity``
@@ -229,13 +238,23 @@ def unlinked_client(app):
 
 
 def roster_names(path: Path) -> dict[str, str]:
-    """Display name to member id, read from the store rather than from a response."""
+    """Every placeholder a row can write, read from the store and not from a response.
+
+    Each member's display name maps to that member's id, and ``group`` maps to the
+    group's own id, which is what :data:`NOT_IN_THE_ROSTER` is.
+    """
     with open_store(path) as store:
         group = resolve_sole_group(store)
-        return {
+        names = {
             member.display_name: member.id
             for member in store.list_members(group.id)
         }
+    assert "group" not in names, (
+        "a member is called Group, which collides with the {group} placeholder. "
+        "Rename the member in ROSTER."
+    )
+    names["group"] = group.id
+    return names
 
 
 # --- The identifier set -----------------------------------------------------
@@ -1377,7 +1396,7 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
             {
                 "description": "Milk",
                 "amount": "10.00",
-                "payer_id": STRANGER,
+                "payer_id": NOT_IN_THE_ROSTER,
                 "split": {"mode": "equal", "member_ids": ["{Sam}"]},
             },
         ),
@@ -1443,7 +1462,7 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
                 "description": "Milk",
                 "amount": "10.00",
                 "payer_id": "{Sam}",
-                "split": {"mode": "equal", "member_ids": [STRANGER]},
+                "split": {"mode": "equal", "member_ids": [NOT_IN_THE_ROSTER]},
             },
         ),
     ),
@@ -1492,7 +1511,7 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
             "POST",
             SETTLEMENTS,
             "malformed_request",
-            {"to_member_id": STRANGER, "amount": "1.00"},
+            {"to_member_id": NOT_IN_THE_ROSTER, "amount": "1.00"},
         ),
     ),
     Site(
@@ -1551,8 +1570,10 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
         "_decide_settlement",
         "no settlement in this group with that id",
         Drive(
+            # The group's own id again: no settlement has it, and if the settlement id
+            # ever comes back into this message the identifier set can see it.
             "POST",
-            "/api/settlements/no-such-settlement-at-all/decision",
+            "/api/settlements/{group}/decision",
             "record_not_found",
             {"decision": "confirmed"},
         ),
@@ -1599,7 +1620,7 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
         "web.py",
         "_read_debt",
         "a debt path names a  that is not a member of this group",
-        Drive("GET", f"/api/debts/{STRANGER}/{{Sam}}", "malformed_request"),
+        Drive("GET", "/api/debts/{group}/{Sam}", "malformed_request"),
     ),
     Site(
         # Spec row 11.
