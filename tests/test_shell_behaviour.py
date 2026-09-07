@@ -192,6 +192,9 @@ SCENARIOS = [
     # What a feed row shows. The first scenarios in this repo to render one.
     "a_feed_row_names_the_payer_the_amount_and_what_it_was_for",
     "a_feed_with_nothing_recorded_says_so_and_draws_no_row",
+    "the_rows_stay_in_the_order_the_server_sent_them",
+    "an_expense_described_in_markup_reaches_the_screen_as_text",
+    "an_expense_with_no_description_still_names_everything_else",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

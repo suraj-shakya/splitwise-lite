@@ -7346,6 +7346,136 @@ const SCENARIOS = [
       page.is(page.el('feed-list').childNodes.length, 0, 'children of #feed-list');
       page.is(page.query('.expense-row').length, 0, 'expense rows');
     }
+  },
+  {
+    /* web.py owns the ordering rule and has it written down: store.list_expenses
+       returns ascending (created_at, id) and the endpoint turns it around. feedRender
+       renders the array as it arrived and does not sort, reverse, compare or group it,
+       so a second ordering rule here would be a second contract to keep in step with
+       the first. Two of the three share an instant, because a tie is where a client
+       that sorted would disagree first. */
+    name: 'the_rows_stay_in_the_order_the_server_sent_them',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: FEED_THREE }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 3, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      page.same(
+        rowDescriptions(page),
+        ['Bread', 'Cheese', 'Milk run'],
+        'the order the rows read in'
+      );
+      /* Children of #feed-list itself, three of them, each an LI carrying the row
+         class. A fragment that survived insertion would put one node here instead. */
+      const children = page.el('feed-list').childNodes;
+      page.is(children.length, 3, 'children of #feed-list');
+      page.same(children.map((node) => node.tagName), ['LI', 'LI', 'LI'], 'their tags');
+      page.same(
+        children.map((node) => node.className),
+        ['expense-row', 'expense-row', 'expense-row'],
+        'their classes'
+      );
+      page.is(page.el('feed-list').firstChild, children[0], 'the firstChild');
+      /* The textContent getter reads a node with no tagName as node.text, so a
+         fragment left in the tree reads as the string undefined rather than failing. */
+      page.ok(
+        page.el('feed-list').textContent.indexOf('undefined') === -1,
+        'the list reads ' + JSON.stringify(page.el('feed-list').textContent)
+      );
+      page.ok(
+        tagsInDocument(page).indexOf('#DOCUMENT-FRAGMENT') === -1,
+        'a document fragment was left in the rendered tree'
+      );
+      feedShows(page, 'list', 'three rendered rows');
+    }
+  },
+
+  {
+    /* app.js composes every row out of createElement and text, and assigns no
+       innerHTML anywhere. Until this scenario that claim rested on a ban on the source
+       text of app.js in tests/test_feed_screen.py, which reads the committed document
+       and cannot watch a description reach a screen. This one watches. */
+    name: 'an_expense_described_in_markup_reaches_the_screen_as_text',
+    async run(page) {
+      const described = {
+        id: 'exp-10',
+        description: FEED_MARKUP,
+        amount: '5.00',
+        payer_id: 'mem-1',
+        created_by: 'mem-1',
+        created_at: FEED_WHEN,
+        allocations: [{ member_id: 'mem-1', amount: '5.00' }]
+      };
+      await onFeed(page, { currency: 'AUD', expenses: [described] }, FEED_ROSTER);
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      /* The literal characters, as text: the angle brackets are read, not parsed. */
+      page.is(
+        onlyOne(row, '.expense-description').textContent,
+        FEED_MARKUP,
+        'the description'
+      );
+      page.is(row.querySelectorAll('img').length, 0, 'IMG nodes in the row');
+      /* No console output is declared, here as everywhere, so the alert this markup
+         asks for would fail this scenario if anything ever ran it. */
+    }
+  },
+
+  {
+    /* No description is a thing that happens: the add screen sends an empty one. A
+       fixed literal, never a summary invented from the other fields, because "Milk
+       run" is indistinguishable from a description a person typed and inventing one is
+       the authoritative-while-wrong failure the spec names as the largest risk. Not
+       blank either: a blank first line makes the row look broken. */
+    name: 'an_expense_with_no_description_still_names_everything_else',
+    async run(page) {
+      await onFeed(
+        page,
+        { currency: 'AUD', expenses: [FEED_UNDESCRIBED] },
+        FEED_ROSTER
+      );
+      page.expectRequests(FEED_ENTRY);
+
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
+      const row = rows[0];
+      const described = onlyOne(row, '.expense-description');
+      page.is(described.textContent, 'No description', 'the description');
+      /* Both classes: the second is what lets the stylesheet say it differently
+         without the row losing the class everything else selects it by. */
+      page.same(
+        described.classList,
+        ['expense-description', 'expense-description--none'],
+        'the classes on it'
+      );
+      /* And the rest of the row survives the missing half. */
+      page.is(
+        onlyOne(summaryIn(row), '.expense-figure').textContent,
+        '3.00',
+        'the amount'
+      );
+      page.is(onlyOne(row, '.expense-payer').textContent, 'Paid by Sam', 'the payer');
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Sam',
+        'the split line'
+      );
+      page.is(
+        onlyOne(row, '.expense-date').getAttribute('datetime'),
+        FEED_WHEN,
+        'the datetime attribute'
+      );
+    }
   }
 ];
 
@@ -8030,6 +8160,154 @@ function noteLinesIn(detail) {
     .querySelectorAll('.expense-note')
     .map((note) => note.textContent);
 }
+
+/* A second instant, later than FEED_WHEN, so an ordering scenario has a tie and a
+   non-tie in one payload. */
+const FEED_LATER = '2026-09-05T09:00:00.000000+00:00';
+
+/* Three expenses in the order web.py sends them: newest first, ties broken by id
+   descending. Two of them share an instant, because a tie is where a second ordering
+   rule in the client would show itself, and there is no second ordering rule -
+   store.list_expenses returns ascending (created_at, id) and the endpoint turns it
+   around. */
+const FEED_THREE = [
+  {
+    id: 'exp-3',
+    description: 'Bread',
+    amount: '4.00',
+    payer_id: 'mem-2',
+    created_by: 'mem-2',
+    created_at: FEED_LATER,
+    allocations: [{ member_id: 'mem-2', amount: '4.00' }]
+  },
+  {
+    id: 'exp-2',
+    description: 'Cheese',
+    amount: '9.00',
+    payer_id: 'mem-1',
+    created_by: 'mem-1',
+    created_at: FEED_WHEN,
+    allocations: [{ member_id: 'mem-1', amount: '9.00' }]
+  },
+  {
+    id: 'exp-1',
+    description: 'Milk run',
+    amount: '12.50',
+    payer_id: 'mem-3',
+    created_by: 'mem-1',
+    created_at: FEED_WHEN,
+    allocations: [
+      { member_id: 'mem-1', amount: '6.25' },
+      { member_id: 'mem-3', amount: '6.25' }
+    ]
+  }
+];
+
+/* A description somebody could type into the add screen, and which a screen that
+   assigned it to innerHTML would run. The claim that it reaches the screen as text
+   rested on a ban on the source text of app.js and on nothing that ever rendered. */
+const FEED_MARKUP = '<img src=x onerror=alert(1)>';
+
+const FEED_UNDESCRIBED = {
+  id: 'exp-7',
+  description: '',
+  amount: '3.00',
+  payer_id: 'mem-1',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [{ member_id: 'mem-1', amount: '3.00' }]
+};
+
+/* Three shares, one of them nothing at all, and recorded by somebody other than the
+   payer. A zero cent share is a participant like any other: never dropped, never
+   blanked and never dashed out, because a detail that disagrees with the split line
+   is a bug the reader cannot see. */
+const FEED_DINNER = {
+  id: 'exp-4',
+  description: 'Dinner',
+  amount: '30.00',
+  payer_id: 'mem-3',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '15.00' },
+    { member_id: 'mem-2', amount: '0.00' },
+    { member_id: 'mem-3', amount: '15.00' }
+  ]
+};
+
+/* Paying for a meal you did not eat, which task 4 supports. The payer is absent from
+   the allocations and is neither added to the split nor implied a share of. */
+const FEED_TREAT = {
+  id: 'exp-5',
+  description: 'Takeaway',
+  amount: '20.00',
+  payer_id: 'mem-3',
+  created_by: 'mem-3',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '10.00' },
+    { member_id: 'mem-2', amount: '10.00' }
+  ]
+};
+
+/* An id no roster row answers for, which store.Member allows to happen: a member row
+   can go while the expenses that name it stay. A UUID on screen helps nobody, so it
+   must reach the reader as words, and this is the id that must not appear. */
+const FEED_UNKNOWN_ID = 'mem-9';
+const FEED_STRANGER = {
+  id: 'exp-6',
+  description: 'Bus fare',
+  amount: '10.00',
+  payer_id: FEED_UNKNOWN_ID,
+  created_by: FEED_UNKNOWN_ID,
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: FEED_UNKNOWN_ID, amount: '5.00' },
+    { member_id: 'mem-1', amount: '5.00' }
+  ]
+};
+
+/* Four people, so the split line stops naming everybody: six hundred-character
+   display names cannot be allowed to run the line off a 320px screen. */
+const FEED_FOUR_ROSTER = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-3', display_name: 'Cass' },
+    { id: 'mem-4', display_name: 'Dev' }
+  ]
+};
+const FEED_HOUSE_SHOP = {
+  id: 'exp-8',
+  description: 'House shop',
+  amount: '40.00',
+  payer_id: 'mem-1',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '10.00' },
+    { member_id: 'mem-2', amount: '10.00' },
+    { member_id: 'mem-3', amount: '10.00' },
+    { member_id: 'mem-4', amount: '10.00' }
+  ]
+};
+
+/* A created_at the date grammar refuses. web.py never sends one, but a store restored
+   from a hand-edited file or a future migration can, and a money screen that answers
+   with NaN or Invalid Date is worse than one that answers with the raw characters.
+   Longer than ten characters, so the first-ten-characters fallback is visible as a
+   truncation rather than as the whole value passed through. */
+const FEED_NOT_A_DATE = 'not a date at all';
+const FEED_UNDATED = {
+  id: 'exp-9',
+  description: 'Nightcap',
+  amount: '7.00',
+  payer_id: 'mem-1',
+  created_by: 'mem-1',
+  created_at: FEED_NOT_A_DATE,
+  allocations: [{ member_id: 'mem-1', amount: '7.00' }]
+};
 
 /* --- Running ---------------------------------------------------------------- */
 
