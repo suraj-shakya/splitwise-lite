@@ -667,6 +667,10 @@ def test_there_is_no_second_http_module_and_no_web_package() -> None:
         "money.py",
         "simplify.py",
         "split.py",
+        # Task 16. The one module that task adds under src/, and this literal is what
+        # makes that a checked claim rather than a promise: a second one cannot arrive
+        # unnoticed.
+        "staleness.py",
         "store.py",
         "web.py",
     }

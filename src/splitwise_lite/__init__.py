@@ -1,6 +1,8 @@
 """Splitwise Lite: a shared expense ledger for small groups.
 
-The domain vocabulary lives in six modules and is re-exported here:
+The domain vocabulary is re-exported here, one bullet per module. The count is
+deliberately not stated: it said "six" while eight modules were listed under it,
+because a number in prose goes stale and the list beside it does not.
 
 * ``money``: currency, integer-cent ``Money``, amount parsing and formatting, and the
   ``DomainError`` base every domain exception subclasses.
@@ -11,6 +13,9 @@ The domain vocabulary lives in six modules and is re-exported here:
   and the settlement states that decide which settlements counted.
 * ``simplify``: the greedy pass that turns those net positions into suggested
   transfers, each carrying the pairwise debts it absorbed.
+* ``staleness``: how old a ledger is and who has entered nothing into it recently,
+  derived on read from the events and the roster, with the instant supplied by the
+  caller.
 * ``store``: the durable, append-only SQLite store those events are written to and
   read back from, and the user, group, member and session records they reference.
 * ``accounts``: signing up, signing in, scrypt password hashing, and the sessions that
@@ -123,6 +128,14 @@ from .split import (
     split_equally,
     split_exact,
 )
+from .staleness import (
+    QUIET_AFTER_DAYS,
+    InvalidStaleness,
+    MixedGroupLedger,
+    Staleness,
+    StalenessState,
+    ledger_staleness,
+)
 from .store import (
     BUSY_TIMEOUT_MS,
     IN_MEMORY,
@@ -162,6 +175,7 @@ __all__ = [
     "MINOR_UNITS",
     "MIN_PASSWORD_LENGTH",
     "MIN_SQLITE_VERSION",
+    "QUIET_AFTER_DAYS",
     "SALT_BYTES",
     "SCHEMA_VERSION",
     "SESSION_LIFETIME",
@@ -203,12 +217,14 @@ __all__ = [
     "InvalidPassword",
     "InvalidRecord",
     "InvalidSplit",
+    "InvalidStaleness",
     "IssuedSession",
     "LedgerEvent",
     "Member",
     "MemberAlreadyLinked",
     "MemberId",
     "MemberNotLinked",
+    "MixedGroupLedger",
     "Money",
     "NoGroupConfigured",
     "PasswordHashInvalid",
@@ -221,6 +237,8 @@ __all__ = [
     "SettlementId",
     "SettlementState",
     "SetupResult",
+    "Staleness",
+    "StalenessState",
     "StorageFailed",
     "StoreClosed",
     "StoreError",
@@ -240,6 +258,7 @@ __all__ = [
     "derive_balances",
     "format_amount",
     "hash_password",
+    "ledger_staleness",
     "link_user_to_member",
     "load_group_definition",
     "log_in",
