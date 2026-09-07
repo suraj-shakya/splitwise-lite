@@ -885,6 +885,348 @@ def unanchored_block_message(where: str, line: int, name: str) -> str:
     )
 
 
+# The blocks that were already unanchored when this check landed, carried so that the
+# check can refuse everything new without either fixing a hundred assertions in one
+# unauditable merge or converting them unaudited, which is the worse defect.
+#
+# This is not an allowlist, and it is not the equal of the `# unanchored:` hatch either.
+# Four properties separate it from an allowlist, and all four are checked below: it is
+# checked in BOTH directions, so a carried entry that is no longer unanchored is a
+# failure naming it and the baseline cannot outlive its subject; its entries carry
+# counts, not just names, so anchoring one of two blocks in a function moves a number;
+# its total is a single declared integer, so growing it is a one-line diff a reviewer
+# cannot miss; and each entry names the audit slice that will retire it, under the same
+# floor MINIMUM_REASON puts under the marker.
+#
+# Stated exactly and not claimed as more: a determined author can still legalise a new
+# unanchored block by editing three places, and that costs a placement plus a bump to a
+# visible integer, not a written justification per block. That is weaker than
+# `# unanchored:` demands, which enforces twenty characters of reason, and stronger than
+# a bare allowlist. It is temporary by construction, because the last audit slice
+# deletes this constant, CARRIED_TOTAL, and the carried direction of the check.
+#
+# Never keyed by a line number and never by an ordinal. Line numbers churn on every edit
+# above them, which would make this a merge-conflict generator, and an ordinal is bound
+# to its subject only by position in a list, which is the defect that put a correct
+# number against the wrong mutation in this repo. A name and a count is bound to
+# neither.
+CARRIED_UNANCHORED_BLOCKS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
+    "tests/test_accounts.py": (
+        frozenset(
+            {
+                ("test_every_login_failure_is_the_same_type_with_the_same_message", 1),
+            }
+        ),
+        "no row of the 70b to 70h slice table covers this module; 70h, last, takes it",
+    ),
+    "tests/test_balances.py": (
+        frozenset(
+            {
+                ("test_a_foreign_currency_raises_currency_mismatch_for_a_walk_too", 1),
+                ("test_a_foreign_currency_raises_currency_mismatch_naming_both_codes", 1),
+                ("test_a_foreign_group_is_refused_on_the_same_terms_as_the_fold", 1),
+                ("test_a_foreign_group_names_the_event_and_both_groups", 1),
+                ("test_a_member_cannot_owe_themselves", 1),
+                ("test_a_member_id_that_is_not_a_str_raises_type_error_naming_the_type", 1),
+                ("test_a_repeated_event_id_is_refused_for_a_walk_too", 1),
+            }
+        ),
+        "slice 70c retires this module, one deleted guard in balances.py at a time",
+    ),
+    "tests/test_groups.py": (
+        frozenset(
+            {
+                ("test_a_definition_cannot_carry_an_address", 1),
+                ("test_a_different_currency_is_refused_naming_both_codes", 1),
+                ("test_a_different_group_name_is_refused_naming_both", 1),
+                ("test_a_directory_is_named_rather_than_raising_an_os_error", 1),
+                ("test_a_file_that_is_not_utf_8_is_named_rather_than_raising_a_decode_error", 1),
+                ("test_a_group_name_that_is_not_a_string_is_refused", 1),
+                ("test_a_lowercase_currency_is_refused_and_the_message_names_the_fix", 1),
+                ("test_a_member_of_another_group_is_refused_naming_both_groups", 1),
+                ("test_a_member_pointing_at_another_user_is_refused_and_left_alone", 1),
+                ("test_a_missing_key_is_named", 1),
+                ("test_a_path_that_does_not_exist_is_named", 1),
+                ("test_a_user_another_member_of_that_group_holds_is_refused", 1),
+                ("test_an_omitted_name_is_refused_and_writes_nothing", 1),
+                ("test_an_unknown_key_is_named_rather_than_ignored", 1),
+                ("test_an_unknown_member_id_or_user_id_is_named", 2),
+                ("test_an_unlinked_user_and_an_unknown_group_are_told_apart_by_type", 1),
+                ("test_apply_with_an_unknown_group_id_raises_record_not_found", 1),
+                ("test_apply_with_two_groups_and_no_id_raises_ambiguous", 1),
+                ("test_malformed_toml_carries_the_decode_error_as_its_cause", 1),
+                ("test_max_members_is_fifty_and_is_enforced", 1),
+                ("test_members_must_be_an_array_of_strings", 1),
+                ("test_resolve_on_an_empty_store_names_the_setup_command", 1),
+                ("test_resolve_with_two_groups_names_every_id", 1),
+                ("test_two_names_that_casefold_equal_are_refused_and_the_message_says_what_to_do", 1),
+                ("test_two_names_that_differ_only_by_unicode_normalisation_are_refused", 1),
+                ("test_two_stored_members_of_one_name_refuse_a_reconcile", 1),
+            }
+        ),
+        "slice 70e retires this module, one deleted guard in groups.py at a time",
+    ),
+    "tests/test_money.py": (
+        frozenset(
+            {
+                ("test_currency_rejects_lowercase_rather_than_coercing", 1),
+                ("test_parse_amount_error_message_carries_the_offending_input", 1),
+            }
+        ),
+        "slice 70b retires this module, one deleted guard in money.py at a time",
+    ),
+    "tests/test_simplify.py": (
+        frozenset(
+            {
+                ("test_a_member_in_pairwise_but_absent_from_net_still_has_to_agree", 1),
+                ("test_a_member_owing_themselves_is_refused", 1),
+                ("test_a_money_in_another_currency_raises_currency_mismatch", 1),
+                ("test_a_net_that_does_not_sum_to_zero_is_refused_by_its_residue", 1),
+                ("test_a_pair_stored_in_both_directions_is_refused_naming_both", 1),
+                ("test_a_pairwise_debt_that_is_not_strictly_positive_is_refused", 1),
+                ("test_anything_that_is_not_a_balances_is_a_type_error", 1),
+                ("test_net_and_pairwise_disagreeing_is_refused_naming_both_figures", 1),
+            }
+        ),
+        "slice 70b retires this module, one deleted guard in simplify.py at a time",
+    ),
+    "tests/test_split.py": (
+        frozenset(
+            {
+                ("test_split_exact_rejects_amounts_that_fall_short", 1),
+                ("test_split_exact_rejects_amounts_that_overshoot", 1),
+            }
+        ),
+        "slice 70b retires this module, one deleted guard in split.py at a time",
+    ),
+    "tests/test_store.py": (
+        frozenset(
+            {
+                ("test_a_duplicate_decision_leaves_the_stored_row_untouched", 1),
+                ("test_a_duplicate_email_is_rejected", 1),
+                ("test_a_duplicate_expense_id_leaves_the_stored_row_untouched", 1),
+                ("test_a_duplicate_settlement_id_leaves_the_stored_row_untouched", 1),
+                ("test_a_duplicate_token_hash_is_rejected_and_overwrites_nothing", 1),
+                ("test_a_duplicate_user_id_is_rejected_and_leaves_the_row_alone", 1),
+                ("test_a_raw_delete_of_an_allocation_is_rejected", 1),
+                ("test_a_raw_delete_of_an_expense_is_rejected", 1),
+                ("test_a_raw_settlement_in_the_wrong_currency_is_rejected_by_the_foreign_key", 1),
+                ("test_a_raw_update_of_a_groups_currency_is_rejected", 1),
+                ("test_a_raw_update_of_an_allocation_is_rejected", 1),
+                ("test_a_raw_update_of_an_expense_is_rejected", 1),
+                ("test_a_raw_update_or_delete_of_a_decision_is_rejected", 2),
+                ("test_a_raw_update_or_delete_of_a_settlement_is_rejected", 2),
+                ("test_a_settlement_amount_above_the_bound_is_rejected", 1),
+                ("test_a_settlement_in_the_wrong_currency_raises_currency_mismatch", 1),
+                ("test_a_total_above_the_bound_is_rejected_naming_the_field", 1),
+                ("test_add_user_with_credential_rejects_a_taken_id_or_address", 2),
+                ("test_an_allocation_above_the_bound_is_rejected_naming_the_field", 1),
+                ("test_an_expense_in_the_wrong_currency_raises_currency_mismatch", 1),
+                ("test_delete_sessions_for_an_unknown_user_raises_not_found", 1),
+                ("test_get_member_for_user_for_an_unknown_group_raises_not_found", 1),
+                ("test_get_member_for_user_raises_not_found_naming_both_ids", 1),
+                ("test_get_password_hash_raises_not_found_for_a_user_with_no_credential", 1),
+                ("test_get_session_raises_not_found_naming_the_hash", 1),
+                ("test_get_user_by_email_raises_not_found_naming_the_address", 1),
+                ("test_list_events_for_an_unknown_group_raises_not_found", 1),
+                ("test_list_expenses_for_an_unknown_group_raises_not_found", 1),
+                ("test_list_settlement_decisions_for_an_unknown_settlement_raises_not_found", 1),
+                ("test_list_settlements_for_an_unknown_group_raises_not_found", 1),
+                ("test_opening_a_file_that_is_not_a_database_names_the_path", 1),
+                ("test_opening_a_newer_schema_version_raises_rather_than_reading_it", 1),
+                ("test_opening_a_version_3_database_still_raises", 1),
+                ("test_opening_an_old_sqlite_library_raises_a_named_error", 1),
+                ("test_opening_under_a_missing_directory_names_the_path", 1),
+                ("test_reading_an_unknown_id_raises_not_found_naming_it", 1),
+                ("test_set_member_user_for_an_unknown_member_names_the_id", 1),
+                ("test_set_member_user_for_an_unknown_user_names_the_id", 1),
+                ("test_set_member_user_refuses_a_member_that_already_points_at_a_user", 1),
+                ("test_set_member_user_refuses_a_second_member_for_one_user_in_a_group", 1),
+                ("test_strict_tables_reject_text_in_an_integer_column", 1),
+            }
+        ),
+        "slices 70g and 70h split this module, at a point taken from this census",
+    ),
+    "tests/test_suite_integrity.py": (
+        frozenset(
+            {
+                ("test_a_module_that_will_not_parse_names_the_file_and_quotes_the_error", 1),
+            }
+        ),
+        "slice 70f retires this module, whose guard sits in tests/ and not under src/",
+    ),
+    "tests/test_web_api.py": (
+        frozenset(
+            {
+                ("test_a_declared_route_the_app_does_not_serve_is_refused", 1),
+                ("test_a_declared_shell_route_the_app_does_not_serve_is_refused", 1),
+                ("test_a_route_outside_the_api_prefix_is_refused_by_the_audit_too", 1),
+                ("test_a_route_row_refuses_a_field_it_cannot_use", 1),
+                ("test_a_route_row_refuses_an_access_that_is_not_an_access_level", 1),
+                ("test_a_shell_row_under_the_api_prefix_is_refused_at_build_time", 1),
+                ("test_an_api_route_added_after_the_factory_is_refused_by_the_audit", 1),
+                ("test_an_in_memory_store_is_refused_with_a_reason", 1),
+                ("test_the_api_prefix_is_a_path_segment_and_not_a_string_prefix", 1),
+                ("test_the_decision_route_must_be_declared_or_the_app_will_not_build", 1),
+                ("test_the_request_time_refusal_claims_no_provenance_it_cannot_see", 1),
+                ("test_the_settlements_route_must_be_declared_or_the_app_will_not_build", 1),
+                ("test_two_rows_sharing_an_endpoint_name_are_refused_by_the_access_map", 1),
+            }
+        ),
+        "slice 70d retires this module, one deleted guard in web.py at a time",
+    ),
+    "tests/test_web_shell.py": (
+        frozenset(
+            {
+                ("test_an_omission_with_no_reason_is_refused", 1),
+                ("test_the_digest_refuses_an_entry_it_cannot_classify", 1),
+            }
+        ),
+        "slice 70f retires this module, whose guards sit in tests/ and not under src/",
+    ),
+}
+
+# The sum of every count above, declared once. Produced by the check itself and pasted
+# back; no number here is a hand count.
+CARRIED_TOTAL = 107
+
+# The reason each entry carries has to name the slice that retires it, so an entry
+# cannot be added with a reason that commits nobody to anything.
+RETIRING_SLICE = re.compile(r"\b70[b-h]\b")
+
+NO_REASON_YET = "<why this module is carried, and which of 70b to 70h retires it>"
+
+
+def carried_counts(source: str, where: str) -> dict[str, int]:
+    """How many unanchored blocks each definition in ``source`` holds."""
+    counts: dict[str, int] = {}
+    for block in unanchored_message_blocks(source, where):
+        counts[block.enclosing] = counts.get(block.enclosing, 0) + 1
+    return counts
+
+
+def carried_entry_literal(where: str, counts: dict[str, int], reason: str) -> str:
+    """The CARRIED_UNANCHORED_BLOCKS entry for ``where``, ready to paste back."""
+    if not counts:
+        return f'    (delete the "{where}" entry: it carries nothing now)'
+    pairs = "\n".join(
+        f'                ("{name}", {count}),' for name, count in sorted(counts.items())
+    )
+    return (
+        f'    "{where}": (\n'
+        "        frozenset(\n"
+        "            {\n"
+        f"{pairs}\n"
+        "            }\n"
+        "        ),\n"
+        f'        "{reason}",\n'
+        "    ),"
+    )
+
+
+def computed_carried_total() -> int:
+    """What CARRIED_TOTAL should read, over every test module."""
+    return sum(
+        len(unanchored_message_blocks(read(path), posix(path))) for path in TEST_SOURCES
+    )
+
+
+def spelled_entries(entries: set[tuple[str, int]]) -> str:
+    """One ``name: count`` per line, ordered, for a failure to list."""
+    return "\n".join(f"    {name}: {count}" for name, count in sorted(entries))
+
+
+def carried_baseline_message(
+    where: str,
+    unlisted: set[tuple[str, int]],
+    stale: set[tuple[str, int]],
+    literal: str,
+    total: int,
+) -> str:
+    """What the check says when the walk and the baseline disagree.
+
+    Following ``stale_digest_message`` in tests/test_web_shell.py, which is how this
+    repo maintains a constant the suite computes: the message ends with the exact text
+    to paste back, so nobody counts anything by hand.
+    """
+    parts = [
+        f"{where}: the unanchored pytest.raises blocks in this module and the entry "
+        "CARRIED_UNANCHORED_BLOCKS holds for it have gone out of step."
+    ]
+    if unlisted:
+        parts.append(
+            "These are unanchored and not carried, so they are new:\n"
+            f"{spelled_entries(unlisted)}\n"
+            "\n"
+            'A new one is not carried. Anchor the block instead: put match=r"^..." on '
+            "the pytest.raises call, or compare the whole message with == or "
+            ".startswith, or say why not with '# unanchored: <why>' on the with "
+            f"statement, with a reason of at least {MINIMUM_REASON} characters. "
+            "The baseline may only shrink."
+        )
+    if stale:
+        parts.append(
+            "These are carried but are no longer unanchored, so the entry has outlived "
+            f"its subject:\n{spelled_entries(stale)}\n"
+            "\n"
+            "That is the direction that stops this baseline becoming an allowlist "
+            "nobody retires. If an audit slice anchored them, take them out of the "
+            "entry and lower CARRIED_TOTAL by the same number."
+        )
+    parts.append(
+        "Paste this in place of this module's entry in CARRIED_UNANCHORED_BLOCKS:\n"
+        "\n"
+        f"{literal}\n"
+        "\n"
+        "and set:\n"
+        "\n"
+        f"    CARRIED_TOTAL = {total}"
+    )
+    return "\n\n".join(parts)
+
+
+@pytest.mark.parametrize("path", TEST_SOURCES, ids=SOURCE_IDS)
+def test_every_message_block_is_anchored_or_carried(path: Path) -> None:
+    """A raises block that reads a message either anchors, or is one of the carried."""
+    where = posix(path)
+    counts = carried_counts(read(path), where)
+    found = set(counts.items())
+    carried, reason = CARRIED_UNANCHORED_BLOCKS.get(where, (frozenset(), NO_REASON_YET))
+    if found != carried:
+        pytest.fail(
+            carried_baseline_message(
+                where,
+                found - carried,
+                set(carried) - found,
+                carried_entry_literal(where, counts, reason),
+                computed_carried_total(),
+            )
+        )
+
+
+def test_the_carried_total_is_the_sum_of_the_baseline() -> None:
+    """One declared integer, so growing the baseline is a diff a reviewer reads."""
+    counted = sum(
+        count
+        for carried, _ in CARRIED_UNANCHORED_BLOCKS.values()
+        for _, count in carried
+    )
+    assert CARRIED_TOTAL == counted, (
+        f"CARRIED_TOTAL says {CARRIED_TOTAL} and the entries sum to {counted}. "
+        "The entries are the subject; set CARRIED_TOTAL to what they sum to."
+    )
+
+
+def test_every_carried_module_names_the_slice_that_retires_it() -> None:
+    """No entry is added with a reason that commits nobody to retiring it."""
+    for where, (_, reason) in sorted(CARRIED_UNANCHORED_BLOCKS.items()):
+        assert len(reason) >= MINIMUM_REASON, f"{where}: {reason!r} is not a reason"
+        assert RETIRING_SLICE.search(reason), (
+            f"{where}: {reason!r} names no audit slice. An entry carried by nobody is "
+            "an allowlist entry, and the reason is what stops it becoming one."
+        )
+
+
 BLOCK_FLAGGED_PLAIN = (
     "with pytest.raises(TypeError) as raised:\n"
     "    Money(1, None)\n"
