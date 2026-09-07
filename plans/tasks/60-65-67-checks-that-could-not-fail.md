@@ -668,14 +668,17 @@ thirteen pins was anchorable against the message its guard really prints, so no 
 escape hatch. The marker mechanism is exercised only by the synthetic sources in
 `test_the_pin_check_still_bites`, which is where its accept and refuse cases are pinned.
 
-**Count arithmetic.** 2343 on master, plus 50 added by `tests/test_suite_integrity.py`, equals
-**2393**, which is what the suite reports with 0 failed, 0 skipped and 0 xfailed. The pin work
-adds none and removes none. The 50 are **16 single tests plus 2 checks parametrised over 17 test
-modules** (2 x 17 = 34; 16 + 34 = 50):
+**Count arithmetic.** **2431** on master at `5c2966f`, plus **50** added by
+`tests/test_suite_integrity.py`, equals **2481**, which is what the suite reports with 0 failed,
+0 skipped and 0 xfailed. The pin work adds none and removes none. The 50 are **16 single tests
+plus 2 checks parametrised over 17 test modules** (2 x 17 = 34; 16 + 34 = 50):
 
-*Was 49 and 2392 when this PR was opened. The fiftieth test is
-`test_the_duplicate_check_reports_three_bindings_as_one_finding`, added after review; see the
-review round below.*
+*Three numbers, because master moved twice under this branch. At the base `72b86c0` master was
+2343 and this branch was 2392 with 49 tests. Review added the fiftieth,
+`test_the_duplicate_check_reports_three_bindings_as_one_finding`, making 2393. Then PR #71 landed
+and master became 2431, so the branch is 2481. The added 50 is the constant across all three, and
+`2481 - 50 = 2431` reconciles against master independently rather than taking the figure on
+trust. The 17 is unchanged by #71, which edited three existing test modules and added none.*
 
 * Parametrised, 17 cases each, one per `*.py` file under `tests/` (16 modules on master plus
   `tests/test_suite_integrity.py` itself): `test_no_test_module_defines_a_name_twice`,
@@ -722,10 +725,40 @@ shipped one of its own, past an author who had just spent a day on exactly that 
 is the strongest argument in this PR for the reviewer being a second pair of eyes rather than a
 formality.
 
+**Four copies, not three.** The correction note on criterion 21 first enumerated three copies of
+the `Money` sentence. There were four: criterion 40a is the sub-criterion that specifies rule (a)
+itself, and it was still present tense about live source and undated after the round that dated
+the other three. So this document specified the rule in the tense the same review had just
+corrected everywhere else. Dated now, and the enumeration corrected, because a note that
+undercounts the copies of a duplicated claim is the same defect one level up.
+
+**The pin against live source was declined, not unavailable.** The first version of that note
+said pinning the `Money` sentence against live source "is not available: criterion 2 forbids
+importing `splitwise_lite`". That overstates the criterion, which forbids *importing*, not
+reading: `read(REPO / "src" / "splitwise_lite" / "money.py")` would pin the claim with no import,
+in a module that already reads `.claude/`, `plans/` and `tests/` as text. The pin was available
+and was declined, because it would be this module's first reach into `src/` and a text pin on
+another module's message is a coupling this file does not want. Same decision, true reason
+instead of the convenient one, which is what rule (a) is about.
+
+**What the checks met on the rebase onto `5c2966f`, stated precisely.** PR #71 landed 88 tests
+across `tests/test_web_api.py`, `tests/test_web_shell.py` and `tests/test_shell_behaviour.py`,
+all three written after these checks existed and none of them by this task's author. Both checks
+are green, but the two halves of that are not equally interesting:
+
+* The **duplicate check** genuinely ran over #71's new content: the three files it touched now
+  collect 777 tests between them, and the check reads every module-level definition in each. No
+  duplicate. That is a real pass.
+* The **pin check** passed by absence. #71 introduced **no** `match=` pin at all
+  (`git diff 72b86c0 origin/master -- tests/` adds no line containing `match=`), so there was
+  nothing in its new code for the pin check to judge. The suite still holds exactly the 14 pins
+  it held before, all anchored. Recording this rather than claiming the check was exercised by
+  post-dating code, because "green" and "exercised" are the distinction this whole task is about.
+
 **Two claims re-registered after review.** Rule (a) in `.claude/rules/testing.md` stated the
 `Money` collision in the present tense about live source, undated, and duplicated the claim into
-`unanchored_pin_message` and criterion 21, pinned only by a test asserting the substring against
-a message the same file builds. That is rule (d)'s own defect. All three now say
+`unanchored_pin_message` and criteria 21 and 40a, pinned only by a test asserting the substring
+against a message the same file builds. That is rule (d)'s own defect. All four now say
 "Measured on `7bf518c` (2026-09-07), `money.py:148` said ...", matching criterion 39's marker,
 which quotes its sha beside its measurement. `plans/mutations/65-message-pins.md` likewise now
 records the tree its messages were taken against, since a record quotes a measurement and a
