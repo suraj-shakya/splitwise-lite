@@ -1,7 +1,56 @@
 # Splitwise Lite
 
 Shared expense ledger for small groups. A Python back end, plus an installable mobile
-web shell in `app/` whose three screens are still placeholders.
+web shell in `app/` whose three screens read the ledger from the JSON API, behind a
+sign-in gate.
+
+## What works today
+
+All of it needs a group applied with `scripts/setup_group.py apply` and an account
+linked to a member row with `setup_group.py link`. Signing up on its own grants
+nothing: the app shows the "nobody has linked you" notice and no ledger.
+
+- **Sign in**: create an account, sign in, sign out. An account that no member row is
+  linked to is told so and shown no ledger.
+- **The expense feed**: every expense the group has recorded, newest first, with payer,
+  amount, description and who shared it. A row expands in place to each person's share,
+  the total, who recorded it and when. Read only.
+- **Adding an expense**: an amount, an optional description, a payer from the roster and
+  one of the spec's three split modes, equally, some people or uneven amounts. The
+  resolver's weight mode is reachable through the API and no screen offers it.
+- **Balances**: each member's net position and the shortest list of payments that
+  clears the group, worked out on every read and never stored. The net figures are read
+  only; the payments are not, see below.
+- **Transfer drill-down**: a suggested payment opens on the debts it absorbs, from both
+  ends, and each of those debts opens in turn on the expenses and settlements behind it.
+  The debts arrive with the balances read; what sits behind a debt is fetched on that
+  row's first expansion, over `GET /api/debts/{debtor}/{creditor}`. A payment whose
+  payload carries no usable provenance is drawn inert rather than as a control that
+  answers nothing.
+- **Install and open offline**: it installs to the home screen and the shell opens
+  offline, on `localhost` or `127.0.0.1` only. The API is never cached, so offline the
+  app opens and then reports that it cannot reach the server, and an expense cannot be
+  recorded until it can.
+
+## What does not exist yet
+
+These are planned in `plans/backlog.md` and absent from the app. Both lists here are
+pinned to a literal in `tests/test_web_shell.py`, so a capability claimed in one of them
+and not recorded there turns the suite red, and so does editing this file and leaving
+`README.md` alone. What the suite notices when one of these is actually *built* varies by
+capability and is recorded entry by entry in that literal. Read your entry's reason there
+before trusting the suite to catch you; none of it moves the bullet for you.
+
+- **Mark as paid** (backlog task 14): nothing records that a payment happened.
+- **Receiver confirmation** (backlog task 15): and so nothing confirms one, which means
+  a debt that has been settled in real life stays on the list until somebody records the
+  expense side of it. The two go together, because a balance moves only when the
+  receiver confirms.
+- **The incompleteness signal** (backlog task 16): nothing says how stale the ledger is
+  or who has logged nothing. The balances screen's standing note, that the figures come
+  only from what was recorded, is the whole of what the app says about it.
+- **Expense correction** (backlog task 17): an expense cannot be edited or voided from
+  any screen.
 
 ## Commands
 
@@ -77,8 +126,9 @@ it.
   not declare fails to build
 - `app/`: the front end shell, served as plain files and never imported by the
   package. `app/api.js` is the only file in it that calls the back end
-- `scripts/`: the dev server, the icon generator and the group setup command; no
-  dependency beyond the standard library and the package itself
+- `scripts/`: the dev server, the icon generator and the group setup command, none of
+  them needing more than the standard library and the package itself, plus
+  `watch-issues.sh`, a bash loop that hands new bug issues to `claude` and wants `gh`
 - `group.example.toml`: the shape of the roster `setup_group.py` applies. The real
   `group.toml` and the ledger file are not committed
 - `tests/`: the pytest suite

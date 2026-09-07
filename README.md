@@ -3,10 +3,56 @@
 A shared expense ledger for small groups. See `plans/spec.md` for scope and
 `plans/backlog.md` for the build order.
 
-Status: the domain layer is under way, and one process now serves the mobile web
-shell and a JSON API on the same origin. You can sign up, sign in and be told who you
-are. The three screens are still placeholders: they show no expenses, no members and
-no balances, because tasks 10, 11 and 12 fill them.
+The domain layer, the event store, accounts and sessions, the group setup command and
+the JSON API are built, and so are all three screens: the feed, the add form and
+balances. One process serves the shell in `app/` and the API on the same origin.
+
+## What works today
+
+Everything below needs a group applied with `setup_group.py apply` and your account
+linked to a member row with `setup_group.py link`. Signing up on its own shows the
+"nobody has linked you" notice and no ledger.
+
+- **Sign in**: sign up, sign in and sign out on the gate the app opens on. An account
+  nobody has linked to a member is told so, and is shown no ledger.
+- **The expense feed**: the group's expenses, newest first, each showing who paid, how
+  much, what for and who shared it. Tap a row and it expands where it sits, to every
+  person's share, the total, who recorded it and when. Nothing on it can be changed.
+- **Adding an expense**: an amount, a description if you want one, whoever paid, and a
+  split: equally, across some of you, or uneven amounts you type in. Those are the
+  spec's three modes. The resolver also takes weights, which the API accepts and no
+  screen offers.
+- **Balances**: what each member is up or down, and the shortest set of payments that
+  would clear the group. Both are worked out fresh on every read and stored nowhere.
+  The net figures are read only; the payments open, as the next bullet says.
+- **Transfer drill-down**: tap a suggested payment and it opens on the debts that
+  payment absorbs, from both ends, and tapping one of those debts opens the expenses
+  and settlements it is made of. The debts come back with the balances themselves; the
+  entries behind a debt are fetched the first time you open that row, from
+  `GET /api/debts/{debtor}/{creditor}`. A payment the server sends without usable
+  provenance stays inert, because a control that answers nothing is worse than none.
+- **Install and open offline**: add it to the home screen and the shell opens with no
+  network, on `localhost` or `127.0.0.1` only, the only two secure contexts here. The
+  API is never cached, so offline you get the app and then a message that it cannot
+  reach the server, and an expense cannot be recorded until you are back.
+
+## What does not exist yet
+
+These are in `plans/backlog.md` and not in the app. `CLAUDE.md` carries the same list
+and a test holds the two together, so the pair cannot drift apart. That is a narrower
+guarantee than it looks: `CLAUDE.md` says what the suite does and does not notice when
+one of these is actually built.
+
+- **Mark as paid** (backlog task 14): there is no way to record that you have paid
+  somebody.
+- **Receiver confirmation** (backlog task 15): and nothing to confirm it with, so a debt
+  you settled in cash stays on the list until somebody enters the expense side of it.
+  The pair belongs together, because a balance moves only when the receiver confirms.
+- **The incompleteness signal** (backlog task 16): nothing tells you how stale the
+  ledger is or who has stopped entering expenses. The note on the balances screen, that
+  the figures come only from what was recorded, is all the app says about it.
+- **Expense correction** (backlog task 17): a wrong expense cannot be edited or voided
+  from any screen.
 
 ## Setup
 
