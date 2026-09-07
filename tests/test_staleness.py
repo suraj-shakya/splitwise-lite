@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import pathlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -74,6 +75,13 @@ SRC = Path(inspect.getfile(staleness_module))
 
 def source() -> str:
     return SRC.read_text(encoding="utf-8")
+
+
+def module_tree(module) -> ast.Module:
+    """The module under test as a syntax tree, read from its own file."""
+    return ast.parse(
+        pathlib.Path(inspect.getfile(module)).read_text(encoding="utf-8")
+    )
 
 
 def days_before(days: float, *, moment: datetime = NOW) -> datetime:
@@ -471,9 +479,120 @@ def test_the_clock_ban_would_catch_a_read_smuggled_in() -> None:
         ), smuggled
 
 
+def annotation_nodes(tree: ast.Module) -> set[int]:
+    """Every node sitting inside an annotation, by ``id``.
+
+    ``from __future__ import annotations`` is in force in the module under test, so an
+    annotation is a string the interpreter never evaluates: nothing written in one can
+    reach anything at run time. That is the only reason the check below may skip them,
+    and it is the same exemption tests/test_balances.py carries for the same reason.
+    """
+    inside: set[int] = set()
+    for node in ast.walk(tree):
+        roots = []
+        if isinstance(node, (ast.AnnAssign, ast.arg)) and node.annotation is not None:
+            roots.append(node.annotation)
+        elif (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.returns is not None
+        ):
+            roots.append(node.returns)
+        for root in roots:
+            inside.update(id(child) for child in ast.walk(root))
+    return inside
+
+
+def runtime_names(tree: ast.Module) -> set[str]:
+    """Every name the module can reach when it runs, annotations excepted.
+
+    Names only, never source text. A substring search would be satisfied by the import
+    line alone, which is exactly the defect this function exists to avoid: an import
+    that is present and never called is what the mutation below produces, and a check
+    that reads text cannot tell the two apart. ``ast.alias`` is not an ``ast.Name``, so
+    an import contributes nothing here and only a use does.
+    """
+    skip = annotation_nodes(tree)
+    return {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and id(node) not in skip
+    } | {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and id(node) not in skip
+    }
+
+
 def test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines() -> None:
-    """Not re-derived here: one tie-break rule, shared by every consumer of the log."""
+    """Not re-derived here: one tie-break rule, shared by every consumer of the log.
+
+    Three assertions, and the reason there are three is worth stating, because this
+    test shipped in review with only the last of them and **could not fail**. The
+    mutation that replaces ``max(expenses, key=ordering_key)`` with ``expenses[-1]``
+    left it green: the import still resolves, so the identity still holds, and the
+    module simply never calls what it imported. An identity check on an import is
+    evidence that two names are the same object, and nothing at all about whether
+    either is used. `plans/mutations/16-incompleteness-signal.md` records that run,
+    and this is the repair.
+
+    So, in the order they bite:
+
+    * **the behaviour**, over a list whose newest expense is not its last element,
+      which is what refuses "just take the end of the list";
+    * **the name reached at run time**, read off the module's own syntax tree rather
+      than out of its text, because a text search is satisfied by the import line and
+      would repeat the defect it is meant to catch;
+    * **the identity**, which is what criterion 11 asks for and which stops the name
+      being rebound to a local re-derivation of the same rule.
+
+    The tie-break itself is deliberately not asserted through the result, and that is
+    the honest reason the structural half has to exist. Two expenses sharing an instant
+    have the same ``created_at``, so which of them is "newest" cannot change the number
+    of days this function returns: ``key=ordering_key`` and
+    ``key=lambda expense: expense.created_at`` are indistinguishable from the outside.
+    Only naming the shared function tells them apart, and only the syntax tree tells a
+    named function from an imported one that is never called.
+    """
+    # A list whose newest expense is neither its last element nor its first.
+    ledger = [
+        expense("e1", when=days_before(9)),
+        expense("e3", when=days_before(2)),
+        expense("e2", when=days_before(30)),
+    ]
+    assert ledger_staleness(ledger, {}, now=NOW).days_since_last_expense == 2
+    # And the answer does not depend on the order the caller happened to hand them
+    # over in, which is the property a maximum has and an end-of-list read does not.
+    for rotation in range(len(ledger)):
+        rotated = ledger[rotation:] + ledger[:rotation]
+        assert ledger_staleness(rotated, {}, now=NOW).days_since_last_expense == 2
+
+    assert "ordering_key" in runtime_names(module_tree(staleness_module))
     assert staleness_module.ordering_key is events_module.ordering_key
+
+
+def test_the_runtime_name_check_can_tell_a_used_import_from_an_unused_one() -> None:
+    """The positive control for the middle assertion above.
+
+    A green check is worth nothing until it has been shown to refuse the thing it
+    claims to refuse, and this one exists because its absence let a test ship that
+    could not fail. Two modules, one importing and calling and one importing only: the
+    check must accept the first and refuse the second.
+    """
+    used = ast.parse(
+        "from .events import ordering_key\n"
+        "def newest(events):\n"
+        "    return max(events, key=ordering_key)\n"
+    )
+    unused = ast.parse(
+        "from .events import ordering_key\n"
+        "def newest(events):\n"
+        "    return events[-1]\n"
+    )
+    assert "ordering_key" in runtime_names(used)
+    assert "ordering_key" not in runtime_names(unused)
+    # And the text search that would have passed both, which is the repair this test
+    # refuses: it is satisfied by the import line in either module.
+    assert "ordering_key" in ast.unparse(unused)
 
 
 def test_the_newest_expense_is_the_maximal_one_and_not_the_last_in_the_list() -> None:

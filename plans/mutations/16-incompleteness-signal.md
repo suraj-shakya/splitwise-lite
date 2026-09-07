@@ -24,7 +24,10 @@ attached to the wrong mutation is the defect this discipline exists to prevent.
 
 The two modules, on the branch with every mutation reverted:
 
-* `tests/test_staleness.py`: **58 tests**, the domain checks this task adds.
+* `tests/test_staleness.py`: **59 tests**, the domain checks this task adds. It was 58
+  when mutations 1 to 4 were measured; the 59th is the positive control added with
+  the repair recorded under mutation 5, and the four figures above it are quoted as
+  they were taken.
 * `tests/test_web_api.py`: **490 tests**, of which 15 are this task's endpoint checks.
 
 **The standing finding, stated once here because it is true of four of the five
@@ -165,22 +168,53 @@ event.
   "file": "src/splitwise_lite/staleness.py",
   "find": "    newest = max(expenses, key=ordering_key)",
   "replace": "    newest = expenses[-1]",
-  "kills": ["tests/test_staleness.py::test_the_newest_expense_is_the_maximal_one_and_not_the_last_in_the_list"],
-  "survives": ["tests/test_staleness.py::test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines"],
+  "kills": [
+    "tests/test_staleness.py::test_the_newest_expense_is_the_maximal_one_and_not_the_last_in_the_list",
+    "tests/test_staleness.py::test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines"
+  ],
+  "survives": ["tests/test_staleness.py::test_the_runtime_name_check_can_tell_a_used_import_from_an_unused_one"],
   "result": "killed"
 }
 ```
 
-Measured: `tests/test_staleness.py` reported **`1 failed, 57 passed`** and
-`tests/test_web_api.py` reported **`490 passed`**. Mutation 5 is killed by 1 of the 58
-domain tests and survives all 490 endpoint tests.
+**This mutation found a check that could not fail, and the record keeps both
+measurements, because a survivor that became a killer is the most useful thing this
+file can hold.**
 
-**Two things this measurement says that a prediction would have got wrong.** First, the
-identity assertion `staleness.ordering_key is events.ordering_key` **survives this
-mutation**, and it is named in `survives` above for that reason: the import is still
-there and still resolves, it is simply no longer used. An identity check on an import is
-not evidence that the import is used, and this is the mutation that proves it. Second,
-the endpoint module cannot catch it because `store.list_events` and
+**Before, measured on `7d5af55`:** `tests/test_staleness.py` reported
+**`1 failed, 57 passed`** of 58. The one that failed was the behavioural test. The test
+named for this very rule,
+`test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines`, **passed
+under the mutation**. It held one assertion,
+`staleness.ordering_key is events.ordering_key`, and that assertion cannot fail here:
+the import is still there and still resolves, and the module simply stops calling what
+it imported. An identity check on an import says two names are the same object and says
+nothing about whether either is used.
+
+The cause was narrow and worth naming, because it is a copying error anybody could
+repeat: the precedent it was modelled on,
+`tests/test_balances.py::test_the_fold_sorts_with_the_ordering_key_events_py_defines`,
+carries **two** assertions, and only the second was copied. The first,
+`"ordering_key" in _runtime_names(_module_tree(balances_module))`, is the half that
+bites.
+
+**After, measured on the repair:** `tests/test_staleness.py` reports
+**`2 failed, 57 passed`** of 59, and the second failure is that test. It now asserts, in
+the order they bite: the behaviour, over a list whose newest expense is neither first nor
+last and over every rotation of it; the name being reached at run time, off the module's
+own syntax tree; and then the identity criterion 11 asks for. Pytest stops at the first
+failing assertion, so what is seen in the run is the behavioural one, `assert 30 == 2`.
+
+**The structural half was measured separately rather than assumed**, because a repair
+with the same defect as the bug has happened in this repo before. Against the mutated
+source: `runtime_names(...)` reports `ordering_key` reached at run time = **False**,
+while a plain text search for `ordering_key` in the same file reports **True**. So the
+syntax-tree check kills the mutant and the text search that a hastier repair would have
+used does not. `ast.alias` is not an `ast.Name`, which is exactly why an import
+contributes nothing and only a use does.
+
+`tests/test_web_api.py` reported **`490 passed`** both before and after: mutation 5
+survives all 490 endpoint tests either way, because `store.list_events` and
 `store.list_expenses` both return `ordering_key` order, so the last element really is the
 newest through every real request. Only a hand-built out-of-order list reaches it.
 

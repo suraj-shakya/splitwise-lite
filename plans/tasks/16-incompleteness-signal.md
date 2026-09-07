@@ -839,34 +839,64 @@ here was produced by a command on this branch, not read out of a file.
 
 ### The count, and the arithmetic
 
+**Restated against the current base.** The first measurement was taken against `c685cee`, and
+master has since moved to `bea0da7` through PR #76 and PR #81. Master was merged into this
+branch rather than rebased onto it, so published SHAs stay reachable, and
+`git merge-base --is-ancestor origin/master HEAD` now succeeds. Master's own count was measured
+in a throwaway detached worktree rather than taken on trust or read out of a sibling.
+
 `uv run python -m pytest --collect-only -q`:
 
-| | master (`c685cee`) | branch | delta |
+| | master (`bea0da7`) | branch | delta |
 |---|---|---|---|
-| whole suite | 2498 | 2593 | **+95** |
-| `tests/test_staleness.py` | absent | 58 | +58 |
-| `tests/test_web_api.py` | 475 | 490 | +15 |
-| `tests/test_shell_behaviour.py` | 172 | 185 | +13 |
-| `tests/test_web_shell.py` | 144 | 151 | +7 |
-| `tests/test_suite_integrity.py` | 52 | 54 | +2 |
+| whole suite | 2572 | 2668 | **+96** |
+| `tests/test_staleness.py` | absent | 59 | +59 |
+| `tests/test_web_api.py` | 478 | 493 | +15 |
+| `tests/test_shell_behaviour.py` | 173 | 186 | +13 |
+| `tests/test_web_shell.py` | 146 | 153 | +7 |
+| `tests/test_suite_integrity.py` | 56 | 58 | +2 |
 | `tests/test_feed_screen.py` | 22 | 22 | 0 |
+| `tests/test_error_messages.py` | 64 | 64 | 0 |
 
-58 + 15 + 13 + 7 + 2 = **95**, and 2498 + 95 = **2593**. The two in
-`tests/test_suite_integrity.py` are criterion 40's: both of its checks are driven by
-`TESTS.rglob("*.py")`, so a new test module adds one case to each with no list to edit. The 13
-in `tests/test_shell_behaviour.py` are the 9 harness scenarios, `MUTANT_H`'s test and the 3
-cross-language pins of criterion 39.
+59 + 15 + 13 + 7 + 2 = **96**, and 2572 + 96 = **2668**. The +96 is one more than the +95
+measured before the merge, and the extra one is the positive control added with the repair in
+finding 2 below, not anything the merge brought in.
 
-**Run in five chunks, never the whole suite in one go**, because it has grown past the
+The two in `tests/test_suite_integrity.py` are criterion 40's: both of its checks are driven by
+`TESTS.rglob("*.py")`, so a new test module adds one case to each with no list to edit. That
+mechanism runs in the other direction too, and it was worth checking after the merge: PR #76
+tightened those rules and `tests/test_staleness.py` had never met them. It meets them unedited.
+The 13 in `tests/test_shell_behaviour.py` are the 9 harness scenarios, `MUTANT_H`'s test and
+the 3 cross-language pins of criterion 39.
+
+**The scenario list is a union, not an overwrite.** `SCENARIOS` held 149 rows on `c685cee`, 150
+on `bea0da7` after PR #81 added one, and **159** on the merge: 150 + 9.
+`test_the_harness_reports_exactly_the_declared_scenarios` asserts exact ordered equality against
+what the harness reports, and it passes, which is what makes that a checked claim rather than a
+count somebody eyeballed.
+
+**Run in six chunks, never the whole suite in one go**, because it has grown past the
 ten-minute agent watchdog under contention:
 
 * `money, events, split, balances, simplify, smoke`: 733 passed
 * `store, accounts, groups, setup_group_cli, dev_server, end_to_end`: 873 passed
-* `web_api`: 490 passed
-* `web_shell, feed_screen, add_screen, suite_integrity, staleness`: 312 passed
-* `shell_behaviour`: 185 passed
+* `web_api`: 493 passed
+* `web_shell, feed_screen, add_screen, suite_integrity, staleness`: 319 passed
+* `shell_behaviour`: 186 passed
+* `error_messages`: 64 passed
 
-733 + 873 + 490 + 312 + 185 = **2593 passed, 0 failed, 0 skipped, 0 xfailed.**
+733 + 873 + 493 + 319 + 186 + 64 = **2668 passed, 0 failed, 0 skipped, 0 xfailed**, which is
+the collected total exactly. `tests/test_error_messages.py` arrived with the merge and is a
+sixth chunk; the first sum of the chunks came to 2604 against a collected 2668, and that
+64-test gap is what named it. The arithmetic is the check, which is the whole reason for doing
+it.
+
+**The merge produced one conflict, in `app/sw.js`, and it was the expected one.** Both sides had
+moved `SHELL_DIGEST`, because both changed files under `app/`. Neither side's value is right for
+the merged tree, so neither was kept: the resolution is the twelve characters
+`test_the_recorded_digest_matches_the_files_it_covers` printed for the merged content,
+`5ad02b8ea4e8`, pasted verbatim. `VERSION` stays `v4`. This is exactly the case CLAUDE.md warns
+about when it says a stale shell digest surfaces at the merge commit.
 
 ### What the mutation runs found that I had not predicted
 
@@ -879,10 +909,25 @@ prediction would have said:
    `Staleness.__post_init__` before the test's own assertion ran. The clamp is guarded twice and
    the mutation removes one guard. Still `killed`: the deleted clamp is the cause and the test
    that names it is the test that went red.
-2. **`test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines` survives the
-   mutation that stops `ordering_key` being used.** The identity assertion holds because the
-   import still resolves; it is simply no longer called. An identity check on an import is not
-   evidence that the import is used, and criterion 11's behavioural companion is what bites.
+2. **`test_the_newest_expense_is_chosen_with_the_ordering_key_events_py_defines` survived the
+   mutation that stops `ordering_key` being used, so it was a check that could not fail. It has
+   been repaired rather than merely reported.** The identity assertion held because the import
+   still resolves; the module simply stopped calling what it imported. The cause was a copying
+   error worth naming: the precedent in `tests/test_balances.py` carries **two** assertions, and
+   only the second was copied. The first, the runtime-name check, is the half that bites.
+
+   The test now asserts, in the order they bite: the behaviour, over a list whose newest expense
+   is neither first nor last and over every rotation of it; the name being reached at run time,
+   read off the module's own syntax tree; and then the identity criterion 11 asks for.
+   Re-measured on the same mutation: **`1 failed, 57 passed`** of 58 before, **`2 failed, 57
+   passed`** of 59 after, with the repaired test among the failures.
+
+   The structural half was measured separately against the mutant rather than assumed, because a
+   repair carrying the bug's own defect has happened in this repo before: under the mutation
+   `runtime_names(...)` reports `ordering_key` reached at run time **False**, while a plain text
+   search for the same name in the same file reports **True**. So the syntax-tree check kills the
+   mutant and the text search a hastier repair would have reached for does not. A positive
+   control for that check was added beside it, and it is the 59th test in the module.
 3. **Four of the five mutations survive all 490 tests in `tests/test_web_api.py`.** Only the
    member-age one is visible through a real request. That is not a gap in the endpoint tests: a
    future timestamp is unreachable through an endpoint that stamps `created_at` from `_now()`,
