@@ -1068,3 +1068,103 @@ body {
   color: var(--muted);
   overflow-wrap: break-word;
 }
+
+/* Task 15. What an answer to a claim did, at the top of the screen, above every
+   list a confirmation rebuilds. It interpolates two display names, so it gives way
+   where every other line carrying one does. Deliberately no `min-height`, no
+   padding and no `:empty` rule: it ships empty and must take no vertical space
+   until there is something to say, and it is never hidden, because a live region
+   whose text changes while it is hidden announces nothing in several screen
+   readers. */
+.balances-decision {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: break-word;
+}
+
+/* A refused claim, laid out exactly as an unanswered one is: one block per row,
+   stacked, separated by a rule rather than by a tint. */
+.balances-rejected {
+  display: block;
+  padding: 10px 14px;
+}
+
+.balances-rejected + .balances-rejected {
+  border-top: 1px solid var(--line);
+}
+
+/* Interpolates two display names, so it gives way where every other line carrying
+   one does. */
+.balances-rejected-line {
+  display: block;
+  font-size: 17px;
+  overflow-wrap: break-word;
+}
+
+/* 16px like every other date on this screen: there is no small print here. */
+.balances-rejected-date {
+  display: block;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+/* The third child of a pending row, present only on the phone of the person who
+   was paid. It carries the row's own horizontal padding, on the same terms the
+   transfer row's action region does. */
+.balances-answer {
+  padding: 8px 0 0;
+}
+
+/* Read at the moment the decision is made rather than at the top of a list the
+   reader did not know would ask them anything, which is why it is here and not in
+   the block's fixed prose. */
+.balances-answer-note {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+/* Stacked and full width rather than laid out side by side: at 320px two labelled
+   buttons on one line is what pushes this screen into a horizontal scroll, and a
+   mis-tap between two adjacent targets is the one mistake here that cannot be
+   undone. Each clears the 44px floor on its own. */
+.balances-confirm-button,
+.balances-reject-button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 17px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Below rather than beside, for the reason above. */
+.balances-reject-button {
+  margin-top: 8px;
+}
+
+/* Five controls now, all five reachable by Tab, so all five say where the keyboard
+   is. */
+.balances-confirm-button:focus-visible,
+.balances-reject-button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+
+/* The line a pending row says while it is answering and when it could not.
+   Deliberately no `min-height`, no padding and no `:empty` rule, for the reason
+   `.balances-action-status` has none. */
+.balances-answer-status {
+  margin: 8px 0 0;
+  font-size: 16px;
+  color: var(--muted);
+  overflow-wrap: break-word;
+}

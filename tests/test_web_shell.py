@@ -1162,6 +1162,8 @@ API_SURFACE = {
     # Task 14. The key that fired this section's `Mark as paid` prompt: it arrived, this
     # test went red naming both documents, and the bullets moved.
     "addSettlement",
+    # Task 15. The same prompt fired the same way for `Receiver confirmation`.
+    "decideSettlement",
 }
 
 # Capability key -> the (file under `app/`, substring) pairs that must all be PRESENT.
@@ -1513,6 +1515,12 @@ BALANCES_IDS = {
     # list, so they cannot be half-shown.
     "balances-pending-block",
     "balances-pending",
+    # Task 15. The outcome of an answer, above every list a confirmation rebuilds,
+    # and the refused claims in a block of their own on the same terms as the one
+    # above.
+    "balances-decision",
+    "balances-rejected-block",
+    "balances-rejected",
 }
 
 # Every fixed sentence the screen can show lives in the markup, so a Python test can
@@ -1606,10 +1614,14 @@ def test_the_status_region_announces_and_ships_every_message_hidden() -> None:
         assert inner(section, element_id, "p") == sentence
 
 
-def test_the_three_lists_ship_empty_under_headings_in_the_stated_order() -> None:
+def test_the_four_lists_ship_empty_under_headings_in_the_stated_order() -> None:
     # Task 14 puts "Awaiting confirmation" between the two, so the sentence saying why
     # a payment is still suggested is read before the suggestion, and so "the figures
-    # above" and "the list below" both point at something the reader can see.
+    # above" and "the list below" both point at something the reader can see. Task 15
+    # puts "Not confirmed" below it and above the suggestions, so the two things that
+    # explain why a payment is still suggested are read together. Renamed rather than
+    # widened in place, because the old name stated a number that is no longer true;
+    # every rule it had is kept.
     section = balances_section()
     headings = [
         " ".join(text.split())
@@ -1618,10 +1630,16 @@ def test_the_three_lists_ship_empty_under_headings_in_the_stated_order() -> None
     assert headings == [
         "Net positions",
         "Awaiting confirmation",
+        "Not confirmed",
         "Suggested payments",
     ]
     # No invented rows: the lists are filled from the API or not at all.
-    for element_id in ("balances-net", "balances-pending", "balances-transfers"):
+    for element_id in (
+        "balances-net",
+        "balances-pending",
+        "balances-rejected",
+        "balances-transfers",
+    ):
         assert inner(section, element_id, "ul") == "", element_id
 
 
@@ -1814,15 +1832,17 @@ def test_the_balances_block_never_moves_a_row_out_of_document_order() -> None:
     assert re.search(r"(?<![-\w])order\s*:", block) is None
 
 
-def test_only_the_three_controls_that_really_do_something_look_tappable() -> None:
+def test_only_the_five_controls_that_really_do_something_look_tappable() -> None:
     # The pointer cursor is the one affordance this screen offers and exactly the
-    # three controls that really do something offer it: the two disclosures that open
-    # a region, and task 14's Mark as paid, which records a payment. A transfer row
-    # whose payload carries no usable provenance is drawn inert and has to look inert,
-    # so a cursor on the row itself, on a debt row, on a pending row or on a list
-    # would be a promise the screen cannot keep. Still no generated glyph either: the
-    # open and closed indicators are text app.js writes, which a reader can be told to
-    # ignore and a copy carries.
+    # five controls that really do something offer it: the two disclosures that open
+    # a region, task 14's Mark as paid, which records a payment, and task 15's Confirm
+    # and Reject, which answer one. A transfer row whose payload carries no usable
+    # provenance is drawn inert and has to look inert, so a cursor on the row itself,
+    # on a debt row, on a pending row, on a rejected row or on a list would be a
+    # promise the screen cannot keep. Still no generated glyph either: the open and
+    # closed indicators are text app.js writes, which a reader can be told to ignore
+    # and a copy carries. Renamed rather than widened in place, because the old name
+    # stated a number that is no longer true; every rule it had is kept.
     block = without_comments(balances_styles())
     # `content`, and not the `content` inside `justify-content`.
     assert re.search(r"(?<![-\w])content\s*:", block) is None
@@ -1836,18 +1856,22 @@ def test_only_the_three_controls_that_really_do_something_look_tappable() -> Non
         assert selectors
         carrying.extend(selectors)
     # Counted by selector rather than by rule, and pinned as an equality rather than a
-    # membership, so a fourth control cannot be admitted by adding it to the list a
+    # membership, so a sixth control cannot be admitted by adding it to the list a
     # rule already carries.
     assert sorted(carrying) == [
+        ".balances-confirm-button",
         ".balances-debt-button",
         ".balances-mark-button",
+        ".balances-reject-button",
         ".balances-transfer-button",
     ]
 
 
-def test_all_three_controls_show_a_keyboard_user_where_they_are() -> None:
-    # Three controls now, all three in the tab order with no tabindex written for any
-    # of them, so all three have to say which one the keyboard is on.
+def test_all_five_controls_show_a_keyboard_user_where_they_are() -> None:
+    # Five controls now, all five in the tab order with no tabindex written for any of
+    # them, so all five have to say which one the keyboard is on. Renamed rather than
+    # widened in place, because the old name stated a number that is no longer true;
+    # every rule it had is kept.
     block = without_comments(balances_styles())
     focused = []
     for rule in block.split("}"):
@@ -1859,11 +1883,13 @@ def test_all_three_controls_show_a_keyboard_user_where_they_are() -> None:
             assert found is not None, selector
             assert "none" not in found.group(1), selector
             focused.append(selector)
-    # An equality, so a fourth control that skipped its focus ring fails here rather
-    # than passing because the three named ones still have theirs.
+    # An equality, so a sixth control that skipped its focus ring fails here rather
+    # than passing because the five named ones still have theirs.
     assert sorted(focused) == [
+        ".balances-confirm-button:focus-visible",
         ".balances-debt-button:focus-visible",
         ".balances-mark-button:focus-visible",
+        ".balances-reject-button:focus-visible",
         ".balances-transfer-button:focus-visible",
     ]
 
@@ -1925,6 +1951,10 @@ CARRIES_A_NAME = (
     # names the receiver in the sentence it shows after a claim is recorded.
     ".balances-pending-line",
     ".balances-action-status",
+    # Task 15. The rejected row names both ends too, and the outcome sentence at the
+    # top of the screen names both of them again.
+    ".balances-rejected-line",
+    ".balances-decision",
 )
 
 
@@ -2049,12 +2079,25 @@ def test_the_pending_block_is_the_only_thing_task_fourteen_added_to_the_document
 def test_the_action_region_never_takes_space_while_it_is_empty() -> None:
     # The status line ships empty and is never hidden, because a live region whose
     # text changes while it is hidden announces nothing in several screen readers. So
-    # it must take no vertical space of its own until there is something to say.
+    # it must take no vertical space of its own until there is something to say. Task
+    # 15's two are here on the same terms: the line a pending row says while it is
+    # answering, and the sentence at the top of the screen saying what an answer did.
     rules = balances_declarations()
-    status = rules[".balances-action-status"]
-    assert "min-height" not in status
-    assert "padding" not in status
+    for selector in (
+        ".balances-action-status",
+        ".balances-answer-status",
+        ".balances-decision",
+    ):
+        assert selector in rules, selector
+        assert "min-height" not in rules[selector], selector
+        assert "padding" not in rules[selector], selector
     assert ":empty" not in without_comments(balances_styles())
+    # And neither of task 15's is ever given `hidden`, in the markup or in the code.
+    section = balances_section()
+    assert 'id="balances-decision" role="status"></p>' in section
+    assert "balancesDecision.hidden" not in (APP / "app.js").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_the_figure_is_still_the_only_thing_that_refuses_to_wrap() -> None:

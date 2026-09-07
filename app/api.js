@@ -64,7 +64,7 @@
            authentication_failed                                   sign-in-not-kept
                                                                    while armed
      403   member_not_linked                                    -> not-linked
-     403   csrf_failed, or any other code                       -> refused
+     403   csrf_failed, not_the_receiver, or any other code      -> refused
      400   malformed_request, invalid_email, invalid_password,  -> refused
            invalid_amount, invalid_currency, currency_mismatch,
            invalid_split, invalid_record, amount_too_large
@@ -72,7 +72,8 @@
      405   method_not_allowed                                   -> refused
      409   email_already_registered, duplicate_record,          -> refused
            constraint_violated, group_mismatch,
-           member_already_linked, user_already_linked
+           member_already_linked, user_already_linked,
+           settlement_already_pending, settlement_already_decided
      413   request_too_large                                    -> refused
      429   too_many_attempts                                    -> refused
      500   internal_error                                       -> unavailable
@@ -430,6 +431,22 @@
         to_member_id: toMemberId,
         amount: amount
       });
+    },
+
+    /* Answer one claimed payment: decision is 'confirmed' or 'rejected' and is the
+       whole body. The decider is never sent, for the same reason the payer never is:
+       the server takes it from the session, which is what stops one person both
+       claiming and confirming a payment. The id is encoded, because a settlement id is
+       whatever the server minted and a path segment is a path segment. A refusal here
+       is a refusal like any other and so is the caller's own to report: it belongs to
+       one row of one screen, and a curtain over the whole frame would take that row's
+       own message away. */
+    decideSettlement: function (settlementId, decision) {
+      return call(
+        'POST',
+        '/settlements/' + encodeURIComponent(settlementId) + '/decision',
+        { decision: decision }
+      );
     }
   };
 })();
