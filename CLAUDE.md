@@ -144,6 +144,11 @@ it.
   `watch-issues.sh`, a bash loop that hands new bug issues to `claude` and wants `gh`
 - `group.example.toml`: the shape of the roster `setup_group.py` applies. The real
   `group.toml` and the ledger file are not committed
-- `tests/`: the pytest suite
+- `plans/mutations/`: recorded mutations, each an anchor and a replacement rather than a
+  sentence, so the next person re-runs one instead of reconstructing it. The committed
+  ones, which the suite re-runs every time, live in `tests/test_shell_behaviour.py`
+- `tests/`: the pytest suite, including `tests/test_suite_integrity.py`, the suite's
+  check on itself, which refuses a duplicate module-level definition and an unanchored
+  `pytest.raises(match=)`
 
 Read the spec before changing behaviour. Read the backlog before starting a task.
