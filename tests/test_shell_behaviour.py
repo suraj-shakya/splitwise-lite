@@ -191,6 +191,7 @@ SCENARIOS = [
     "the_api_client_builds_a_decision_path_from_a_settlement_id",
     # What a feed row shows. The first scenarios in this repo to render one.
     "a_feed_row_names_the_payer_the_amount_and_what_it_was_for",
+    "a_feed_with_nothing_recorded_says_so_and_draws_no_row",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied
@@ -593,6 +594,48 @@ def test_hiding_a_document_member_the_stub_does_not_define_refuses_the_run() -> 
     assert completed.stdout == ""
     assert typo in completed.stderr
     assert "hideDocumentMembers" in completed.stderr
+
+
+THE_ROW = "a_feed_row_names_the_payer_the_amount_and_what_it_was_for"
+THE_EMPTY_FEED = "a_feed_with_nothing_recorded_says_so_and_draws_no_row"
+
+
+def test_hiding_the_fragment_maker_shows_what_the_feed_was_hiding() -> None:
+    """The defect this task exists to close, reproduced and caught.
+
+    ``feedRender`` calls ``document.createDocumentFragment`` three lines in. The stub
+    did not fake it, the guarded proxy refuses a property it does not define, and
+    ``loadFeed`` ends ``.then(done, done)``, which absorbs a throw out of
+    ``feedRender`` exactly as it absorbs a refused request. A broken render and a
+    failed read reached the same place and looked identical from outside, and no
+    scenario asserted row content, so nothing observed it.
+
+    Hiding the member puts the harness back in that state, and two things now say so
+    that said nothing before: the guard records the refusal against the running
+    scenario at the moment it refuses, whatever the app then does with the exception,
+    and ``finish()`` refuses a scenario left with a screen in its in-flight state.
+    Neither depends on the scenario having thought to look.
+    """
+    completed = run_harness({"hideDocumentMembers": ["createDocumentFragment"]})
+    # Exactly 1, never merely non-zero: a broken configuration exits 2 and must not
+    # be mistaken for a caught defect.
+    assert completed.returncode == 1, (
+        f"expected exit 1, got {completed.returncode}.\nstderr:\n{completed.stderr}"
+    )
+    found = results(parse_report(completed))
+    assert not found[THE_ROW]["passed"]
+    messages = " ".join(found[THE_ROW]["failures"])
+    # The refused property is named, which is the guard recording as well as throwing.
+    assert "createDocumentFragment" in messages, messages
+    # And the screen is visibly stuck, which is the invariant catching a dead render
+    # without any assertion about rows at all.
+    assert "#feed-loading" in messages, messages
+    # A working app with one screen broken, not a crater.
+    assert found["boot_with_no_session_shows_the_gate"]["passed"]
+    # Criterion 17, written down where it cannot be forgotten: the empty feed never
+    # reaches feedRender, so it stays green with the member hidden. It could not have
+    # caught this defect on its own and it cannot prove the fix either.
+    assert found[THE_EMPTY_FEED]["passed"], found[THE_EMPTY_FEED]["failures"]
 
 
 # --- api.js is the only place a status is interpreted ----------------------

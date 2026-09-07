@@ -306,7 +306,7 @@ function guarded(target, what) {
       if (typeof property === 'symbol' || property in object) {
         return object[property];
       }
-      throw new Error(
+      throw refusedProperty(
         'the stub ' + what + ' has no ' + String(property) + '; the harness fakes ' +
           'only what a shipped file uses, so widen it deliberately'
       );
@@ -316,7 +316,7 @@ function guarded(target, what) {
          it would leave a shipped file writing into a stub that reflects nothing,
          which reads as a passing test. */
       if (typeof property !== 'symbol' && !(property in object)) {
-        throw new Error(
+        throw refusedProperty(
           'the stub ' + what + ' has no ' + String(property) + ' to set; the harness ' +
             'fakes only what a shipped file uses, so widen it deliberately'
         );
@@ -978,6 +978,22 @@ function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
           );
         }
       }
+      /* And the in-flight invariant, checked on every scenario for the same reason:
+         after settle, no screen is left in the state it shows while a read is running.
+         Every answer here resolves or rejects immediately and settle() drains both
+         queues, so a screen still mid-flight when a scenario ends is a screen whose
+         render died. It lives here rather than in the scenarios that thought to look
+         because that is the whole lesson of this defect: feedState('list') is the last
+         line of feedRender, so a throw out of it left #feed-loading up forever and no
+         assertion anywhere in this file asked. */
+      ['feed-loading', 'balances-busy'].forEach((id) => {
+        if (!byId(id).hidden) {
+          failures.push(
+            '#' + id + ' is still showing after settle: this scenario left a screen ' +
+              'mid-flight, which is what a render that threw looks like from outside'
+          );
+        }
+      });
       calls.forEach((call, index) => wellFormed(call, index, failures));
       if (declaredRequests === null) {
         failures.push(
@@ -7238,9 +7254,16 @@ const SCENARIOS = [
     name: 'a_feed_row_names_the_payer_the_amount_and_what_it_was_for',
     async run(page) {
       await onFeed(page, { currency: 'AUD', expenses: [FEED_MILK] }, FEED_ROSTER);
+      /* Declared here rather than last, as every scenario in this block does: a dead
+         render returns early through the guard below, and a scenario that returned
+         without declaring its requests reports one complaint about the declaration on
+         top of the two that say what actually broke. */
+      page.expectRequests(FEED_ENTRY);
 
-      const rows = page.query('.expense-row');
-      page.is(rows.length, 1, 'expense rows');
+      const rows = feedRows(page, 1, 'expense rows');
+      if (rows === null) {
+        return;
+      }
       const row = rows[0];
       const summary = summaryIn(row);
       page.is(
@@ -7303,7 +7326,25 @@ const SCENARIOS = [
         stamp.textContent.indexOf('NaN') === -1,
         'the visible date reads ' + JSON.stringify(stamp.textContent)
       );
+    }
+  },
+
+  {
+    /* A group on day one, and the one scenario in this family that never reaches
+       feedRender: loadFeed hands a zero-length list to feedState('empty') and
+       returns, so only the else arm renders. It could not have caught the fragment
+       gap and it cannot prove the fix either, which is criterion 17 of this task's
+       file. That is asserted rather than claimed, in
+       test_hiding_the_fragment_maker_shows_what_the_feed_was_hiding, which hides the
+       member and requires this scenario to stay green. */
+    name: 'a_feed_with_nothing_recorded_says_so_and_draws_no_row',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [] }, FEED_ROSTER);
       page.expectRequests(FEED_ENTRY);
+      feedShows(page, 'empty', 'a group with nothing recorded');
+      /* Not dressed as a list: no row, no currency line and an empty list element. */
+      page.is(page.el('feed-list').childNodes.length, 0, 'children of #feed-list');
+      page.is(page.query('.expense-row').length, 0, 'expense rows');
     }
   }
 ];
@@ -7949,6 +7990,16 @@ function tagsInDocument(page) {
   return descendants(page.query('html')[0], []).map((node) => node.tagName);
 }
 
+/* The rows, or null with the count failure already recorded. A scenario that
+   dereferences a row that is not there throws, a thrown body skips finish() in
+   main(), and skipping finish() skips the in-flight invariant, so a dead render would
+   report a stack and less than it does now. Every scenario below returns on null. */
+function feedRows(page, expected, what) {
+  const rows = page.query('.expense-row');
+  page.is(rows.length, expected, what);
+  return rows.length === expected ? rows : null;
+}
+
 /* The rows as a reader meets them, top to bottom. */
 function rowDescriptions(page) {
   return page.query('.expense-description').map((node) => node.textContent);
@@ -7995,6 +8046,30 @@ function escaped(kind, reason) {
     process.exit(2);
   }
   running.fail(detail);
+}
+
+/* A property the guard refuses is recorded against the running scenario as well as
+   thrown, because throwing alone is not enough: what happens to the exception is the
+   shipped code's decision, and app.js's loadFeed ends .then(done, done), which
+   absorbs a throw out of feedRender exactly as it absorbs a refused request. That is
+   how a missing document.createDocumentFragment hid a whole screen's render path
+   through two tasks. Recording is in addition to throwing and never instead of it:
+   the Error is returned for the guard to throw, so the shipped file's own error path
+   runs exactly as it ran before.
+
+   Deduplicated against this scenario's own failures, so a gap tripped once per row is
+   one line and not a thousand, and a gap tripped in an earlier scenario is still
+   recorded against this one. With no scenario running it is a harness error, which is
+   what escaped() does with a rejection nobody handled. */
+function refusedProperty(message) {
+  if (running === null) {
+    process.stderr.write('harness error: refused property: ' + message + '\n');
+    process.exit(2);
+  }
+  if (running.failures.indexOf(message) === -1) {
+    running.fail(message);
+  }
+  return new Error(message);
 }
 
 process.on('unhandledRejection', (reason) => escaped('unhandled rejection', reason));
