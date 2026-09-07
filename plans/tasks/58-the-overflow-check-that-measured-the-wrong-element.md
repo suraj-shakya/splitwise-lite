@@ -811,11 +811,15 @@ inside a `>` blockquote and does not trip the scan. Removed; `54 passed`.
 ### `SHELL_DIGEST`
 
 Before: `var SHELL_DIGEST = '00e523e1e797';`
-After: `var SHELL_DIGEST = '97ceadab5f07';`
+After: `var SHELL_DIGEST = '0b63ef842fcc';`
 
 Pasted verbatim from `test_the_recorded_digest_matches_the_files_it_covers`. `VERSION` stays
-`'v4'`. The value was re-checked after the rebase onto `c685cee` and is still correct, since
-#57 touched nothing under `app/`.
+`'v4'`. It moved twice on this branch, and both are recorded because the intermediate value
+is what the demonstrations below were run against: `97ceadab5f07` once the fifteen
+declarations became one, then `0b63ef842fcc` after one sentence of the comment on `body` was
+reworded. The second edit is the reason a shipped shell change re-runs this test rather than
+trusting the first paste. The value was also re-checked after the rebase onto `c685cee`,
+which did not move it, since #57 touched nothing under `app/`.
 
 ### The count, and the arithmetic
 

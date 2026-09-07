@@ -41,13 +41,13 @@ body {
   height: 100dvh; /* so a collapsing mobile URL bar never cuts the nav off */
   /* The two declarations below are the shell's whole story about overflow.
 
-     The second is one declaration, inherited by everything this shell renders: all
-     three screens, the gate, the notice, the header and the tab bar, and any
-     text-bearing class a later task adds, which is then covered without its author
-     remembering a list. What it protects is a server-provided string of unbounded
-     length, and not merely a display name: a description runs to 500 characters, a
-     name to 100, and the server's own refusal sentence has no cap at all. Fifteen
-     per-class copies of this used to stand in for it, and they missed `.curtain-error`
+     The second of the two is inherited by everything this shell renders: all three
+     screens, the gate, the notice, the header and the tab bar, and any text-bearing
+     class a later task adds, which is then covered without its author remembering a
+     list. What it protects is a server-provided string of unbounded length, and not
+     merely a display name: a description runs to 500 characters, a name to 100, and
+     the server's own refusal sentence has no cap at all. Fifteen per-class copies of
+     it used to stand in for this one, and between them they missed `.curtain-error`
      and `.curtain-text`, which are the two that render unbounded prose.
 
      `anywhere` rather than `break-word`, which is the one technical point here. The
