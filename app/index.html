@@ -118,6 +118,15 @@
       <button class="feed-retry" id="feed-retry" type="button">Try again</button>
     </div>
 
+    <!-- Task 16. How old the newest expense is, shown only with a list and only once
+         it is at or past the threshold, so it is a warning and not a standing label.
+         Above the list because it is a caveat on the list: a reader meets it before
+         the rows it is about. This screen carries the age signal and no quiet list,
+         because who has entered nothing is a caveat on figures and this screen
+         presents none. No digit here: the number arrives in the payload. -->
+    <p class="feed-stale" id="feed-stale" hidden>Nothing new has been recorded here for
+      <span id="feed-stale-days"></span> days. The app only knows what people enter.</p>
+
     <!-- The group's one currency code, filled from the response and shown only once
          one has arrived. Never a symbol: the server formats amounts without one on
          purpose, and the front end does not overrule that. -->
@@ -237,10 +246,36 @@
     <!-- Always visible, and never hidden by any state. Balances are folded out of
          the event log on every read and are never stored, and the one thing this
          screen cannot tell you is whether an expense was left unrecorded, so it
-         says so rather than looking complete. Task 16 owns the real signal. -->
+         says so rather than looking complete. The three elements below it are task
+         16's real signal, which says how much was left out rather than only that
+         something might have been. -->
     <p class="balances-note" id="balances-derived">These figures are worked out from
       the recorded expenses each time this screen opens, and are never stored. An
       expense nobody recorded is not in them.</p>
+
+    <!-- Task 16. The rest of the sentence above: how old the newest expense is, or
+         that there has never been one, and who has entered nothing lately. All three
+         sit here, between the note saying where the figures come from and every
+         figure they qualify, so the caveat is read before the numbers rather than
+         under them. At most one of the first two is ever shown, and one toggler
+         decides which, so the screen can never say both that nothing has been
+         recorded and that something was recorded some days ago. Every number in them
+         arrives in the payload: no digit is written here, so the threshold cannot be
+         stated in two places that disagree. -->
+    <p class="balances-note" id="balances-stale" hidden>Nothing new has been recorded for
+      <span id="balances-stale-days"></span> days. These figures may be missing recent
+      spending.</p>
+    <p class="balances-note" id="balances-never" hidden>Nothing has been recorded in this group
+      yet, so there is nothing behind these figures.</p>
+    <!-- One wrapper over a note and a list, carrying one hidden flag, on task 14's
+         terms: a bare intro over an empty list on an ordinary day is noise. It states
+         the bare fact and never implies anybody owes anybody data, because who is on
+         this list is decided by who entered an expense and not by who paid for one. -->
+    <div id="balances-quiet-block" hidden>
+      <p class="balances-note">No expense entered in the last
+        <span id="balances-quiet-days"></span> days by:</p>
+      <ul class="balances-list" id="balances-quiet"></ul>
+    </div>
 
     <!-- Task 15. What an answer to a claim did, written here before the re-read that
          rebuilds every list below it, so the sentence explaining why the screen just
