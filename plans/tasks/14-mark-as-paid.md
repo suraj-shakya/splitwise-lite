@@ -955,8 +955,28 @@ named is checkable by reading a file or running the suite.
     to or removed from `app/`, so `test_app_holds_exactly_the_promised_files` and
     `test_the_worker_precaches_exactly_the_shell` pass unchanged.
 77. `uv run python -m pytest` passes with nothing skipped and nothing xfailed, and the pass
-    count is master's 2223 plus exactly the tests this task adds. Plain `uv run pytest` fails
+    count is master's 2263 plus exactly the tests this task adds. Plain `uv run pytest` fails
     on this machine with an access-denied spawn error and is not the command.
+
+    > **Amended, 2026-09-07. The base moved; this task did not.** The figure read "master's
+    > 2223" when this file was written, and master has moved four times under the branch
+    > since: 2223, 2258 (#62), 2262 (#59), and 2263 (#68, which renamed one half of a
+    > duplicate test name in `tests/test_balances.py` so the shadowed half collects again).
+    > Nothing this task adds or removes changed with any of them, which is why only the
+    > baseline is amended and the sentence around it is untouched.
+    >
+    > Measured at master `ce73491`, not assumed: master collects **2263**, this branch
+    > collects **2343**, and diffing the two `--collect-only` id sets gives **83 added and 3
+    > removed**. `2263 + 83 - 3 = 2343`. The three removed are the strengthening renames,
+    > each with its stronger replacement among the 83: criterion 60's
+    > `test_only_the_two_disclosure_buttons_look_tappable`, criterion 61's
+    > `test_both_disclosure_buttons_show_a_keyboard_user_where_they_are`, and the
+    > heading-order test that went from two lists to three.
+    >
+    > This arithmetic is the criterion, not bookkeeping around it. It is what surfaced four
+    > parametrised expense cases that this branch had silently dropped out of collection by
+    > reusing an existing test name: the suite was green, nothing warned, and only the count
+    > failing to reconcile said so.
 78. Every non-obvious choice made here carries a one-line comment where it is implemented, so
     the next person does not undo it by tidying: why the payer is the acting member and never
     the body, why the plan is not consulted, why a second pending claim per ordered pair is
