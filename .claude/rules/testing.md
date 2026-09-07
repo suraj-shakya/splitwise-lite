@@ -82,7 +82,10 @@ exercising what it named.
   it. The date is the exemption, and that is the second scar on this rule: the first
   version of that check accepted any line starting with `>`, which is one character a
   criterion can write next to itself, so the check had a hole where its own comment
-  claimed a hatch. An exemption costs a written, reviewable claim, for the same reason
-  `# unanchored:` demands a reason of real length. The positive control for the
-  corrected sweep is `document.body.style.overflowWrap = 'normal'` in the console:
-  re-run the sweep and it must find something.
+  claimed a hatch. The exemption now costs placing your criterion inside somebody's
+  dated note, where it reads as part of that note. That is weaker than the reason
+  `# unanchored:` demands, and unlike that hatch it enforces no minimum prose, so do not
+  describe the two as equals; it is a placement cost rather than a written
+  justification, and it is enough. The positive control for the corrected sweep is
+  `document.body.style.overflowWrap = 'normal'` in the console: re-run the sweep and it
+  must find something.

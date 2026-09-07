@@ -446,15 +446,46 @@ refuse a collision, so run that module before settling on one.
     > the failure message advertised that route in its closing paragraph.
     >
     > The predicate is now the **enclosing blockquote run**, meaning the contiguous run of
-    > `>` lines containing the finding, carrying a **date**. The run and not the line,
-    > because a dated note opens with its marker and the wording it quotes usually sits
-    > several lines below. This is the bar the `# unanchored:` hatch in this module
-    > already sets: an exemption costs a written, reviewable claim that shows up in a
-    > diff. It is strictly tightening and turned nothing red, because all five surviving
-    > blockquoted occurrences already open `**Corrected 2026-09-07 for issue #58**`,
-    > `**Stale ...**` or `**Followed up 2026-09-07.**`. Shown both ways before landing: a
-    > bare `>` with no date is refused, and a dated note with the literal three lines
-    > below its marker is accepted.
+    > `>` lines containing the finding, carrying a **date**. It is strictly tightening and
+    > turned nothing red, because all five surviving blockquoted occurrences already open
+    > `**Corrected 2026-09-07 for issue #58**`, `**Stale ...**` or
+    > `**Followed up 2026-09-07.**`. Shown both ways before landing: a bare `>` with no
+    > date is refused, and a dated note with the literal three lines below its marker is
+    > accepted.
+    >
+    > **What the predicate costs, stated exactly, because an earlier draft of this note
+    > overclaimed it.** That draft said the new bar "is the bar the `# unanchored:` hatch
+    > in this module already sets: an exemption costs a written, reviewable claim". It
+    > does not. That hatch enforces **twenty characters of real reason**; `DATED_NOTE` is
+    > `\d{4}-\d{2}-\d{2}`, shape only, with no calendar validation and no minimum prose,
+    > so `> per 1234-56-78` is exempt with no reason at all. The tightening is genuine —
+    > one character to ten, plus a claim that shows in a diff — and the deterrent is real
+    > but different: the escape route costs writing your new criterion **physically inside
+    > somebody else's dated correction note**, where it renders as part of that note and
+    > reads as one. That is a placement cost, not a written justification, and it is
+    > enough. A sentence claiming parity with a stricter mechanism is the register defect
+    > this task spent its whole length on, and it had got inside the amendment written to
+    > fix an instance of it.
+    >
+    > **The run and not the line, measured 2026-09-07 rather than assumed.** The five
+    > surviving occurrences sit in runs of **10, 10, 12, 14 and 21 lines**. In all five the
+    > date is on the run's opening line and the literal is **one or two lines below it**,
+    > so the date is never on the line carrying the literal and a line-local predicate
+    > would have reddened all five. The run walk is load-bearing, not defensive. Stated
+    > that precisely because the distance, not the run length, is what makes it necessary:
+    > an earlier draft of this note said the date sits "several lines" away, which the
+    > measurement does not support and which would have been the same register error one
+    > more time.
+    >
+    > **The residual, named rather than left to be found.** A blank line breaks the run,
+    > which is Markdown's own rule for where a blockquote ends, so an undated `>` line
+    > glued directly onto a dated note with no blank line between them is exempt, as is an
+    > indented list-level quote glued to a top-level dated one, which Markdown renders as
+    > two containers while the walk sees one. Left as it is: a blank line anywhere between
+    > restores the refusal, and the shape every real note in this repo takes is safe.
+    > Likewise there is no fence awareness, which fails toward red for an undated `>`
+    > inside a fenced block; no scanned document contains the literal inside a fence
+    > today.
 21. Each finding names the file in POSIX form, the line number, and the line, and the
     message says what to write instead: `el.scrollWidth > el.clientWidth` on `.content`
     and on each rendered row container, because `body` sets `overflow: hidden` and
@@ -629,9 +660,11 @@ refuse a collision, so run that module before settling on one.
     > `test_no_document_asks_for_the_measurement_that_cannot_fail` and
     > `test_the_wrong_measurement_message_says_what_to_write_instead`), so net **+4** and
     > nothing hidden. 2498 − 1 + 0 + 3 + 2 = 2502 = 2498 + 4. **CI is the oracle and
-    > agreed on both legs at head `c10a0f5`:** `ubuntu-latest` 2502 collected, 2502 passed
-    > in 91.53s; `windows-latest` 2502 collected, 2502 passed in 235.01s. No skips, no
-    > xfails.
+    > agreed on both legs at head `c005194`:** 2502 collected and 2502 passed on
+    > `ubuntu-latest` and on `windows-latest`, no skips, no xfails. First measured at
+    > `c10a0f5`, one commit earlier, at 2502 passed in 91.53s and 235.01s; every commit
+    > after `c005194` changes documentation and comment text only, so the count is
+    > unchanged and CI re-runs on each to confirm rather than to discover.
 
 ### The browser checklist `(browser check, unrun)`
 
@@ -698,6 +731,17 @@ refuse a collision, so run that module before settling on one.
     * `plans/tasks/14-mark-as-paid.md`
     * `plans/tasks/15-receiver-confirmation.md`
     * this spec, with its Findings section filled in
+
+    > **Corrected 2026-09-07.** The entry for `plans/tasks/13-transfer-drill-down.md` used
+    > to read "(one pointer sentence)". That was exactly right until criterion 47's
+    > amendment added the two stale references QA found in that file, so it is **three
+    > notes** now: the pointer added to the existing 2026-09-06 note, plus one on criterion
+    > 64 and one on criterion 73. **The list of thirteen files is unchanged** — both
+    > additions are in a file it already names, and the count is still exactly thirteen in
+    > either direction — so only the description of one entry moved. Recorded because a
+    > parenthetical that quietly stops describing the diff is the same defect as a
+    > criterion that quietly stops describing the code, in the one document that has no
+    > standing to make it.
 42. `git diff --stat` shows no path under `src/` or `scripts/`, and does not show
     `app/app.js`, `app/index.html`, `plans/spec.md`, `plans/backlog.md`, `README.md` or
     `CLAUDE.md`.
@@ -752,9 +796,15 @@ refuse a collision, so run that module before settling on one.
     >   `test_nothing_in_the_shell_takes_the_break_rule_back`, and the `nowrap` half is
     >   still asserted block-locally by
     >   `test_the_figure_is_still_the_only_thing_that_refuses_to_wrap`.
-    > * `plans/tasks/13-transfer-drill-down.md:966` — the same name inside criterion 71's
-    >   list of tests that must pass unchanged; it was replaced by
-    >   `test_no_balances_rule_declares_a_break_of_its_own`.
+    > * `plans/tasks/13-transfer-drill-down.md:966` — the same name inside **criterion
+    >   73**'s list of tests that must pass unchanged, at `:957` ("Every other task 12 test
+    >   in `tests/test_web_shell.py` passes untouched, by name:"); it was replaced by
+    >   `test_no_balances_rule_declares_a_break_of_its_own`. An earlier draft of this note
+    >   said criterion 71, which is the deletion of
+    >   `test_nothing_asks_for_provenance_that_is_not_in_the_payload` and a different
+    >   criterion entirely. The note itself was placed correctly; only this
+    >   cross-reference was wrong, which is the failure mode of citing a number from
+    >   memory in a document about documents that misname things.
     >
     > Both get a one-line dated note in the same shape, so the total for criteria 45 to 47
     > is **eleven** notes rather than nine.
@@ -763,9 +813,16 @@ refuse a collision, so run that module before settling on one.
     > already off by one before these two: the nine places it enumerates fall in tasks 08,
     > 10, 11, 12, 13, 14 and 15, which is seven files, because tasks 10 and 11 each carry
     > two of them. Counted mechanically after landing: 08 one, 10 two, 11 two, 12 one, 13
-    > three, 14 one, 15 one. Eleven notes, seven files. The thirteen-file list in criterion
-    > 41 is unaffected, since it counts files edited rather than notes added and both of
-    > these are in a file it already names.
+    > three, 14 one, 15 one. Eleven notes, seven files.
+    >
+    > **Criterion 41 is affected after all, and an earlier draft of this note said it was
+    > not.** That draft concluded criterion 41 was "unaffected, since it counts files
+    > edited rather than notes added", which is true of the file count and misses the
+    > parenthetical it had just falsified: criterion 41 lists
+    > `plans/tasks/13-transfer-drill-down.md` as **"(one pointer sentence)"**, which was
+    > exactly right when that file carried one note and eight lines, and is wrong now that
+    > it carries three notes. Criterion 41 carries its own dated correction. The
+    > thirteen-file list is genuinely unchanged; the description of one entry was not.
     >
     > **Nothing in this task could have caught these, and that is the finding.** The new
     > scan refuses one literal, `documentElement`; it has no opinion about a document
@@ -786,10 +843,13 @@ refuse a collision, so run that module before settling on one.
     > `pull_request`, so no CI run exists until the PR does, and the available token cannot
     > dispatch a `workflow_dispatch` run. The Findings were filled in first with the
     > measured local figures and the arithmetic, the PR was opened, and the CI count was
-    > pasted in on the first head that both legs reported: **2502 collected and 2502 passed
-    > on `ubuntu-latest` and on `windows-latest` at `c10a0f5`**, matching the arithmetic
-    > exactly. QA scored this criterion PARTIAL for the placeholder that stood in the
-    > meantime, which was the right call; it is no longer a placeholder.
+    > pasted in on the first head that both legs reported, `c10a0f5`, at 2502 collected
+    > and 2502 passed. The figure recorded here is **2502 collected and 2502 passed on
+    > `ubuntu-latest` and on `windows-latest` at `c005194`**, the head the senior review
+    > approved, matching the arithmetic exactly. QA scored this criterion PARTIAL for the
+    > placeholder that stood in the meantime, which was the right call, and the review then
+    > caught the recorded figures naming a head one commit behind the one being reviewed,
+    > which is the same staleness one level down; both are fixed.
 
 ## Out of scope
 
@@ -1021,8 +1081,12 @@ So the arithmetic reaching this branch's number is **2498 − 1 + 3 + 2 = 2502**
 * `tests/test_suite_integrity.py` — 54 passed (52 + 2)
 * `tests/test_shell_behaviour.py` — 172 passed, unchanged by this task
 
-**CI, both legs, agreed at head `c10a0f5`:** `ubuntu-latest` 2502 collected, `2502 passed
-in 91.53s`; `windows-latest` 2502 collected, `2502 passed in 235.01s`. No skips, no xfails.
+**CI, both legs, agreed at head `c005194`:** 2502 collected and 2502 passed on
+`ubuntu-latest` and on `windows-latest`, no skips, no xfails. First measured one commit
+earlier at `c10a0f5`, at `2502 passed in 91.53s` and `2502 passed in 235.01s`; the review
+caught the recorded figures naming that earlier head rather than the head under review,
+and every commit after `c005194` changes documentation and comment text only, so the count
+is unchanged and CI re-runs to confirm rather than to discover.
 QA measured `master` independently in its own worktree and also got 2498, and diffed the
 two `--collect-only` id sets to confirm the composition: two ids out, six in, net +4, with
 nothing hidden. So the count closes against two independent readings, the absolute and the
@@ -1136,8 +1200,19 @@ word next to itself is how a check stops being one". The comment refuted the cod
 introduced, and the failure message advertised the route in its closing paragraph, so a
 future author hitting the red test did not even have to find it. In the one module whose
 subject is checks that do not exercise what they name, the new check was exempting itself
-from its own thesis. It is now the enclosing blockquote run carrying a date, which is the
-bar `# unanchored:` already sets, and it turned nothing red.
+from its own thesis. It is now the enclosing blockquote run carrying a date, and it turned
+nothing red.
+
+**And then the fix overclaimed itself, which is the same defect once more.** The amendment
+said the new bar "is the bar the `# unanchored:` hatch already sets: an exemption costs a
+written, reviewable claim". It is not: that hatch enforces twenty characters of real
+reason, and `DATED_NOTE` is shape only, so `> per 1234-56-78` is exempt with no reason at
+all. The deterrent is a **placement** cost — writing your criterion physically inside
+somebody else's dated note — which is weaker than a written justification and still
+enough. Corrected in criterion 20's amendment, in the code comment, and in the seventh
+rule, all three of which now say what the predicate does rather than what it resembles.
+Three rounds on one change, each finding the previous round's claim a notch stronger than
+its code, is the most useful thing in this task's record.
 
 **Criterion 27a paid for itself twice.** It caught the message that named no selector on
 the first run, and QA confirmed the reorder holds and that `['nowrap', 'nowrap', 'nowrap']`

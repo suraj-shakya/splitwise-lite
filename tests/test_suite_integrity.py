@@ -817,9 +817,11 @@ def scanned_documents() -> list[Path]:
     return sorted(path for path in found if path != SPECIFIES_THE_SCAN)
 
 
-# A date, in the form every dated note in this repo already carries. What makes a
-# blockquote an exemption is that somebody wrote down when and why, which is
-# reviewable and shows in a diff as a claim; a bare '>' is one character and is not.
+# A date, in the form every dated note in this repo already carries. Shape only: no
+# calendar validation and no minimum prose, so this recognises the form a correction
+# note takes rather than proving one was written. What it buys is that an exemption has
+# to be placed inside a dated note and shows in a diff as one, where a bare '>' is one
+# character and shows as nothing.
 DATED_NOTE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -829,6 +831,22 @@ def blockquote_run(lines: list[str], index: int) -> list[str]:
     The run and not the line. A dated note opens with its marker and the wording it
     quotes usually sits several lines below, so looking for the date on the line that
     carries the banned literal would refuse every real note in this repo.
+
+    Measured 2026-09-07 rather than assumed, because that reason otherwise reads as a
+    guess. The five surviving blockquoted occurrences sit in runs of **10, 10, 12, 14
+    and 21 lines**. In all five the date is on the run's opening line and the literal is
+    one or two lines below it, so the date is never on the line carrying the literal and
+    a line-local predicate would have reddened all five. That is the load-bearing part;
+    the runs are long, but the distance that matters is small and it is never zero.
+
+    A blank line breaks the run, which is Markdown's own rule for where a blockquote
+    ends, and that is the residual worth stating plainly: an undated ``>`` line glued
+    directly onto a dated note, with no blank line between them, is exempt, and so is an
+    indented list-level quote glued to a top-level dated one, which Markdown renders as
+    two containers while this walk sees one. Left as it is deliberately. The cost of
+    that route is writing your new criterion physically inside somebody else's dated
+    correction note, where it renders as part of that note, and a blank line anywhere
+    between restores the refusal.
     """
     if not lines[index].strip().startswith(">"):
         return []
@@ -903,15 +921,22 @@ def test_no_document_asks_for_the_measurement_that_cannot_fail() -> None:
             # for itself. Quoting the wording that was wrong stays legal so the
             # historical record survives; writing it into a criterion does not.
             #
-            # The date is the whole exemption, and requiring it is the difference
-            # between a hatch and a hole. An earlier version of this check accepted any
-            # line starting with '>', which meant a future author facing this red test
-            # could prefix one character and go green with no reason, no date, and
-            # nothing in the diff that reads as a claimed exemption. That is a check
+            # The date is the whole exemption. An earlier version of this check accepted
+            # any line starting with '>', which meant a future author facing this red
+            # test could prefix one character and go green with no date and no reason,
+            # and nothing in the diff would read as a claimed exemption. That is a check
             # that does not exercise what it names, which is the defect this module
-            # exists to refuse, so it was refusing it everywhere except in itself. The
-            # bar now matches the `# unanchored:` hatch above: an exemption costs a
-            # written, reviewable claim.
+            # exists to refuse, so it was refusing it everywhere except in itself.
+            #
+            # What the predicate actually costs, stated exactly, because this is not the
+            # `# unanchored:` hatch above and must not be described as its equal: that
+            # hatch enforces twenty characters of real reason, while `DATED_NOTE` is
+            # shape only, so `> per 1234-56-78` is exempt with no reason and no calendar
+            # validation. The deterrent here is different and weaker: the escape route
+            # costs writing your new criterion physically inside somebody else's dated
+            # correction note, where it renders as part of that note and reads as one.
+            # That is a long way above one character and it is enough, but it is a
+            # placement cost rather than a written justification.
             if DATED_NOTE.search("\n".join(blockquote_run(lines, index))):
                 continue
             failures.append(wrong_measurement_message(where, index + 1, text))
