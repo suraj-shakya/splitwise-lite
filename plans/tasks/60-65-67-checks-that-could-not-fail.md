@@ -262,7 +262,8 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
     synthetic `pytest.raises(TypeError, match=PATTERN)`.
 21. `unanchored_pin_message(where, line, pattern)` contains: the POSIX path; the line number; the
     pattern as written; the sentence that `match=` is an `re.search` and not a full match, so a
-    pattern matching a superstring pins nothing; the concrete collision, that `Money` says
+    pattern matching a superstring pins nothing; the concrete collision, carried with the date
+    and sha it was measured at rather than in the present tense, that `money.py` said
     `Money currency must be a Currency, ...` which contains `currency must be a Currency` from
     index 6, so on PR #62 both the broken test and its first proposed repair passed with the
     guard deleted; the fix, which is a leading `^` plus enough of the message that no other
@@ -640,8 +641,9 @@ inferred from the guard they share.*
 
 *Pin 6, `match="str"`, `test_a_currency_that_is_not_a_currency_raises_type_error`.* **Not** the
 PR #62 shape, although the collision it warns about is real in the abstract:
-`balances._require_currency` says `currency must be a Currency, got str: 'AUD'` and `Money` would
-say `Money currency must be a Currency, got str: 'AUD'`, which contains `str` just as readily.
+`balances._require_currency` said, measured on `47aa48d`, `currency must be a Currency, got str:
+'AUD'`, and `Money` would have said `Money currency must be a Currency, got str: 'AUD'`,
+which contains `str` just as readily.
 What saves this pin is the arrangement rather than the pattern. The test calls
 `derive_balances([], group_id=GROUP, currency="AUD")` with an **empty** event list, so nothing
 downstream ever constructs a `Money` with the bad currency. With the guard deleted the call
