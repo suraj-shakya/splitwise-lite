@@ -9,7 +9,12 @@ definition, so the earlier test is deleted with nothing anywhere reporting an er
 The anchored-pin check refuses a ``pytest.raises(match=)`` whose pattern is not
 anchored with ``^`` and carries no ``# unanchored:`` reason, because ``match=`` is an
 ``re.search`` and an unanchored pattern can be satisfied by a superstring that somebody
-else's guard raised.
+else's guard raised. A fourth failure, GitHub issue #58, gets the third refusal here and
+is refused in the documents rather than in the code: no specification under ``plans/``,
+and neither ``README.md`` nor ``CLAUDE.md``, may ask outside a blockquote for
+``document.documentElement.scrollWidth`` against its ``clientWidth``, because ``body``
+clips and ``.content`` scrolls in this shell, so that equality is constant and the four
+task specs that asked for it as the test for horizontal overflow could not have failed.
 
 Neither could be a rule. Nobody can follow a rule against a duplicate name, because the
 whole difficulty is that neither author can see the other's definition; #67's own
@@ -760,6 +765,140 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
                     "mutation and a different result."
                 )
     assert not failures, "\n\n".join(failures)
+
+
+# --- The measurement that could not fail, refused in the documents (#58) ---
+
+# What is scanned: every Markdown document under plans/, plus README.md and CLAUDE.md.
+# Not tests/ and not app/, and neither omission is laziness.
+#
+# tests/ cannot be scanned because this check's own source and its own message have to
+# write the banned literal out in order to say what is banned, so a scan over tests/
+# would flag the very lines that make it work. app/ is not scanned because the shell is
+# code rather than a specification, and the one occurrence it has today is the comment
+# on `body` in app/styles.css that says what to measure instead, which is the thing
+# being asked for rather than the defect. Somebody will eventually read this scan as
+# arbitrarily narrow and reach to widen it; a check that flags itself is precisely the
+# shape of defect this module exists to refuse, so do not.
+def scanned_documents() -> list[Path]:
+    """Every specification document the scan covers, taken from the filesystem.
+
+    Derived rather than written out, so a task spec written later is covered without
+    anybody remembering to add it to a list. That is the property the per-class
+    ``CARRIES_A_NAME`` list in PR #56 did not have, and its absence is why that list
+    shipped wrong and why issue #58 deleted it.
+    """
+    found = list((REPO / "plans").rglob("*.md"))
+    found += [REPO / "README.md", REPO / "CLAUDE.md"]
+    return sorted(path for path in found if path != SPECIFIES_THE_SCAN)
+
+
+# The one document the scan cannot cover, for exactly the reason given above for
+# tests/: this file is the specification of this check, so its criteria have to write
+# the banned literal out to say what is banned, and three of them name it with no
+# `document.` prefix and no quotation to put in a blockquote. Criterion 23 of that spec
+# asks for no per-file skip at all, and this is a deviation from it, recorded here
+# rather than hidden: with the spec committed under plans/tasks/ as criterion 41
+# requires, criteria 20, 23 and 41 cannot all hold at once. It is the specification of
+# the mechanism and nothing else, it is not a licence for a second entry, and a rename
+# does not quietly widen the scan: the path stops matching and the scan goes red naming
+# the renamed file.
+SPECIFIES_THE_SCAN = (
+    REPO / "plans" / "tasks" / "58-the-overflow-check-that-measured-the-wrong-element.md"
+)
+
+
+def wrong_measurement_message(where: str, line: int, text: str) -> str:
+    """What the check says about one line asking for a measurement that cannot fail."""
+    return (
+        f"{where}:{line} names `documentElement`:\n"
+        f"    {text.strip()}\n"
+        "\n"
+        "In this shell that measurement cannot fail. app/styles.css sets "
+        "`overflow: hidden` on `body`, and `.content` is the element that scrolls. The "
+        "viewport's scrolling area is propagated from the root element, and the root "
+        "clips, so nothing inside `.content` can extend it and the root's scrollable "
+        "area can never grow. `documentElement.scrollWidth` therefore equals its "
+        "`clientWidth` whether or not content overflows: the equality is not weak, it "
+        "is constant. A criterion asking for it reports success in exactly the case it "
+        "was written to catch. Four task specs asked for it, and the PR #56 defect "
+        "would have gone green on every one of them.\n"
+        "\n"
+        "Write this instead:\n"
+        "\n"
+        "    el.scrollWidth > el.clientWidth, over `.content` and every element "
+        "inside it, and over each rendered row container\n"
+        "\n"
+        "and say that the sweep reports how many elements it examined, because both "
+        "properties are integer-rounded, so a sub-pixel overflow reads as none, and a "
+        "hidden element reports 0 for both, so every collapsed region passes trivially "
+        "unless it is opened first.\n"
+        "\n"
+        "Quoting the old wording is legal. A line whose stripped form starts with '>' "
+        "is exempt, because that is where this repo's dated correction notes live, so "
+        "the historical record stays readable while the next criterion cannot be "
+        "written."
+    )
+
+
+def test_no_document_asks_for_the_measurement_that_cannot_fail() -> None:
+    """No specification asks for `documentElement.scrollWidth` against `clientWidth`.
+
+    This is the durable half of issue #58. The stylesheet half of that issue is fixed
+    once; this is what stops the wrong measurement being copied into the next task
+    spec that thinks about small screens, which #58's own scope line predicted it
+    would be. It could not be a rule instead: a rule lasts exactly as long as the next
+    author who has not read it, which is the failure mode
+    ``plans/tasks/46-shell-precache-digest.md`` records for ``VERSION``.
+
+    A wrong measurement written into a criterion belongs in this module rather than
+    beside the stylesheet checks, because it is a check that reports success without
+    exercising what it names, which is what all three of the issues above are.
+    """
+    failures: list[str] = []
+    for path in scanned_documents():
+        where = posix(path)
+        for number, text in enumerate(read(path).splitlines(), start=1):
+            if "documentElement" not in text:
+                continue
+            # The blockquote exemption, and the only exemption a document can claim
+            # for itself. Dated correction notes live in blockquotes in this repo, so
+            # quoting the wording that was wrong stays legal while writing it into a
+            # criterion does not. There is deliberately no allowlist and no marker
+            # comment: an exemption a criterion could claim by writing a magic word
+            # next to itself is how a check stops being one.
+            if text.strip().startswith(">"):
+                continue
+            failures.append(wrong_measurement_message(where, number, text))
+    assert not failures, "\n\n".join(failures)
+
+
+def test_the_wrong_measurement_message_says_what_to_write_instead() -> None:
+    """The message names the place, quotes the line, and gives the replacement.
+
+    Following ``stale_digest_message`` in tests/test_web_shell.py. The message is the
+    entire product of a check that fires, so it gets a test of its own rather than
+    being read once by its author and then left to rot behind a green suite.
+    """
+    message = wrong_measurement_message(
+        "plans/tasks/08-mobile-web-shell.md",
+        214,
+        "- At 320 CSS px wide there is no horizontal scroll: "
+        "`document.documentElement.scrollWidth`",
+    )
+    assert message.startswith("plans/tasks/08-mobile-web-shell.md:214")
+    # The offending line is quoted, so the reader does not have to open the file to
+    # see which of several similar checklist lines was meant.
+    assert "`document.documentElement.scrollWidth`" in message
+    # Why it cannot fail, in terms of the two declarations that cause it.
+    assert "overflow: hidden" in message
+    assert "`.content`" in message
+    # What to write instead, and the two caveats that make the replacement honest.
+    assert "el.scrollWidth > el.clientWidth" in message
+    assert "integer-rounded" in message
+    assert "reports 0 for both" in message
+    # And the one way to keep the old wording legally.
+    assert "starts with '>'" in message
 
 
 # --- The rules the three issues land in ------------------------------------

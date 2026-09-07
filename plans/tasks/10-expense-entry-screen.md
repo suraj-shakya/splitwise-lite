@@ -501,8 +501,20 @@ against a roster on which that rule answers differently from the other two.
 **Layout**
 
 - At 320 x 568, 360 x 640 and 390 x 844, and in landscape at 844 x 390, with a six member
-  roster where one display name is 100 characters:
-  `document.documentElement.scrollWidth === document.documentElement.clientWidth`.
+  roster where one display name is 100 characters: `el.scrollWidth > el.clientWidth` is
+  false for `.content`, for every element inside it, and for each rendered row container,
+  and the sweep records how many elements it examined.
+
+  > **Corrected 2026-09-07 for issue #58**, per
+  > `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`. This line used
+  > to read `document.documentElement.scrollWidth === document.documentElement.clientWidth`.
+  > In this shell that equality is constant rather than weak: `app/styles.css` sets
+  > `overflow: hidden` on `body`, and the element that scrolls is `.content`, which carries
+  > `overflow-y: auto`. The viewport's scrolling area is propagated from the root element
+  > and the root clips, so nothing inside `.content` can extend the root's scrollable area
+  > and the equality holds whether or not content overflows. It would have reported success
+  > on the very defect it was written to catch. There is no record of anybody ever running
+  > it, so the false assurance was potential rather than realised.
 - Every new `min-height` in `app/styles.css` is at least 44px and every new `font-size` is at
   least 16px, so `test_no_rule_sets_a_hit_area_below_forty_four_pixels` and
   `test_no_rule_sets_a_font_size_below_sixteen_pixels` pass unchanged. Every input, the
@@ -512,6 +524,8 @@ against a roster on which that rule answers differently from the other two.
 - A long display name wraps rather than being clipped or ellipsised: the people rows set
   `overflow-wrap: break-word` and no new rule sets `text-overflow` or `overflow: hidden`. The
   `<select>` is full width and never pushes the page wider than the viewport.
+
+  > **Stale 2026-09-07 for issue #58**, per `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`: the people rows no longer set `overflow-wrap` themselves, and `.add-person-name` keeps only its `min-width: 0`; one `overflow-wrap: anywhere` on `body` covers them and every other text-bearing class in the shell.
 - The screen uses `.screen--add`'s existing `--accent`. No custom property is added to
   `:root` and no existing rule is edited.
 - The block adds no `animation`, no `transition` and no `@keyframes`, so the reduced-motion

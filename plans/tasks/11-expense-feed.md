@@ -68,6 +68,8 @@ on one line. The rule at 320 px:
 * The line wraps rather than scrolling, and sets `overflow-wrap: anywhere`, so a single
   unbroken 100 character display name breaks instead of pushing the layout wide.
 
+  > **Stale 2026-09-07 for issue #58**, per `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`: the feed's shared rule no longer sets `overflow-wrap` itself, but this is where `anywhere` was first chosen and the reason given here, that only `anywhere` breaks an unbroken 100 character name instead of taking it as the layout's width floor, is why `anywhere` and not `break-word` is the value the one declaration on `body` now carries.
+
 Counting participants is not money arithmetic. No cent value is ever added, divided,
 rounded or reformatted in JavaScript; the amounts are `format_amount` strings and they are
 passed through untouched.
@@ -336,9 +338,21 @@ labelled as unverified by the suite.
 **Layout**
 
 - At 320 x 568, 360 x 640 and 390 x 844, and in landscape at 844 x 390:
-  `document.documentElement.scrollWidth === document.documentElement.clientWidth`, with a
-  feed containing a 500 character description, a 100 character display name and a six
-  participant expense.
+  `el.scrollWidth > el.clientWidth` is false for `.content`, for every element inside it,
+  and for each rendered row container, with a feed containing a 500 character description,
+  a 100 character display name and a six participant expense, and the sweep records how
+  many elements it examined.
+
+  > **Corrected 2026-09-07 for issue #58**, per
+  > `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`. This line used
+  > to read `document.documentElement.scrollWidth === document.documentElement.clientWidth`.
+  > In this shell that equality is constant rather than weak: `app/styles.css` sets
+  > `overflow: hidden` on `body`, and the element that scrolls is `.content`, which carries
+  > `overflow-y: auto`. The viewport's scrolling area is propagated from the root element
+  > and the root clips, so nothing inside `.content` can extend the root's scrollable area
+  > and the equality holds whether or not content overflows, which is the one case this
+  > line existed to catch. There is no record of anybody ever running it, so the false
+  > assurance was potential rather than realised.
 - Every new `min-height` in `app/styles.css` is at least 44px and every new `font-size` is
   at least 16px, so `test_no_rule_sets_a_hit_area_below_forty_four_pixels` and
   `test_no_rule_sets_a_font_size_below_sixteen_pixels` pass unchanged. There is no small

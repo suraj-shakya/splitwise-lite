@@ -917,6 +917,14 @@ reading a file or running the suite.
     > scrolls, and to the boxes the text is in. The general case, that any future task
     > inheriting this line inherits the blind spot, is filed as issue #58 and is not fixed
     > here.
+    >
+    > **Followed up 2026-09-07.** Issue #58 was fixed in
+    > `plans/tasks/58-the-overflow-check-that-measured-the-wrong-element.md`: the same
+    > correction was made in tasks 08, 10, 11 and 12, the fifteen per-class
+    > `overflow-wrap: break-word` declarations became one `overflow-wrap: anywhere` on
+    > `body`, and a check in `tests/test_suite_integrity.py` now refuses the old
+    > measurement in any document under `plans/` outside a blockquote, which is what stops
+    > the next task spec inheriting it.
 
 ### Automated tests: Python
 
