@@ -2911,9 +2911,13 @@ def test_an_unusable_amount_carries_the_domain_layers_own_message(
     assert expense_count(seeded) == 0
 
 
-def test_a_payer_who_is_not_a_member_is_refused_by_name(app, seeded: Path) -> None:
+def test_a_payer_who_is_not_a_member_is_refused_without_naming_them(
+    app, seeded: Path
+) -> None:
     # Decided from the roster before any write, so no foreign key violation is
-    # ever reached.
+    # ever reached. The refusal names the payload key and not the value: the field
+    # is a complete locator when the request named exactly one payer, and no 4xx
+    # body this repo sends carries a member id.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     response = add_expense(
@@ -2925,14 +2929,17 @@ def test_a_payer_who_is_not_a_member_is_refused_by_name(app, seeded: Path) -> No
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert "'a-stranger'" in body["error"]["message"]
+    assert "payer_id" in body["error"]["message"]
+    assert "a-stranger" not in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
 @pytest.mark.parametrize("mode", ["equal", "weight", "exact"])
-def test_a_split_naming_someone_outside_the_group_is_refused_by_name(
+def test_a_split_naming_someone_outside_the_group_is_refused_without_naming_them(
     app, seeded: Path, mode: str
 ) -> None:
+    # All three modes, because the roster check is one branch of one helper that all
+    # three reach, and the sentence it composes names the field for every one of them.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     splits = {
@@ -2949,7 +2956,8 @@ def test_a_split_naming_someone_outside_the_group_is_refused_by_name(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert "'a-stranger'" in body["error"]["message"]
+    assert "member id" in body["error"]["message"]
+    assert "a-stranger" not in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
@@ -2968,6 +2976,8 @@ def test_a_split_naming_a_member_twice_is_refused_by_the_resolver(
     body = response.get_json()
     assert body["error"]["code"] == "invalid_split"
     assert "more than once" in body["error"]["message"]
+    # The resolver used to spell the whole member_ids list into this body.
+    assert members["Sam"] not in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
@@ -4287,12 +4297,17 @@ def test_created_at_is_spelled_the_way_the_feed_spells_it(
 
 
 @pytest.mark.parametrize("position", ["debtor", "creditor"])
-def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_it(
+def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_the_position(
     app, seeded: Path, position: str
 ) -> None:
     # A 404 was considered and rejected: the path names members, not a stored record,
     # and web.py already refuses an out-of-group member id this way when recording an
     # expense.
+    #
+    # The path has two segments, so a constant sentence would not tell the caller
+    # which of them was refused. The position is a path-parameter name and not an
+    # identifier, so naming it keeps this parametrisation discriminating without
+    # putting a member id in a 400 body.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     stranger = "not-a-member-of-this-group"
@@ -4305,7 +4320,8 @@ def test_an_id_that_is_not_a_member_of_this_group_is_a_four_hundred_naming_it(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert stranger in body["error"]["message"]
+    assert position in body["error"]["message"]
+    assert stranger not in body["error"]["message"]
     assert members["Sam"] not in body["error"]["message"]
 
 
@@ -4319,6 +4335,7 @@ def test_a_member_may_not_ask_what_they_owe_themselves(app, seeded: Path) -> Non
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
     assert "themselves" in body["error"]["message"]
+    assert members["Sam"] not in body["error"]["message"]
 
 
 def test_an_id_that_needs_percent_encoding_reaches_the_right_member(
@@ -4569,7 +4586,7 @@ def test_a_settlement_is_stamped_with_the_servers_own_clock(
     assert settlement["created_at"] == at(9, 30).isoformat(timespec="microseconds")
 
 
-def test_a_settlement_to_somebody_outside_the_group_is_refused_by_name(
+def test_a_settlement_to_somebody_outside_the_group_is_refused_without_naming_them(
     app, seeded: Path
 ) -> None:
     signed = linked_client(app, seeded)
@@ -4577,7 +4594,8 @@ def test_a_settlement_to_somebody_outside_the_group_is_refused_by_name(
     assert response.status_code == 400
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
-    assert "mem-nobody" in body["error"]["message"]
+    assert "to_member_id" in body["error"]["message"]
+    assert "mem-nobody" not in body["error"]["message"]
     assert stored_settlements(seeded) == ()
 
 
@@ -4591,7 +4609,11 @@ def test_a_settlement_to_yourself_is_refused_before_the_event_is_built(
     members = by_name(signed)
     response = mark_paid(signed, to_member_id=members["Sam"], amount="1.00")
     assert response.status_code == 400
-    assert response.get_json()["error"]["code"] == "malformed_request"
+    body = response.get_json()
+    assert body["error"]["code"] == "malformed_request"
+    # The caller never sent a payer, so the sentence says where the payer comes from
+    # instead of naming the member both halves of the pair resolved to.
+    assert members["Sam"] not in body["error"]["message"]
     assert stored_settlements(seeded) == ()
 
 

@@ -1387,8 +1387,7 @@ def _create_expense() -> flask.Response:
     roster = {member.id for member in _store().list_members(group.id)}
     if payer_id not in roster:
         raise MalformedRequest(
-            f"{what} names a payer_id that is not a member of this group: "
-            f"{payer_id!r}"
+            f"{what} names a payer_id that is not a member of this group"
         )
     total = money.parse_amount(amount_text, group.currency)
     allocations = _resolve_split(split_body, total.cents, roster, group.currency)
@@ -1422,7 +1421,7 @@ def _resolve_split(
     ``parse_amount`` before reaching ``split_exact``.
 
     Every member id is checked against the roster first, so an unknown id is a
-    ``malformed_request`` naming it rather than a foreign key violation later.
+    ``malformed_request`` naming the field rather than a foreign key violation later.
     """
     what = "a split"
     if "mode" not in body:
@@ -1439,7 +1438,7 @@ def _resolve_split(
         return split.split_by_weight(
             total_cents,
             {
-                _require_member_id(key, roster): _require_weight(key, value)
+                _require_member_id(key, roster): _require_weight(value)
                 for key, value in weights.items()
             },
             currency=currency,
@@ -1451,7 +1450,7 @@ def _resolve_split(
             total_cents,
             {
                 _require_member_id(key, roster): _require_exact_amount(
-                    key, value, currency
+                    value, currency
                 )
                 for key, value in amounts.items()
             },
@@ -1463,35 +1462,46 @@ def _resolve_split(
 
 
 def _require_member_id(value: object, roster: set[str]) -> events.MemberId:
-    """A member id that names a member of this group, or raise naming it."""
+    """A member id that names a member of this group, or raise naming the field."""
     if not isinstance(value, str):
         raise MalformedRequest("a split names a member id that is not a JSON string")
     if value not in roster:
+        # A constant string, parallel to the branch above it. The split named a set
+        # keyed by member id, so the id does carry something no field name does; it is
+        # dropped anyway, because a 4xx body carries no identifier and the caller holds
+        # both halves of the diff already: the set it sent, against the roster
+        # ``GET /api/members`` gave it.
         raise MalformedRequest(
-            f"a split names a member id that is not a member of this group: {value!r}"
+            "a split names a member id that is not a member of this group"
         )
     return events.MemberId(value)
 
 
-def _require_weight(key: str, value: object) -> int:
+def _require_weight(value: object) -> int:
     """A weight, which is an integer and never a bool or a float.
 
     Integers on purpose: a share of one and a half is expressed as weights 3 and 2, so
     no fraction ever enters the money path.
+
+    It takes no key. The key was a member id of the current roster and it went straight
+    into a mapped 400 body, so dropping the parameter rather than only the
+    interpolation is what makes the leak impossible to reintroduce without adding an
+    argument, which is a change a reviewer sees.
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        raise MalformedRequest(f"the weight for {key!r} must be a JSON integer")
+        raise MalformedRequest("every weight in a split must be a JSON integer")
     return value
 
 
-def _require_exact_amount(
-    key: str, value: object, currency: money.Currency
-) -> int:
-    """One exact share, parsed from a string through the one input edge."""
+def _require_exact_amount(value: object, currency: money.Currency) -> int:
+    """One exact share, parsed from a string through the one input edge.
+
+    It takes no key either, for the reason ``_require_weight`` does not.
+    """
     if not isinstance(value, str):
         raise MalformedRequest(
-            f"the exact amount for {key!r} must be an amount as a JSON string, such "
-            f'as "8.00"; amounts are strings, never numbers'
+            'every exact amount in a split must be an amount as a JSON string, such '
+            'as "8.00"; amounts are strings, never numbers'
         )
     return money.parse_amount(value, currency).cents
 
@@ -1765,13 +1775,15 @@ def _create_settlement() -> flask.Response:
     roster = {member.id for member in _store().list_members(group.id)}
     if to_member_id not in roster:
         raise MalformedRequest(
-            f"{what} names a to_member_id that is not a member of this group: "
-            f"{to_member_id!r}"
+            f"{what} names a to_member_id that is not a member of this group"
         )
     if to_member_id == acting.id:
+        # The clause that named the id is replaced by one that says something the
+        # caller cannot otherwise know: it never sent a payer, so where the payer comes
+        # from is the part of this refusal that is news.
         raise MalformedRequest(
-            f"a member cannot record a payment to themselves: {to_member_id!r} is "
-            f"both the payer and the receiver"
+            "a member cannot record a payment to themselves; the payer is whoever "
+            "is signed in"
         )
     amount = money.parse_amount(amount_text, group.currency)
     if amount.cents <= 0:
@@ -1898,9 +1910,7 @@ def _decide_settlement(settlement_id: str) -> flask.Response:
             None,
         )
         if settlement is None:
-            raise store.RecordNotFound(
-                f"no settlement in this group with that id: {settlement_id!r}"
-            )
+            raise store.RecordNotFound("no settlement in this group with that id")
         # The receiver check runs before the state check, because "you may not answer
         # this" is true regardless of what the ledger says about the claim.
         if settlement.to_member_id != acting.id:
@@ -1978,16 +1988,19 @@ def _read_debt(debtor_id: str, creditor_id: str) -> flask.Response:
     """
     group = flask.g.group
     roster = {member.id for member in _store().list_members(group.id)}
-    for value in (debtor_id, creditor_id):
+    # The position, not the value: the path has two segments and a constant sentence
+    # would not tell the caller which of them was refused. ``debtor`` and ``creditor``
+    # are path-parameter names in this repo's own published wire contract, not
+    # identifiers.
+    for position, value in (("debtor", debtor_id), ("creditor", creditor_id)):
         if value not in roster:
             raise MalformedRequest(
-                f"a debt path names a member id that is not a member of this group: "
-                f"{value!r}"
+                f"a debt path names a {position} that is not a member of this group"
             )
     if debtor_id == creditor_id:
         raise MalformedRequest(
-            f"a member cannot owe themselves: {debtor_id!r} was asked about as both "
-            f"the debtor and the creditor"
+            "a member cannot owe themselves; the debtor and the creditor in the "
+            "path are the same member"
         )
 
     ledger = _store().list_events(group.id)
