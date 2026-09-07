@@ -1198,6 +1198,17 @@ WORKS_TODAY = {
         ("index.html", 'id="balances-pending-block"'),
         ("app.js", "api.addSettlement("),
     ),
+    # Backlog task 15. Until it landed this key sat in NOT_YET as a PROMPT with no
+    # absent rule, and the prompt did what it said it would: `decideSettlement`
+    # arrived on window.SplitwiseApi, test_the_api_client_offers_exactly_the_named_calls
+    # went red naming both documents, and that is what moved these bullets. The
+    # evidence is the list the refused claims are drawn in and the call the screen
+    # makes, not the client key alone, which would prove only that the method exists
+    # unused.
+    "Receiver confirmation": (
+        ("index.html", 'id="balances-rejected"'),
+        ("app.js", "api.decideSettlement("),
+    ),
     "Install and open offline": (
         ("app.js", "navigator.serviceWorker.register('sw.js')"),
         ("sw.js", "var SHELL = ["),
@@ -1254,20 +1265,6 @@ WORKS_TODAY = {
 # has since added `addSettlement` and it holds fifteen. The measurements are about what
 # the parse notices, not about the number, so they stand as taken.
 NOT_YET = {
-    "Receiver confirmation": {
-        "task": 15,
-        "absent": (),
-        "reason": (
-            "A PROMPT, not an interlock, on the terms Mark as paid sat here on until "
-            "task 14 landed it. "
-            "Confirming a settlement is a round trip too, so in house style it "
-            "arrives as a new name in API_SURFACE and "
-            "test_the_api_client_offers_exactly_the_named_calls notices. It does not "
-            "have to arrive that way, and one string in that set clears the red "
-            "without either document moving, so the failure message is the most this "
-            "entry offers and it is not promised."
-        ),
-    },
     "The incompleteness signal": {
         "task": 16,
         "absent": (),

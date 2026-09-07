@@ -170,6 +170,25 @@ SCENARIOS = [
     "an_unlinked_account_is_offered_no_way_to_mark_anything_paid",
     "leaving_the_balances_screen_and_returning_clears_the_pending_list",
     "a_group_with_nothing_left_to_settle_still_shows_a_pending_payment",
+    # The receiver answers a claim
+    "the_receiver_can_confirm_a_payment_that_was_marked_as_paid",
+    "the_receiver_can_reject_a_payment_that_was_marked_as_paid",
+    "confirming_a_payment_announces_it_before_and_after_the_request",
+    "confirming_a_payment_reads_the_figures_again_and_says_what_changed",
+    "an_answer_whose_refresh_fails_still_says_the_answer_was_recorded",
+    "tapping_confirm_twice_answers_one_settlement",
+    "tapping_reject_after_confirm_sends_one_answer",
+    "an_answer_that_will_not_record_says_so_and_can_be_tried_again",
+    "the_payer_is_offered_no_way_to_answer_their_own_claim",
+    "a_third_member_is_offered_no_way_to_answer_someone_elses_claim",
+    "everyone_sees_the_same_rejected_payment",
+    "a_rejected_payment_can_be_marked_as_paid_again",
+    "a_rejected_row_the_screen_cannot_read_is_left_out_rather_than_guessed_at",
+    "answering_a_payment_behind_a_curtain_asks_for_nothing",
+    "an_unlinked_account_is_offered_no_way_to_answer_anything",
+    "leaving_the_balances_screen_and_returning_clears_the_rejected_list",
+    "confirming_the_last_claim_in_a_settled_group_reads_the_figures_again",
+    "the_api_client_builds_a_decision_path_from_a_settlement_id",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied
