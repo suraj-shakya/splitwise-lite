@@ -26,7 +26,7 @@ from __future__ import annotations
 import itertools
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -2598,7 +2598,18 @@ def test_a_group_with_no_expenses_is_an_empty_list_and_not_a_404(
     signed = linked_client(app, seeded)
     response = signed.get("/api/expenses")
     assert response.status_code == 200
-    assert response.get_json() == {"currency": CURRENCY, "expenses": []}
+    assert response.get_json() == {
+        "currency": CURRENCY,
+        "expenses": [],
+        # Task 16. A group that has recorded nothing says so in its own state rather
+        # than through a zero, which is the case a zero would have lied about.
+        "staleness": {
+            "state": "never",
+            "days_since_last_expense": None,
+            "quiet_after_days": 7,
+            "quiet_member_ids": [],
+        },
+    }
 
 
 def test_the_feed_is_newest_first_with_ties_broken_by_id_descending(
@@ -3270,6 +3281,15 @@ def test_a_settled_group_is_every_member_at_zero_and_no_transfers(
         "pending": [],
         # Task 15. And nobody has refused one either.
         "rejected": [],
+        # Task 16. Nothing has been recorded, so the age is unknown rather than zero,
+        # and nobody is named: naming three people for one fact the sentence above
+        # them already states is noise.
+        "staleness": {
+            "state": "never",
+            "days_since_last_expense": None,
+            "quiet_after_days": 7,
+            "quiet_member_ids": [],
+        },
     }
 
 
@@ -4867,7 +4887,15 @@ def test_the_balances_payload_gains_pending_and_nothing_else_at_the_top_level(
 ) -> None:
     signed = linked_client(app, seeded)
     body = balances_of(signed)
-    assert set(body) == {"currency", "net", "transfers", "pending", "rejected"}
+    assert set(body) == {
+        "currency",
+        "net",
+        "transfers",
+        "pending",
+        "rejected",
+        # Task 16, whose one added key this test is the pin on from the other side.
+        "staleness",
+    }
     assert body["pending"] == []
 
 
@@ -4886,6 +4914,13 @@ def test_a_settled_group_reports_an_empty_pending_list(app, seeded: Path) -> Non
         # Task 15's list of its own, at its exact value rather than by loosening the
         # equality to a subset.
         "rejected": [],
+        # Task 16's one added key, on the same terms.
+        "staleness": {
+            "state": "never",
+            "days_since_last_expense": None,
+            "quiet_after_days": 7,
+            "quiet_member_ids": [],
+        },
     }
 
 
@@ -6152,7 +6187,14 @@ def test_the_balances_payload_gains_rejected_and_nothing_else_at_the_top_level(
 ) -> None:
     signed = linked_client(app, seeded)
     body = balances_of(signed)
-    assert set(body) == {"currency", "net", "transfers", "pending", "rejected"}
+    assert set(body) == {
+        "currency",
+        "net",
+        "transfers",
+        "pending",
+        "rejected",
+        "staleness",
+    }
     assert body["rejected"] == []
 
 
@@ -6588,3 +6630,333 @@ def test_reading_balances_looks_at_nothing_about_the_acting_member() -> None:
     source = inspect.getsource(web._read_balances)
     assert "flask.g.member" not in source
     assert "flask.g.group" in source
+
+
+# --- Task 16: the incompleteness signal on the wire -------------------------
+#
+# Appended as one block, editing nothing above it. Every test here controls the
+# instant by replacing ``web._now``, which is the one seam this codebase has and the
+# one ``test_the_clock_is_read_once_and_only_in_one_place`` holds the single read
+# inside. Replacing the seam is not a second read, and it is what the seam is for: the
+# figures below are then exact rather than dependent on when the suite runs. The
+# alternative, choosing each event's ``created_at`` relative to the real clock, cannot
+# control the member ages, because ``seed_group`` stamps every member row with ``at()``
+# and the real clock walks away from it a day at a time.
+
+SETUP_INSTANT = at()
+"""When ``seed_group`` applies the roster, so every member row is created here."""
+
+
+def days_after_setup(days: int, *, hour: int = 9, minute: int = 0) -> datetime:
+    """An instant ``days`` whole days after the roster was applied."""
+    return datetime(
+        SETUP_INSTANT.year,
+        SETUP_INSTANT.month,
+        SETUP_INSTANT.day,
+        hour,
+        minute,
+        tzinfo=timezone.utc,
+    ) + timedelta(days=days)
+
+
+def at_instant(monkeypatch: pytest.MonkeyPatch, moment: datetime) -> None:
+    """Every read and write in the requests that follow happens at ``moment``."""
+    monkeypatch.setattr(web, "_now", lambda: moment)
+
+
+def staleness_of(client, path: str) -> dict:
+    response = client.get(path)
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    assert "staleness" in body, sorted(body)
+    return body["staleness"]
+
+
+def both_staleness(client) -> tuple[dict, dict]:
+    """The signal as each of the two reads reports it."""
+    return staleness_of(client, "/api/expenses"), staleness_of(client, "/api/balances")
+
+
+def signed_at(app, path: Path, monkeypatch: pytest.MonkeyPatch, moment: datetime):
+    """A client whose session was issued at ``moment``, with the clock stubbed there.
+
+    The order matters. ``accounts.SESSION_LIFETIME`` is 30 days, so a session issued
+    against the real clock and then read at a stubbed instant far away from it is
+    refused as expired, and the test then fails for a reason with nothing to do with
+    staleness. Issuing the session at the stubbed instant keeps every read inside that
+    session's own window and makes the test independent of the day the suite runs on.
+    Every instant a test moves to afterwards stays within 30 days of this one.
+    """
+    at_instant(monkeypatch, moment)
+    return linked_client(app, path)
+
+
+def record_one_expense(
+    client, monkeypatch: pytest.MonkeyPatch, *, on: datetime
+) -> None:
+    at_instant(monkeypatch, on)
+    members = by_name(client)
+    response = add_expense(
+        client,
+        payer_id=members["Sam"],
+        amount="12.50",
+        split=equal_split(members["Sam"]),
+    )
+    assert response.status_code == 201, response.get_json()
+
+
+def test_both_reads_send_the_identical_staleness_object_for_one_ledger(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One builder serves both endpoints, so the two screens cannot disagree about how
+    # stale the ledger is. Read in one test, at one instant, because that is the only
+    # way to hold them to the same answer rather than to two plausible ones.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(1))
+    members = by_name(signed)
+    record_one_expense(signed, monkeypatch, on=days_after_setup(1))
+    at_instant(monkeypatch, days_after_setup(10))
+    feed, figures = both_staleness(signed)
+    assert feed == figures
+    # Measured rather than predicted: every member row is 10 days old here and the one
+    # expense is 9 days old, so all three are quiet, Sam included. The expense Sam
+    # entered is outside the window, which is the whole point of the window.
+    assert feed == {
+        "state": "stale",
+        "days_since_last_expense": 9,
+        "quiet_after_days": 7,
+        "quiet_member_ids": [members["Sam"], members["Ali"], members["Jo"]],
+    }
+
+
+def test_the_staleness_object_carries_exactly_the_four_documented_keys(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(3))
+    for signal in both_staleness(signed):
+        assert set(signal) == {
+            "state",
+            "days_since_last_expense",
+            "quiet_after_days",
+            "quiet_member_ids",
+        }
+
+
+def test_a_group_that_has_recorded_nothing_says_never_rather_than_zero(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The state a brand-new flat is in, and the case a zero would have lied about. The
+    # roster here is old enough for every member to qualify as quiet, and nobody is
+    # named, because naming three people for one fact the sentence above them already
+    # states is noise.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(90))
+    for signal in both_staleness(signed):
+        assert signal["state"] == "never"
+        assert signal["days_since_last_expense"] is None
+        assert signal["quiet_member_ids"] == []
+
+
+def test_a_ledger_recorded_earlier_today_reads_fresh_with_a_zero_count(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(2, hour=8))
+    record_one_expense(signed, monkeypatch, on=days_after_setup(2, hour=8))
+    at_instant(monkeypatch, days_after_setup(2, hour=20))
+    for signal in both_staleness(signed):
+        assert signal["state"] == "fresh"
+        assert signal["days_since_last_expense"] == 0
+
+
+def test_the_day_count_is_a_json_integer_and_never_a_formatted_string(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No amount, no currency and no format_amount anywhere near this figure: it is a
+    # whole count of days and it goes on the wire as a number.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(1))
+    record_one_expense(signed, monkeypatch, on=days_after_setup(1))
+    at_instant(monkeypatch, days_after_setup(9))
+    for signal in both_staleness(signed):
+        assert isinstance(signal["days_since_last_expense"], int)
+        assert not isinstance(signal["days_since_last_expense"], bool)
+    raw = signed.get("/api/balances").get_data(as_text=True)
+    assert '"days_since_last_expense": 8' in raw
+
+
+def test_a_settlement_does_not_make_the_ledger_read_fresher_than_it_is(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The substance of "settlements do not reset the clock", through the endpoints: a
+    # flat that settles up but stops logging groceries is the failure mode the signal
+    # is for, and a claim answered a moment ago must not hide a nine-day-old ledger.
+    at_instant(monkeypatch, days_after_setup(1))
+    payer, receiver = sam_and_ali(app, seeded)
+    members = by_name(payer)
+    record_one_expense(payer, monkeypatch, on=days_after_setup(1))
+
+    at_instant(monkeypatch, days_after_setup(10))
+    before = staleness_of(payer, "/api/balances")
+    claimed = claim(payer, to_member_id=members["Ali"], amount="1.00")
+    assert decide(receiver, claimed, "confirmed").status_code == 200
+    after = staleness_of(payer, "/api/balances")
+    assert after == before
+    assert after["days_since_last_expense"] == 9
+    assert after["state"] == "stale"
+
+
+def test_the_balances_read_names_who_has_entered_nothing_in_roster_order(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(20))
+    members = by_name(signed)
+    record_one_expense(signed, monkeypatch, on=days_after_setup(20))
+
+    at_instant(monkeypatch, days_after_setup(21))
+    signal = staleness_of(signed, "/api/balances")
+    # Sam entered it, so Ali and Jo are quiet, in the order store.list_members gives.
+    assert signal["quiet_member_ids"] == [members["Ali"], members["Jo"]]
+    assert [member["id"] for member in roster(signed)] == [
+        members["Sam"],
+        members["Ali"],
+        members["Jo"],
+    ]
+
+
+def test_the_feed_carries_the_quiet_list_it_does_not_render(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Criterion 24, pinned rather than described. The feed shows the age signal only,
+    # and it still carries this field, because one builder serves both endpoints and
+    # two differently shaped objects both named ``staleness`` would be two copies of
+    # one contract with nothing forcing them to agree. Trimming the field to "just
+    # what the feed renders" turns this red, and it is meant to.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(20))
+    members = by_name(signed)
+    record_one_expense(signed, monkeypatch, on=days_after_setup(20))
+    at_instant(monkeypatch, days_after_setup(21))
+    assert staleness_of(signed, "/api/expenses")["quiet_member_ids"] == [
+        members["Ali"],
+        members["Jo"],
+    ]
+
+
+def test_a_roster_younger_than_the_window_names_nobody_as_quiet(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Listing somebody who has not had time to enter anything is reporting an absence
+    # of data as a finding. Every member row here is younger than the window, so the
+    # age signal speaks and the quiet list stays empty.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(0, hour=10))
+    record_one_expense(signed, monkeypatch, on=days_after_setup(0, hour=10))
+    at_instant(monkeypatch, days_after_setup(6, hour=10))
+    signal = staleness_of(signed, "/api/balances")
+    assert signal["state"] == "fresh"
+    assert signal["days_since_last_expense"] == 6
+    assert signal["quiet_member_ids"] == []
+
+
+def test_the_state_is_one_of_three_wire_words_and_never_the_enum_value(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Mapped by an explicit dict rather than by .value.lower() or an f-string, so
+    # renaming a domain member cannot silently rename a JSON value the front end
+    # branches on. The map is exhaustive over the enum, and that is asserted here
+    # rather than assumed.
+    from splitwise_lite.staleness import StalenessState
+
+    assert set(web._STALENESS_STATE_WIRE) == set(StalenessState)
+    assert sorted(web._STALENESS_STATE_WIRE.values()) == ["fresh", "never", "stale"]
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(1))
+    assert staleness_of(signed, "/api/balances")["state"] == "never"
+    record_one_expense(signed, monkeypatch, on=days_after_setup(1))
+    at_instant(monkeypatch, days_after_setup(2))
+    assert staleness_of(signed, "/api/balances")["state"] == "fresh"
+    at_instant(monkeypatch, days_after_setup(20))
+    assert staleness_of(signed, "/api/balances")["state"] == "stale"
+
+
+def test_the_threshold_is_sent_so_no_copy_of_it_lives_under_app(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from splitwise_lite.staleness import QUIET_AFTER_DAYS
+
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(1))
+    for signal in both_staleness(signed):
+        assert signal["quiet_after_days"] == QUIET_AFTER_DAYS
+
+
+def test_no_member_row_creation_date_reaches_the_wire(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Criterion 25. The server works out who is quiet and sends ids; task 9's decision
+    # that a member view is id and display name only stands, and a screenshot of the
+    # roster is still not an account list.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(30))
+    for member in roster(signed):
+        assert set(member) == {"id", "display_name"}
+    assert "created_at" not in signed.get("/api/members").get_data(as_text=True)
+    # The balances read carries no instant at all, and the feed carries only the ones
+    # _expense_view has always sent, one per expense row.
+    assert "created_at" not in signed.get("/api/balances").get_data(as_text=True)
+
+
+def test_the_signal_adds_no_route_to_the_table(app) -> None:
+    # Criterion 21. A signal about a ledger belongs on the reads that present the
+    # ledger, not on a read of its own that could arrive at a different instant and
+    # disagree with them.
+    rules = {route.rule for route in web._API_ROUTES}
+    for absent in ("/api/staleness", "/api/stale", "/api/incompleteness"):
+        assert absent not in rules, absent
+    assert "/api/expenses" in rules
+    assert "/api/balances" in rules
+
+
+def test_the_whole_of_one_read_agrees_on_when_the_instant_was(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Criterion 23. The instant that stamps a created_at is the instant the signal is
+    # measured against, because there is one clock read per request and it is cached
+    # on the application context. Two reads inside one request would let an expense be
+    # recorded at one instant and judged against another.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(9))
+    real_now = web._now
+    reads: list[datetime] = []
+
+    def counted() -> datetime:
+        moment = days_after_setup(9)
+        reads.append(moment)
+        return moment
+
+    record_one_expense(signed, monkeypatch, on=days_after_setup(9))
+    monkeypatch.setattr(web, "_now", counted)
+    reads.clear()
+    signal = staleness_of(signed, "/api/balances")
+    # Every call site in this request saw one instant, and the signal is measured
+    # against it: the expense was recorded at that instant, so the answer is 0 and not
+    # a day either side of it. The count is deliberately not pinned, because a stub
+    # standing in for the seam does not cache and the number of call sites is not the
+    # guarantee: one instant per request is.
+    assert reads, "the request read no clock at all"
+    assert set(reads) == {days_after_setup(9)}, reads
+    assert signal["days_since_last_expense"] == 0
+    # And the guarantee itself, through the real function: two call sites in one
+    # request get one instant off flask.g rather than two off the operating system.
+    with app.test_request_context("/api/balances"):
+        assert real_now() is real_now()
+
+
+def test_the_signal_is_derived_on_every_read_and_never_stored(
+    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing is written by a read, and the same ledger read at two instants gives two
+    # answers, which is what "derived on read" means and what a stored figure could
+    # not do.
+    signed = signed_at(app, seeded, monkeypatch, days_after_setup(1))
+    record_one_expense(signed, monkeypatch, on=days_after_setup(1))
+    at_instant(monkeypatch, days_after_setup(3))
+    early = staleness_of(signed, "/api/balances")
+    at_instant(monkeypatch, days_after_setup(25))
+    late = staleness_of(signed, "/api/balances")
+    assert early["days_since_last_expense"] == 2
+    assert late["days_since_last_expense"] == 24
+    assert early["state"] == "fresh"
+    assert late["state"] == "stale"
+    assert expense_count(seeded) == 1
