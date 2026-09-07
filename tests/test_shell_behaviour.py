@@ -189,6 +189,8 @@ SCENARIOS = [
     "leaving_the_balances_screen_and_returning_clears_the_rejected_list",
     "confirming_the_last_claim_in_a_settled_group_reads_the_figures_again",
     "the_api_client_builds_a_decision_path_from_a_settlement_id",
+    # What a feed row shows. The first scenarios in this repo to render one.
+    "a_feed_row_names_the_payer_the_amount_and_what_it_was_for",
 ]
 
 # The six mutants the harness is measured against, as anchored substitutions applied

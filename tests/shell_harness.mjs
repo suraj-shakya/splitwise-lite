@@ -141,6 +141,24 @@ const VOID_TAGS = new Set([
 
 const ATTRIBUTE = /([a-zA-Z][a-zA-Z0-9:_.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
 
+/* What a browser does with a fragment on insertion: its children go into the parent
+   in its place and the fragment is left empty. Both insertion points route every node
+   they are given through here, and that is not optional. This stub's replaceChildren
+   is an assignment and its appendChild is a push, so a fragment accepted as it stands
+   would become one child node rather than its children: descendants() would walk into
+   it as if it were an element, the textContent getter would read a node with no
+   tagName as node.text and yield undefined, and .expense-row would be found under a
+   phantom element. A wrong tree and no error is the one behaviour a stub must never
+   have, so the flattening is a guarantee rather than a convenience. */
+function inserted(node) {
+  if (node.tagName !== '#DOCUMENT-FRAGMENT') {
+    return [node];
+  }
+  const children = node.childNodes.slice();
+  node.childNodes = [];
+  return children;
+}
+
 function element(tag, attributes, sink) {
   const own = {
     tagName: tag.toUpperCase(),
@@ -220,7 +238,8 @@ function element(tag, attributes, sink) {
       delete own.attributes[name];
     },
     appendChild(child) {
-      own.childNodes.push(child);
+      inserted(child).forEach((node) => own.childNodes.push(node));
+      /* The node it was handed, which is what a browser returns, fragment included. */
       return child;
     },
     removeChild(child) {
@@ -232,7 +251,9 @@ function element(tag, attributes, sink) {
       return child;
     },
     replaceChildren(...nodes) {
-      own.childNodes = nodes.slice();
+      const flat = [];
+      nodes.forEach((node) => inserted(node).forEach((child) => flat.push(child)));
+      own.childNodes = flat;
     },
     get firstChild() {
       return own.childNodes.length === 0 ? null : own.childNodes[0];
@@ -624,6 +645,8 @@ function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
   };
 
   const head = select(parsed.root, 'head')[0];
+  /* Replaced rather than routed through inserted(): it exists to load api.js, and
+     nothing appends a document fragment to <head>. */
   head.appendChild = (node) => {
     head.childNodes.push(node);
     if (node.tagName === 'SCRIPT' && node.src !== '') {
@@ -642,6 +665,15 @@ function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
          composes a row out of text nodes so that a display name holding a `<` reaches
          the DOM as text: balancesNetRow, balancesTransferRow and task 13's rows. */
       createTextNode: (text) => ({ text: String(text) }),
+      /* feedRender builds its rows in a fragment and hands the fragment to
+         feedList.replaceChildren. Built by element() under a reserved #-prefixed tag,
+         following the precedent parseDocument's element('#document', ...) root sets,
+         so the fragment carries childNodes, firstChild, textContent and the same
+         guarded proxy every element carries, for one line. No selector can name it:
+         select() reads a leading # as an id and its bare-tag pattern is
+         ^[a-z][a-z0-9]*$. Insertion flattens it, per inserted() above, and that is
+         the part that is not optional. */
+      createDocumentFragment: () => element('#document-fragment', {}, sink),
       head: head,
       get title() {
         return titleElement.textContent;
@@ -7189,6 +7221,90 @@ const SCENARIOS = [
         }
       ]);
     }
+  },
+
+  /* --- Issue #57: what a feed row shows ---------------------------------------
+     The first eleven scenarios in this repo to render one. feedRender's
+     document.createDocumentFragment was not faked, and loadFeed ends
+     .then(done, done), so every line of the render path threw and the throw reached
+     the same place a refused request does. Nothing asserted row content, so nothing
+     saw it. */
+
+  {
+    /* The whole of a row, which is the screen a person opens the app on. The payer is
+       neither the person entering nor the first member of the roster nor whoever
+       recorded it, so a row that reads the wrong field names the wrong person, which
+       on a shared ledger is the wrong person being owed money. */
+    name: 'a_feed_row_names_the_payer_the_amount_and_what_it_was_for',
+    async run(page) {
+      await onFeed(page, { currency: 'AUD', expenses: [FEED_MILK] }, FEED_ROSTER);
+
+      const rows = page.query('.expense-row');
+      page.is(rows.length, 1, 'expense rows');
+      const row = rows[0];
+      const summary = summaryIn(row);
+      page.is(
+        onlyOne(row, '.expense-description').textContent,
+        'Milk run',
+        'the description'
+      );
+      /* The amount as format_amount produced it, character for character, and read
+         from the summary rather than from the row: the detail carries figures of its
+         own. Not parsed, not reformatted, not compared as a number. */
+      page.is(onlyOne(summary, '.expense-figure').textContent, '12.50', 'the amount');
+      page.is(onlyOne(row, '.expense-payer').textContent, 'Paid by Cass', 'the payer');
+      page.is(
+        onlyOne(row, '.expense-split').textContent,
+        'Split across Sam and Cass',
+        'the split line'
+      );
+      page.is(
+        page.el('feed-currency').textContent,
+        'Amounts in AUD.',
+        'the currency line'
+      );
+      feedShows(page, 'list', 'a rendered list');
+
+      /* The rows are children of #feed-list itself. The fragment feedRender built
+         them in is not a node a browser leaves behind, and a stub that kept it would
+         put a phantom element between the list and every row. */
+      page.is(page.el('feed-list').childNodes.length, 1, 'children of #feed-list');
+      page.is(page.el('feed-list').childNodes[0], row, 'the first child of #feed-list');
+      page.is(page.el('feed-list').firstChild, row, 'the firstChild of #feed-list');
+      page.ok(
+        tagsInDocument(page).indexOf('#DOCUMENT-FRAGMENT') === -1,
+        'a document fragment was left in the rendered tree'
+      );
+      FEED_CLASSES.forEach((selector) => {
+        page.ok(page.query(selector).length > 0, 'nothing matches ' + selector);
+      });
+
+      /* Closed, and saying so twice: to a screen reader through aria-expanded, and to
+         everybody through the glyph. The region it names exists exactly once, so the
+         id derived from the expense id is an id and not a guess. */
+      page.is(summary.getAttribute('aria-expanded'), 'false', 'aria-expanded');
+      page.is(indicatorIn(summary).textContent, '+', 'the indicator');
+      page.is(
+        page.query('#' + summary.getAttribute('aria-controls')).length,
+        1,
+        'regions the summary names'
+      );
+      page.is(regionFor(page, summary).hidden, true, 'the detail region');
+
+      /* The raw instant survives in the markup byte for byte even though the visible
+         text is rounded to a day and spelled in the reader's own timezone. What day
+         that is depends on the machine, so the visible half is held to the two things
+         that do not: it says something, and it never says NaN. */
+      const stamp = onlyOne(row, '.expense-date');
+      page.is(stamp.tagName, 'TIME', 'the date element');
+      page.is(stamp.getAttribute('datetime'), FEED_WHEN, 'the datetime attribute');
+      page.ok(stamp.textContent !== '', 'the visible date says nothing');
+      page.ok(
+        stamp.textContent.indexOf('NaN') === -1,
+        'the visible date reads ' + JSON.stringify(stamp.textContent)
+      );
+      page.expectRequests(FEED_ENTRY);
+    }
   }
 ];
 
@@ -7736,6 +7852,133 @@ function answerStatusIn(row) {
   return onlyOne(row, '.balances-answer-status');
 }
 
+
+/* --- Issue #57: the feed render path ---------------------------------------------
+
+   Below SCENARIOS for the reason the task 13, 14, 15 and 43 blocks above are: this
+   task appends to this file and restructures none of it, and module evaluation
+   reaches these long before main() runs, which is all a scenario body needs.
+
+   Every fixture here is spelled out rather than derived. No amount is parsed, added,
+   divided or reformatted anywhere in this block: a cent value is compared as the
+   string the payload carried, which is the only comparison a money screen's test may
+   make. */
+
+/* The instant every fixture in this block is stamped with. Only two things about the
+   way it reaches the screen are machine-independent, and those are the two that get
+   asserted: the datetime attribute carries it byte for byte, and the visible text is
+   neither empty nor NaN. What day it falls on depends on the timezone of the machine
+   running the suite, and feedDate spells it locally on purpose. */
+const FEED_WHEN = '2026-09-04T08:00:00.000000+00:00';
+
+/* The acting member is Sam, mem-1, through A_MEMBER. This roster does not start with
+   Sam, so the payer of an expense can be told apart from the person entering it, from
+   the first row of the roster and from whoever recorded it: three fields a row could
+   read instead of payer_id, and a row that reads any of them names the wrong person
+   out loud on a shared ledger. */
+const FEED_ROSTER = {
+  members: [
+    { id: 'mem-2', display_name: 'Ali' },
+    { id: 'mem-1', display_name: 'Sam' },
+    { id: 'mem-3', display_name: 'Cass' }
+  ]
+};
+
+/* Cass paid, Sam recorded it, and the two of them share it. The six keys
+   _expense_view sends, with the allocations the resolver produced. */
+const FEED_MILK = {
+  id: 'exp-1',
+  description: 'Milk run',
+  amount: '12.50',
+  payer_id: 'mem-3',
+  created_by: 'mem-1',
+  created_at: FEED_WHEN,
+  allocations: [
+    { member_id: 'mem-1', amount: '6.25' },
+    { member_id: 'mem-3', amount: '6.25' }
+  ]
+};
+
+/* Boots straight onto the feed route, so the recorded request list is about this
+   screen. The balances answer is registered because the route change in
+   leaving_the_feed_and_coming_back_draws_each_row_once enters that screen, and an
+   answer nobody asks for is never served. */
+async function onFeed(page, payload, roster) {
+  page.respond('GET', '/session', ok(A_MEMBER));
+  page.respond('GET', '/expenses', ok(payload));
+  page.respond('GET', '/members', ok(roster));
+  page.respond('GET', '/balances', ok(EMPTY_BALANCES));
+  page.startAt('#/feed');
+  await page.boot();
+}
+
+/* Entering the feed route costs exactly these three, however many expenses come
+   back: the session check, the ledger and the roster, and nothing per row. */
+const FEED_ENTRY = ['GET /api/session', 'GET /api/expenses', 'GET /api/members'];
+
+/* The four states feedState() switches between, asserted as a set rather than one at
+   a time, because "exactly one of these is what a person sees" is the guarantee and a
+   single hidden flag is not it. The scenario names the state it expects; this checks
+   all five elements against that name. */
+function feedShows(page, which, what) {
+  page.is(page.el('feed-loading').hidden, which !== 'loading', what + ': #feed-loading');
+  page.is(page.el('feed-empty').hidden, which !== 'empty', what + ': #feed-empty');
+  page.is(page.el('feed-error').hidden, which !== 'error', what + ': #feed-error');
+  page.is(page.el('feed-currency').hidden, which !== 'list', what + ': #feed-currency');
+  page.is(page.el('feed-list').hidden, which !== 'list', what + ': #feed-list');
+}
+
+/* Every class the render path builds. A selector that finds nothing after a render is
+   a render that did not happen, which is exactly the state this file was in before
+   this task. */
+const FEED_CLASSES = [
+  '.expense-row',
+  '.expense-description',
+  '.expense-payer',
+  '.expense-figure',
+  '.expense-split',
+  '.expense-share',
+  '.expense-share-name'
+];
+
+/* Every element in the document, walked rather than selected: select() reads a
+   leading # as an id and its bare-tag pattern refuses one, so no selector can name a
+   document fragment. That is the point of the reserved tag name, and it is also why
+   a fragment left in the tree has to be looked for this way. */
+function tagsInDocument(page) {
+  return descendants(page.query('html')[0], []).map((node) => node.tagName);
+}
+
+/* The rows as a reader meets them, top to bottom. */
+function rowDescriptions(page) {
+  return page.query('.expense-description').map((node) => node.textContent);
+}
+
+function summaryIn(row) {
+  return onlyOne(row, '.expense-summary');
+}
+
+function indicatorIn(summary) {
+  return onlyOne(summary, '.expense-indicator');
+}
+
+/* The share list of an open row, as pairs of the name and the amount exactly as the
+   payload spelled it. Read from the row rather than recomposed, and nothing here adds
+   the shares up: the screen does not, and neither does its test. */
+function sharesIn(detail) {
+  return onlyOne(detail, '.expense-shares').childNodes.map((share) => [
+    onlyOne(share, '.expense-share-name').textContent,
+    onlyOne(share, '.expense-figure').textContent
+  ]);
+}
+
+/* Every sentence the detail carries that is not a share row: the total line, the
+   notes and the date, in document order. */
+function noteLinesIn(detail) {
+  return detail
+    .querySelectorAll('.expense-note')
+    .map((note) => note.textContent);
+}
 
 /* --- Running ---------------------------------------------------------------- */
 
