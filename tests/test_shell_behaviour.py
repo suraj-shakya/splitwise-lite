@@ -97,6 +97,7 @@ SCENARIOS = [
     "unticking_someone_sends_an_equal_split_over_the_rest",
     "uneven_amounts_are_sent_as_strings_and_the_blanks_are_left_out",
     "shares_that_do_not_add_up_show_the_resolvers_own_message_and_keep_the_draft",
+    "a_save_refused_as_malformed_shows_the_servers_sentence_with_no_id",
     "saving_with_no_amount_typed_asks_for_one_and_sends_nothing",
     "a_successful_save_clears_the_form_and_confirms_from_the_response",
     "a_stale_form_refused_by_the_server_says_so_on_the_screen",
