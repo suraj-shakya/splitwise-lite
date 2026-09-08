@@ -256,7 +256,9 @@ feature's own stale case, so this is a working app with one sentence wrong rathe
 crater.
 
 **The run cost it adds**, per `plans/mutations/README.md`'s cap: one further harness
-process, which is one `node` run of all 158 scenarios. Timed at 0.73 seconds wall clock on this
+process, which is one `node` run of all **159** scenarios. That figure was 158 when the timing
+below was taken, before this branch merged `bea0da7`; the timing is quoted as it was measured
+and the scenario count is current. Timed at 0.73 seconds wall clock on this
 machine, inside a `tests/test_shell_behaviour.py` run that takes about 12 seconds in
 total, so the mutant adds about six per cent to that module and nothing measurable
 to the suite.

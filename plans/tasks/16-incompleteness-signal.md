@@ -85,8 +85,15 @@ name `datetime` at runtime in `balances.py`, resolving aliases, and a threshold 
 `timedelta` resolves back to the `datetime` module and would fire it. The new module also gets
 its own purity rule, which is deliberately **narrower** than `balances.py`'s: it forbids clock
 *reads* and permits clock *arithmetic*, because subtracting two instants is the whole job. As
-it happens the implementation needs no runtime `datetime` name at all (see criterion 8), so it
-can carry the same annotation-only exemption `balances.py` carries.
+it happens the implementation needs one runtime `datetime` name, in the type guard criterion 7
+asks for, and nothing else; the arithmetic names no class (see criterion 8).
+
+> **Corrected 2026-09-08, after the second review of PR #83.** This sentence used to read "As it
+> happens the implementation needs no runtime `datetime` name at all (see criterion 8), so it can
+> carry the same annotation-only exemption `balances.py` carries." Withdrawn: the annotation-only
+> exemption does not apply, because `_require_instant` names the class to refuse a naive value.
+> What is unaffected is the decision this paragraph is actually making, that the rule over this
+> module forbids clock reads and permits clock arithmetic.
 
 ### 2. What "recently" means, as a number, and where that number lives
 
@@ -313,8 +320,20 @@ root, every path is relative to it, and every path in a message or a test id is 
    `tests/test_staleness.py` refuses `now(`, `utcnow(`, `today(`, `time.time` and `monotonic` in
    the module source, in the shape `tests/test_store.py:1503` already uses. A comment beside it
    records that this rule is deliberately **narrower** than `balances.py`'s, permitting clock
-   arithmetic and forbidding only clock reads, and that as implemented the module happens to need
-   no runtime `datetime` name at all, because `(now - created_at).days` names no class.
+   arithmetic and forbidding only clock reads, and that the module names `datetime` at runtime in
+   exactly one place, the `isinstance` in `_require_instant`'s type guard, which criterion 7 asks
+   for; the arithmetic itself names no class, because `(now - created_at).days` does not, and no
+   `timedelta` is constructed anywhere.
+
+    > **Corrected 2026-09-08, after the second review of PR #83.** This criterion used to require
+    > the comment to record "that as implemented the module happens to need no runtime `datetime`
+    > name at all, because `(now - created_at).days` names no class". The second half of that is
+    > true and the first half is false: refusing a naive value the way `events._require_utc` does,
+    > which criterion 7 requires, means naming the class. Deviation 4 in Findings disclosed this
+    > and QA passed the criterion on that basis, since the rule the criterion states, no clock
+    > **reads**, is untouched either way. Disclosed-but-wrong is the weaker option when the fix is
+    > one sentence, so the criterion now says what the implementation does. The same withdrawal
+    > appears at decision 1 above, where the prediction was first made.
 9. Every one of these is stated in a docstring, once, where it is implemented: the newest
    `ExpenseEvent` only and why settlements are excluded (decision 3); the elapsed-24-hour rule and
    its `>=` boundary; the clamp at zero and the `store.py:1687` reason a future timestamp is
@@ -962,7 +981,9 @@ prediction would have said:
    I expected and is recorded as a finding of its own: `"utcnow("` is a strict superstring of
    `"now("`, so it catches nothing `"now("` does not, and no correct control can fail on its
    deletion by catching an escaped read. The redundancy is measured and stated instead.
-4. **Four of the five mutations survive all 490 tests in `tests/test_web_api.py`.** Only the
+4. **Four of the five mutations survive every test in `tests/test_web_api.py`.** That module
+   held **490** when those runs were taken and holds **493** today, the three having arrived with
+   the merge of `bea0da7`; the verdict is unchanged and QA re-ran all five against 493. Only the
    member-age one is visible through a real request. That is not a gap in the endpoint tests: a
    future timestamp is unreachable through an endpoint that stamps `created_at` from `_now()`,
    and no endpoint test sits on the exact boundary. It does mean the domain module is the sole
@@ -1039,5 +1060,16 @@ the word the spec uses; whether three stacked notes push the first figure below 
 reader announces the new copy in a useful order now that three more elements sit above the
 existing live region; whether the quiet list is legible at five names. **Nothing in this project
 has ever been verified in a browser.** These five were added to issue #80, the existing
-mechanism for one dated manual sweep. No second mechanism was opened and nothing here blocks on
-it.
+mechanism for one dated manual sweep, and a **sixth** was added there after review: whether
+`#balances-decision`, task 15's line, is still readable before the thing it changed now that
+three elements sit above it. That one is a different kind, a possible regression to an existing
+feature rather than a question about this new one, and it is recorded as such. So #80 carries
+six items from this task, not five. No second mechanism was opened and nothing here blocks on
+either.
+
+**One tension is recorded rather than resolved, because resolving it needs a browser.** The copy
+fix that puts "Who entered expenses, not who paid for them" on screen answers a real social risk,
+that a person is named who may have paid for everything, and it lengthens the quiet note to two
+sentences, which makes the layout stack in #80's sixth item worse. The two pull against each
+other, neither has been seen at 320px, and picking one here on reasoning alone would be choosing
+between two unmeasured harms. It belongs to #80.

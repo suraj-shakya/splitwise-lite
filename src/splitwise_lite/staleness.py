@@ -23,14 +23,34 @@ appends no event, stores nothing and tells nobody: people find it by opening a s
 
 **Why this is its own module and not part of ``balances``.** Different inputs, a
 different output and a different failure mode. ``balances`` derives *money* from the
-log and is a pure function of the log alone; this derives a *caveat* from the log and
-an instant, and it is the only module in the package that takes an instant at all. It
-computes no money, so none of the currency, group and duplicate-id refusals that make
-``balances`` what it is apply here, and a wrong answer from this module misleads a
-reader where a wrong answer from that one misstates a debt. Those are two jobs, and
-putting them in one module would put the only clock-dependent function in the package
-inside the one file whose whole guarantee is that it depends on nothing but its
-arguments.
+log and is a pure function of the log alone; this derives a *caveat* from the log
+**and an instant**, and it is the only module in the package that takes an instant in
+order to produce a figure somebody reads. It computes no money, so none of the
+currency, group and duplicate-id refusals that make ``balances`` what it is apply here,
+and a wrong answer from this module misleads a reader where a wrong answer from that
+one misstates a debt. Those are two jobs, and putting them in one module would put a
+clock-dependent function inside the one file whose whole guarantee is that it depends
+on nothing but its arguments.
+
+    **Corrected 2026-09-08, after the second review of PR #83.** This paragraph used to
+    say this "is the only module in the package that takes an instant at all", and
+    repeated it four lines later as "the only clock-dependent function in the package".
+    Both are withdrawn as false, and the second one twice over. Measured by walking the
+    package: **five** modules hold a function taking an instant, ``accounts`` with four
+    of them, ``groups``, ``store``, ``web``'s rate limiter, and this one. The
+    replacement is narrower and was measured the same way: of those five, the other four
+    use the instant to stamp a record, expire a session or bound a rate-limit window,
+    returning a ``User``, an ``IssuedSession``, a ``Session``, a ``SetupResult``, a
+    deletion count, a cookie ``max_age``, a ``Retry-After`` header or a boolean, and not
+    one of those reaches a screen. ``days_since_last_expense`` is the only
+    instant-derived number in any payload a screen renders.
+
+    Worth recording rather than quietly fixing, because of where it happened: the false
+    claim was introduced **in the paragraph written to answer a reviewer finding that
+    this module split had the wrong stated reason**. The correction acquired the defect
+    it was correcting. The contrast the paragraph actually needs is with ``balances``
+    alone, which needs no package-wide superlative, and reaching for one is what put a
+    measurable claim in prose with nothing measuring it.
 
 There is a second reason, and it is deliberately second: ``balances.py``'s purity proof
 forbids the runtime name ``datetime`` there, so a threshold expressed as a ``timedelta``
