@@ -151,7 +151,10 @@ record file, plus a dated note in the record. So the baseline is expected to gro
 whenever a correct change breaks an anchor, and what the check refuses is an
 **undeclared** stale anchor rather than a stale one. A record going stale is still
 expected rather than a defect; what has changed is that it is now recorded when it
-happens rather than discovered years later by somebody trying to re-run it.
+happens rather than discovered years later by somebody trying to re-run it. What holds
+that list honest is not another check: it is a reviewer reading a diff that includes a
+bump to a declared integer, and the dated note the declaration costs in the record
+itself.
 
 **Re-deriving `find` against today's source is the wrong repair.** The worked example is
 `g2-repeated-member` in `65-message-pins.md`, which matched zero times from the day #61
