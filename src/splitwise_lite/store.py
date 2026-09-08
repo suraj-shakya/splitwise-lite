@@ -216,13 +216,20 @@ class ConstraintViolated(StoreError):
 
 
 class AmountTooLarge(StoreError):
-    """Raised when a cent value would not fit the signed 64-bit column, naming both.
+    """Raised when a cent value will not fit the signed 64-bit column, naming the field.
 
     ``events.py`` puts no upper bound on an amount, and ``parse_amount`` only guards the
     values that arrive as text, so an event built from cents directly can carry more
     than ``MAX_CENTS``. SQLite answers that with ``OverflowError``, which says nothing
-    about which field was wrong; this says the field and the bound, and the append that
-    raised it leaves no rows behind.
+    about which field was wrong; this says which field, and the append that raised it
+    leaves no rows behind.
+
+    It spells no figure. The offending value and ``MAX_CENTS`` are both integer cents,
+    this module has no currency at the point the check runs, so there is no ``Money``
+    to hand ``format_amount``, and ``MAX_CENTS`` is a column bound rather than an
+    amount in anybody's currency. Issue #79 dropped both figures rather than inventing
+    a second formatter, on the precedent ``split._ordered_from_mapping`` set for #61.
+    The only caller who can reach this holds the value it passed in.
     """
 
 
@@ -349,9 +356,10 @@ def _require_storable_cents(value: object, field: str) -> int:
             f"{field} must be an int, got {type(value).__name__}: {value!r}"
         )
     if value > MAX_CENTS:
+        # No figure here, per #79: the only display edge takes a Money, and this
+        # function is handed neither a currency nor anything to build one from.
         raise AmountTooLarge(
-            f"{field} is {value}, above MAX_CENTS ({MAX_CENTS}), the largest value the "
-            f"cents column can hold"
+            f"{field} is above MAX_CENTS, the largest value the cents column can hold"
         )
     return value
 
