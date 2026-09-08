@@ -441,8 +441,20 @@ audited guard at a time.
     > from grepping. Mutation `m3-startswith-branch-deleted` in
     > `plans/mutations/70a-message-block-check.md` deleted the branch and reddened only the
     > synthetic self-test, leaving all nineteen parametrised cases of the baseline check
-    > green. Branch (b), `==`, is the contrast: the same treatment reddened two real test
-    > modules, because two live blocks are anchored by an equality and nothing else.
+    > green, and moving `computed_carried_total()` by **0**. Branch (b), `==`, is the
+    > contrast: the same treatment moves that total from 107 to **112**, because **five**
+    > live blocks, in two modules, are anchored by an equality and nothing else. The five
+    > are enumerated as node ids in the `m1-equality-branch-deleted` record; they are not
+    > repeated here, so there is one copy of that list and it is the one under the check
+    > that polices it.
+    >
+    > **Corrected 2026-09-08, after QA failed PR #84.** This paragraph previously read
+    > "the same treatment reddened two real test modules, because two live blocks are
+    > anchored by an equality and nothing else". **Two was the module count and the claim
+    > was about blocks**, which is the unit of this whole task. The same wrong number
+    > stood in the mutation record and in the PR body, and the correction under the `m1`
+    > record says why the node-id check could not see it: a claim phrased without a `::`
+    > is invisible to it, so prose form was a route around the mechanism.
     >
     > A branch exercised by a synthetic alone is legitimate here, because the accepted set
     > has to be complete rather than merely populated, and 70b to 70h may yet give (c) a

@@ -27,9 +27,17 @@ through `write_text`, which restores them. That was verified before the record w
 written rather than assumed, because a three-line anchor matching zero times while the
 run still reports a result is the failure `README.md` warns about.
 
-**No entry here is numbered by position.** Every claim names its pytest node id, and
-`test_every_node_id_a_record_names_is_one_it_lists` holds the prose below to the `kills`
-and `survives` beside it.
+**No entry here is numbered by position, and a claim about which tests a mutation touched
+enumerates node ids rather than counting them.**
+`test_every_node_id_a_record_names_is_one_it_lists` then holds those ids to the `kills`
+and `survives` beside them.
+
+> **Corrected 2026-09-08, after QA failed PR #84.** This paragraph previously said "Every
+> claim names its pytest node id", which was not true of this file when it was written:
+> the `m1` record counted five blocks as two and named one of them without a `::`. The
+> check cannot see a claim that names no node id, so the sentence above is now about the
+> **format** the file follows and not about a guarantee the suite gives. The full
+> reasoning is in the correction under the first record.
 
 ## Deleting the equality branch of the accepted set
 
@@ -46,7 +54,12 @@ and `survives` beside it.
   ],
   "survives": [
     "tests/test_suite_integrity.py::test_the_pin_check_still_bites",
-    "tests/test_suite_integrity.py::test_the_carried_total_is_the_sum_of_the_baseline"
+    "tests/test_suite_integrity.py::test_the_carried_total_is_the_sum_of_the_baseline",
+    "tests/test_accounts.py::test_authenticate_refuses_a_token_it_does_not_hold",
+    "tests/test_split.py::test_a_large_exact_mismatch_carries_the_formatters_comma_groups",
+    "tests/test_split.py::test_a_negative_total_is_refused_with_a_leading_minus",
+    "tests/test_split.py::test_a_total_above_the_maximum_is_refused_in_the_money",
+    "tests/test_split.py::test_a_zero_total_is_refused_in_the_money_and_not_in_cents"
   ],
   "result": "killed"
 }
@@ -65,11 +78,49 @@ branch. That much was designed in. The part that was not designed in is that
 `tests/test_suite_integrity.py::test_every_message_block_is_anchored_or_carried[tests/test_accounts.py]`
 and
 `tests/test_suite_integrity.py::test_every_message_block_is_anchored_or_carried[tests/test_split.py]`
-reddened too, naming real blocks: two live blocks in the suite are anchored by an
-equality and nothing else, so deleting the branch makes them findings the baseline does
-not carry. The failure named
-`test_authenticate_refuses_a_token_it_does_not_hold: 1` under "These are unanchored and
-not carried, so they are new".
+reddened too, naming real blocks that this branch, and nothing else, was anchoring.
+
+**How many real blocks: five, enumerated rather than counted.** In two modules.
+`computed_carried_total()` moves from 107 to **112** under this mutation. Each of these
+node ids names a test whose block loses its only anchor when the branch goes, and each
+of them stays green under the mutant, which is why all five are in `survives` above:
+
+- `tests/test_accounts.py::test_authenticate_refuses_a_token_it_does_not_hold`
+- `tests/test_split.py::test_a_large_exact_mismatch_carries_the_formatters_comma_groups`
+- `tests/test_split.py::test_a_negative_total_is_refused_with_a_leading_minus`
+- `tests/test_split.py::test_a_total_above_the_maximum_is_refused_in_the_money`
+- `tests/test_split.py::test_a_zero_total_is_refused_in_the_money_and_not_in_cents`
+
+> **Corrected 2026-09-08, after QA failed PR #84 on this paragraph.** It previously read
+> "two live blocks in the suite are anchored by an equality and nothing else", and then
+> named exactly one of the five, as `test_authenticate_refuses_a_token_it_does_not_hold:
+> 1` rather than as a node id. **Two was the module count, not the block count**, and the
+> unit of this whole task is the block. Measured two ways that agree: applying this
+> mutation and running `tests/test_suite_integrity.py` unfiltered prints
+> `CARRIED_TOTAL = 112`, and `computed_carried_total()` returns 112 against 107 on the
+> unmutated tree.
+>
+> **Why the check added this week did not catch it, which is the part worth keeping.**
+> `test_every_node_id_a_record_names_is_one_it_lists` polices node ids in prose. A claim
+> phrased as `name: count`, or as a bare number with no name at all, holds no `::`, so
+> the checker cannot see it. The record stayed green while carrying a count attached to
+> the wrong subject. Prose form was the escape route around the mechanism, and it was
+> sitting inside a note telling the next reader not to re-measure.
+>
+> **So yes: a claim of this kind has to name node ids, and this record now does.** That
+> is not a style preference. Naming them puts them under the existing check, which then
+> forces each id into `kills` or `survives`, which forces the writer to say of each
+> whether it reddened or stayed green. That classification is what would have exposed
+> the substitution, because five ids cannot be written down as two. An enumeration is
+> the checkable form of a count.
+>
+> **The residual, stated because it is real.** Nothing forces a claim to be *phrased*
+> with node ids in the first place. A later record can still write "two live blocks" and
+> stay green, because no check can tell a prose number from a correct one. What has
+> changed is that the format says to enumerate and that an enumeration is self-checking
+> where a count is not. That is a convention which a check polices once it is followed,
+> not a mechanism that forces it to be followed, and it must not be described as the
+> second.
 
 **The named surviving control.**
 `tests/test_suite_integrity.py::test_the_pin_check_still_bites` stayed green. That is the
