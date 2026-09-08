@@ -598,8 +598,19 @@ Run whole and unfiltered on the branch: `tests/test_add_screen.py` **`28 passed`
 `tests/test_shell_behaviour.py` **`188 passed`**, `tests/test_suite_integrity.py`
 **`58 passed`**, `tests/test_web_shell.py` and `tests/test_feed_screen.py` green. **The
 whole suite was deliberately not run locally**, per the standing instruction that it exceeds
-the agent watchdog under contention; CI is the full-suite oracle and both legs are read on
+the agent watchdog under contention; CI is the full-suite oracle and both legs were read on
 the head SHA.
+
+**The full-suite figure, from CI on `d678519`** (run `34190615082`, whose `headSha` was
+checked against `git rev-parse HEAD` rather than assumed), both legs green:
+
+* `ubuntu-latest`: `2676 passed in 141.63s`
+* `windows-latest`: `2676 passed in 265.53s`
+
+`0 failed, 0 skipped, 0 xfailed` on both, and 2676 is master's 2673 plus this task's three,
+which closes criterion 23's arithmetic against a measured number rather than a predicted
+one. This paragraph was added in the commit after `d678519`, so it quotes the run on its
+parent; the run on the head that carries it changes only a document under `plans/`.
 
 `MUTANT_I` costs **1.20s**, measured with
 `uv run python -m pytest tests/test_shell_behaviour.py -k mutant_i --durations=3`. The
