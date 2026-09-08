@@ -665,7 +665,7 @@
            This notice sits behind that curtain, where nobody sees it. */
         feedState('error');
       }
-    ).then(done, done);
+    ).finally(done);
   }
 
   /* Re-issues both requests and returns to the in-flight state while they run. */
