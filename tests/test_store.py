@@ -665,8 +665,11 @@ def test_a_total_above_the_bound_is_rejected_naming_the_field(
     )
     with pytest.raises(AmountTooLarge) as caught:
         store.append_expense(over)
-    assert "total_cents" in str(caught.value)
-    assert str(MAX_CENTS) in str(caught.value)
+    assert str(caught.value) == (
+        "expense total_cents is above MAX_CENTS, the largest value the cents column "
+        "can hold"
+    )
+    assert str(MAX_CENTS) not in str(caught.value)
     assert count(store, "expense_events") == 0
     assert count(store, "expense_allocations") == 0
 
@@ -681,8 +684,11 @@ def test_an_allocation_above_the_bound_is_rejected_naming_the_field(
     )
     with pytest.raises(AmountTooLarge) as caught:
         store.append_expense(over)
-    assert "cents" in str(caught.value)
-    assert str(MAX_CENTS) in str(caught.value)
+    assert str(caught.value) == (
+        "allocation cents is above MAX_CENTS, the largest value the cents column can "
+        "hold"
+    )
+    assert str(MAX_CENTS) not in str(caught.value)
     assert count(store, "expense_events") == 0
 
 
@@ -1033,8 +1039,11 @@ def test_a_settlement_amount_above_the_bound_is_rejected(store: EventStore) -> N
     a_flat(store)
     with pytest.raises(AmountTooLarge) as caught:
         store.append_settlement(a_settlement(amount_cents=MAX_CENTS + 1))
-    assert "amount_cents" in str(caught.value)
-    assert str(MAX_CENTS) in str(caught.value)
+    assert str(caught.value) == (
+        "settlement amount_cents is above MAX_CENTS, the largest value the cents "
+        "column can hold"
+    )
+    assert str(MAX_CENTS) not in str(caught.value)
     assert count(store, "settlement_events") == 0
 
 
