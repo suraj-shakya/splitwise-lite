@@ -20,6 +20,18 @@ second record also ran the whole of `tests/test_money.py`, **181 tests**. Every 
 `PYTHONDONTWRITEBYTECODE=1` and reverted with `git checkout -- <file>` before the next
 one.
 
+**What `survives` holds, and how to tell an observed green from an inferred one.** A
+`survives` entry may name a test that was **not** among those 86, because a mutation's
+useful controls are not always in the module the run covers. Every entry in every
+`survives` in this file was observed green **in a named run**, and each record says which
+run that was: the 86-test module run, or a second run of named node ids under the same
+mutant, quoted with its own count. Nothing here is green by inference from the mutation's
+shape. Where a future record cannot run an entry, it says so in prose beside that entry
+rather than leaving a reader to assume, because `REQUIRED_KEYS` is an exact set and this
+distinction cannot be carried by a new JSON key. Written down rather than left implicit
+because seven audit slices will copy this file as their template, and a distinction the
+format cannot express would otherwise be lost seven times.
+
 **On the anchors and this tree's line endings.** The working tree is CRLF on disk, and
 the first anchor below spans three lines. It still matched exactly once, because the
 recipe reads the file through `read_text`, which translates newlines, and writes back
@@ -91,6 +103,15 @@ of them stays green under the mutant, which is why all five are in `survives` ab
 - `tests/test_split.py::test_a_total_above_the_maximum_is_refused_in_the_money`
 - `tests/test_split.py::test_a_zero_total_is_refused_in_the_money_and_not_in_cents`
 
+**Which run each `survives` entry here was observed in**, since this record's `survives`
+draws on two. The two `tests/test_suite_integrity.py` entries are among the 86 of the
+module run above, so their green is part of the `3 failed, 83 passed` already quoted. The
+five listed immediately above are in other modules and so were **not** in that run; they
+were run separately under the same mutant, selected by those five node ids, and printed
+**15 passed**. Fifteen and not five because those five ids collect fifteen cases between
+them, the ids being selectors rather than cases. Both groups are observations. No entry
+in this record is green by inference.
+
 > **Corrected 2026-09-08, after QA failed PR #84 on this paragraph.** It previously read
 > "two live blocks in the suite are anchored by an equality and nothing else", and then
 > named exactly one of the five, as `test_authenticate_refuses_a_token_it_does_not_hold:
@@ -121,6 +142,18 @@ of them stays green under the mutant, which is why all five are in `survives` ab
 > where a count is not. That is a convention which a check polices once it is followed,
 > not a mechanism that forces it to be followed, and it must not be described as the
 > second.
+>
+> **Observed 2026-09-08, unplanned, and worth more than the synthetic beside it.** While
+> PR #84 was being verified, a QA probe deleted
+> `tests/test_split.py::test_a_negative_total_is_refused_with_a_leading_minus` from this
+> record's `survives` in a shared working tree, and then reverted it with
+> `git checkout --`, which is why it read as an unexplained edit to everyone else looking
+> at the tree. While it was applied,
+> `test_every_node_id_a_record_names_is_one_it_lists` reddened at once and named both the
+> section and that id, because the prose above enumerates five while the lists then held
+> four. So this defect class has now been caught on a real drift and not only on a
+> synthetic, and the enumeration is what made it catchable: the same drift against the
+> `name: count` phrasing this note retracts would have been silent.
 
 **The named surviving control.**
 `tests/test_suite_integrity.py::test_the_pin_check_still_bites` stayed green. That is the

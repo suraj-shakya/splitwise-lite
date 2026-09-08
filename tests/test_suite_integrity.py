@@ -14,7 +14,8 @@ else's guard raised. The unanchored-block check, GitHub issue #70, states the co
 for the commoner form: a ``pytest.raises`` block that reads the exception's message has
 to carry an anchor somewhere, because ``"x" in str(exc.value)`` is the same operation
 ``match="x"`` performs and there were sixteen pins against a hundred-odd of those. It
-carries the blocks that were already loose in a declared baseline that only shrinks, so
+carries the blocks that were already loose in a declared baseline, which is checked in
+both directions but which shrinks only by convention and not by any check, so
 **it makes no existing assertion able to fail**; that is the audit, issue #70's slices
 70b to 70h, and reading this module's green run as covering them is the misreading it is
 written to prevent. A further failure, GitHub issue #58, gets the last refusal here and
