@@ -1,6 +1,6 @@
 # Mutations behind the block-anchor check (issue #70, task 70a)
 
-Four mutations, all run and all killed, against the checks this task adds: that a
+Five mutations, all run and all killed, against the checks this task adds: that a
 `pytest.raises` block which reads the exception's message carries an anchor, and that the
 blocks which were already loose are carried in a baseline the suite checks in both
 directions.
@@ -21,10 +21,10 @@ second record also ran the whole of `tests/test_money.py`, **181 tests**. Every 
 one.
 
 **What `survives` holds, and how to tell an observed green from an inferred one.** A
-`survives` entry may name a test that was **not** among those 86, because a mutation's
+`survives` entry may name a test that was **not** among those 89, because a mutation's
 useful controls are not always in the module the run covers. Every entry in every
 `survives` in this file was observed green **in a named run**, and each record says which
-run that was: the 86-test module run, or a second run of named node ids under the same
+run that was: the 89-test module run, or a second run of named node ids under the same
 mutant, quoted with its own count. Nothing here is green by inference from the mutation's
 shape. Where a future record cannot run an entry, it says so in prose beside that entry
 rather than leaving a reader to assume, because `REQUIRED_KEYS` is an exact set and this
@@ -126,7 +126,7 @@ of them stays green under the mutant, which is why all five are in `survives` ab
 - `tests/test_split.py::test_a_zero_total_is_refused_in_the_money_and_not_in_cents`
 
 **Which run each `survives` entry here was observed in**, since this record's `survives`
-draws on two. The two `tests/test_suite_integrity.py` entries are among the 86 of the
+draws on two. The two `tests/test_suite_integrity.py` entries are among the 89 of the
 module run above, so their green is part of the `3 failed, 83 passed` already quoted. The
 five listed immediately above are in other modules and so were **not** in that run; they
 were run separately under the same mutant, selected by those five node ids, and printed
@@ -333,3 +333,63 @@ returning a finding for everything would look identical from this run.
 **Verdict.** Killed. The comment that made the claim now points at this mutation, and the
 four entries that resolve to nothing but themselves are named as such rather than left
 under a claim that was true of none of them.
+
+## Splitting the taught citation form from the wrong end
+
+```json
+{
+  "id": "m5-the-taught-form-split-from-the-wrong-end",
+  "file": "tests/test_suite_integrity.py",
+  "find": "    module, _, bare = identifier.partition(\"::\")",
+  "replace": "    module, _, bare = identifier.rpartition(\"::\")",
+  "kills": [
+    "tests/test_suite_integrity.py::test_the_node_id_check_still_bites"
+  ],
+  "survives": [
+    "tests/test_suite_integrity.py::test_the_stray_node_id_message_says_what_happened",
+    "tests/test_suite_integrity.py::test_every_node_id_a_record_names_is_one_it_lists"
+  ],
+  "result": "killed"
+}
+```
+
+**What the run printed:** `1 failed, 88 passed`.
+
+**Which finding this is evidence for.** The reviewer of PR #84 observed that the
+followability assertion re-implemented `partition("::")` instead of reading
+`stray_node_id_message`, so it pinned the formula rather than the message, and predicted
+that swapping the derivation to `rpartition` would leave both tests green while the
+printed instruction stopped clearing for a class-nested id. This is that prediction run,
+and it is recorded so the prediction becomes a standing test rather than a review note.
+
+**What the mutation does to the instruction**, captured from the run rather than reasoned
+about. The message splits the id at the **last** `::` instead of the first, so for a
+class-nested id the class lands on the module side of the word "in" and the bare name is
+only the method. The form it then offers still contains `.py::`, so a citer who follows
+the instruction exactly is still refused. Under the unmutated tree the same id yields
+`TestThing::test_y` in `tests/test_x.py`, which clears. The guidance became unfollowable
+while remaining plausible, which is the shape of defect hardest to see by reading.
+
+Neither form is written out here as a literal, and that is not squeamishness: a
+class-nested node id spelled in full is a `.py::` token, so quoting the broken output
+would make this section name a synthetic test it does not list, and the check would
+refuse this record. It did refuse it, on the first draft of this section. The convention
+this file documents applies to the file documenting it.
+
+**The reviewer was right that the old assertion would not have caught it.** Measured
+under this mutation: the old assertion recomputed `partition` locally and therefore
+checked `TestThing::test_y in tests/test_x.py`, which does clear the check, so it
+**passed**. Only an assertion that reads the message can see this.
+
+**The named surviving controls.**
+`tests/test_suite_integrity.py::test_the_stray_node_id_message_says_what_happened` stayed
+green, and that is the control that matters rather than an arbitrary passing test: it
+pins elements of the message text, including the exact edit for a simple id, and a simple
+id splits the same from either end. Pinning what a message says is therefore not enough
+on its own; something has to follow what it says.
+`tests/test_suite_integrity.py::test_every_node_id_a_record_names_is_one_it_lists` also
+stayed green, which says the mutation reached the guidance and not the detector.
+
+**Verdict.** Killed, and it is the third instance in this repo of a check about a thing
+that never opens that thing. This one was inside the test written to prove the guidance
+was followable, which is why it is worth a record rather than a line in a pull request.
