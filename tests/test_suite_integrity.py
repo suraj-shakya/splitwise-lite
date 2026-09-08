@@ -2350,7 +2350,7 @@ def test_every_recorded_anchor_matches_once_or_is_carried() -> None:
 
 
 def section_holding_record(text: str, identifier: str) -> tuple[str, str] | None:
-    """The ``(heading, section)`` of the ``##`` section whose record has ``identifier``."""
+    """The ``##`` section whose record carries ``identifier``, as heading and text."""
     for heading, section in record_sections(text):
         for block in JSON_BLOCK.findall(section):
             try:
