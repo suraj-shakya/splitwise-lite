@@ -49,6 +49,21 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
   offline, on `localhost` or `127.0.0.1` only. The API is never cached, so offline the
   app opens and then reports that it cannot reach the server, and an expense cannot be
   recorded until it can.
+- **The incompleteness signal**: how old the ledger is, and who has entered nothing
+  into it lately. The feed carries the age alone; the balances screen carries the age and
+  the list of quiet members, because who has entered nothing is a caveat on figures and
+  the feed presents none. The age is whole elapsed 24-hour periods since the newest
+  `ExpenseEvent`, floored, computed in UTC with no timezone chosen anywhere, and clamped
+  at zero; settlements are excluded, so settling up does not reset the clock. A member is
+  quiet only if they have recorded no expense in the window **and** their member row has
+  existed for the whole of it, so a group set up yesterday names nobody. Membership of
+  that list is by `created_by`, never `payer_id`: a flatmate who pays for everything and
+  never opens the app is listed, which is correct for the risk being mitigated. A ledger
+  with no expense at all is its own state, `never`, with no number and nobody named,
+  rather than a confident zero. Derived on every read, stored nowhere, and it **moves no
+  figure**. It is not a notification and nobody is told, consistent with the clause
+  above. The threshold is seven days, one `Final` in `staleness.py`, sent on the wire so
+  no digit for it lives in `app/`.
 
 ## What does not exist yet
 
@@ -59,9 +74,6 @@ and not recorded there turns the suite red, and so does editing this file and le
 capability and is recorded entry by entry in that literal. Read your entry's reason there
 before trusting the suite to catch you; none of it moves the bullet for you.
 
-- **The incompleteness signal** (backlog task 16): nothing says how stale the ledger is
-  or who has logged nothing. The balances screen's standing note, that the figures come
-  only from what was recorded, is the whole of what the app says about it.
 - **Expense correction** (backlog task 17): an expense cannot be edited or voided from
   any screen.
 

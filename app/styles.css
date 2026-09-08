@@ -225,6 +225,23 @@ body {
   outline-offset: 2px;
 }
 
+/* Task 16. The one sentence this screen says about what it does not know. It gets the
+   same box as .feed-status and .feed-panel rather than a colour of its own, so it
+   reads as a standing notice and not as a failure: nothing has gone wrong, the ledger
+   is simply older than it should be. 16px like everything else here, and in the body
+   colour rather than --muted, because a caveat set in small grey type is small print
+   and the spec asks for a signal somebody notices. Whether it is actually noticed is a
+   layout question nothing in this repo has ever answered in a browser: issue #80. */
+.feed-stale {
+  margin: 0 0 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
+}
+
 .feed-currency {
   margin: 0 0 12px;
   font-size: 16px;

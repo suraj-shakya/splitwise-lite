@@ -1394,6 +1394,36 @@ WORKS_TODAY = {
         ("app.js", "navigator.serviceWorker.register('sw.js')"),
         ("sw.js", "var SHELL = ["),
     ),
+    # Backlog task 16, GitHub issue #17. What actually happened, recorded here in the
+    # shape the entries for tasks 13, 14 and 15 carry, because this one is the first to
+    # spend a SILENCE rather than an INTERLOCK or a PROMPT:
+    #
+    #   The entry was SILENCE and the silence held. Nothing in this suite fired. No name
+    #   arrived on window.SplitwiseApi, so test_the_api_client_offers_exactly_the_named_calls
+    #   stayed green with both documents stale, exactly as the reason predicted, and the
+    #   bullets were moved by hand. The verdict was right.
+    #
+    #   **Correction, 2026-09-08, by the engineer who built it.** Its reason said
+    #   "Staleness can be computed on the client from the feed payload the app already
+    #   fetches". That clause is withdrawn: it is false and always was. Two lines of
+    #   tests/test_feed_screen.py::test_app_js_never_reads_the_client_clock ban `Date.now(`
+    #   and `new Date()` from the whole of app/app.js, on the stated grounds that relative
+    #   time is task 16's vocabulary, so the client cannot know what time it is and cannot
+    #   compute this. Staleness is computed in src/splitwise_lite/staleness.py from the
+    #   instant web.py::_now() reads, and rides on the two payloads the app already asks
+    #   for. The conclusion the false clause was supporting still stands, and stands for a
+    #   different reason: the build added no API method and no new call either, so neither
+    #   API_SURFACE nor an absent-substring rule would have noticed it land. A reason can
+    #   be wrong while the verdict it supports is right, and quoting the withdrawn clause
+    #   here rather than deleting it is what lets a reader who meets it elsewhere see that
+    #   it was withdrawn.
+    #
+    # The evidence below is machinery rather than prose: the block the quiet list is drawn
+    # in, and the key the screen reads to decide what to draw at all.
+    "The incompleteness signal": (
+        ("index.html", 'id="balances-quiet-block"'),
+        ("app.js", "staleness"),
+    ),
 }
 
 # Capability key -> the `plans/backlog.md` task both documents cite, the (file,
@@ -1442,22 +1472,20 @@ WORKS_TODAY = {
 # below that name that test describe the likely build, not a guarantee, and each says
 # so. Nothing here claims a capability cannot arrive without a new name.
 #
-# Both measurements in this section were taken while the set held fourteen keys. Task 14
-# has since added `addSettlement` and it holds fifteen. The measurements are about what
-# the parse notices, not about the number, so they stand as taken.
+# Both measurements in this section were taken while the set held fourteen keys.
+#
+# **Correction, 2026-09-08.** The sentence that followed used to read "Task 14 has since
+# added `addSettlement` and it holds fifteen." It holds **sixteen**: task 14 added
+# `addSettlement` and task 15 added `decideSettlement`, and the count was stale through
+# both. Measured on 2026-09-07 by running this file's own parse over app/api.js, which
+# returned sixteen keys equal to API_SURFACE exactly. The number was also given as
+# fourteen in one brief and fifteen here, which is three figures for one literal and is
+# the whole argument for measuring rather than quoting.
+#
+# The substantive point is unchanged and is the reason the correction is only to the
+# number: the measurements above are about what the parse notices, not about how many
+# keys there are, so they stand exactly as taken.
 NOT_YET = {
-    "The incompleteness signal": {
-        "task": 16,
-        "absent": (),
-        "reason": (
-            "SILENCE, and this is the honest end of the scale. Nothing in this suite "
-            "would catch this one, and pretending otherwise "
-            "would be worse than saying so. Staleness can be computed on the client "
-            "from the feed payload the app already fetches, adding no API method and "
-            "no new call, so neither API_SURFACE nor an absent-substring rule would "
-            "notice it land. Whoever builds backlog task 16 moves this entry by hand."
-        ),
-    },
     "Expense correction": {
         "task": 17,
         "absent": (),
@@ -1699,6 +1727,15 @@ BALANCES_IDS = {
     "balances-decision",
     "balances-rejected-block",
     "balances-rejected",
+    # Task 16. Two standalone sentences, at most one of them ever shown, and one
+    # wrapper over a note and a list on task 14's terms. The two spans are where the
+    # only numbers on this screen that are not amounts are written.
+    "balances-stale",
+    "balances-stale-days",
+    "balances-never",
+    "balances-quiet-block",
+    "balances-quiet-days",
+    "balances-quiet",
 }
 
 # Every fixed sentence the screen can show lives in the markup, so a Python test can
@@ -2344,3 +2381,176 @@ def test_the_two_additions_are_the_only_thing_task_fifteen_put_in_the_document()
         "did not confirm them",
     ):
         assert owned not in outside, owned
+
+
+# --- Task 16: the incompleteness signal, the markup -------------------------
+#
+# Appended as one block. Every sentence below is fixed prose in the markup and the code
+# only toggles `hidden` and writes one number or one name, which is the rule
+# app/index.html states: prose in markup is prose a Python test can pin exactly and a
+# reviewer can read in a diff.
+
+BALANCES_STALE = (
+    "Nothing new has been recorded for "
+    '<span id="balances-stale-days"></span> days. These figures may be missing recent '
+    "spending."
+)
+
+BALANCES_NEVER = (
+    "Nothing has been recorded in this group yet, so there is nothing behind these "
+    "figures."
+)
+
+BALANCES_QUIET_NOTE = (
+    "Who entered expenses, not who paid for them: somebody named here may have paid "
+    "for things that other people entered. No expense entered in the last "
+    '<span id="balances-quiet-days"></span> days by:'
+)
+
+FEED_STALE = (
+    "Nothing new has been recorded here for "
+    '<span id="feed-stale-days"></span> days. The app only knows what people enter.'
+)
+
+# The six ids task 16 adds to the two screens, which is what criterion 33 reads.
+STALENESS_IDS = (
+    "balances-stale",
+    "balances-stale-days",
+    "balances-never",
+    "balances-quiet-block",
+    "balances-quiet-days",
+    "balances-quiet",
+    "feed-stale",
+    "feed-stale-days",
+)
+
+
+def test_the_two_age_sentences_ship_hidden_with_their_number_left_empty() -> None:
+    # Standalone <p hidden> elements, like balances-drill-hint, because each is
+    # self-contained and at most one of the two is ever shown. The span is empty in the
+    # committed document: every number on screen comes from the payload.
+    section = balances_section()
+    doc = balances_markup()
+    for element_id, sentence in (
+        ("balances-stale", BALANCES_STALE),
+        ("balances-never", BALANCES_NEVER),
+    ):
+        note = doc.find("p", id=element_id)[0]
+        assert "hidden" in note, element_id
+        assert note["class"] == "balances-note", element_id
+        assert inner(section, element_id, "p") == sentence, element_id
+    assert inner(section, "balances-stale-days", "span") == ""
+
+
+def test_the_quiet_block_is_one_wrapper_over_a_note_and_an_empty_list() -> None:
+    # One wrapper carrying one hidden flag, for the reason task 14 gave: a bare intro
+    # over an empty list on an ordinary day is noise. The list ships empty like every
+    # other list on this screen, because every row comes from the API or there is no
+    # row.
+    section = balances_section()
+    block = re.search(
+        r'<div\b[^>]*\bid="balances-quiet-block"[^>]*>(.*?)</div>', section, re.S
+    )
+    assert block is not None
+    assert "hidden" in balances_markup().find("div", id="balances-quiet-block")[0]
+    inside = block.group(1)
+    note = re.search(r'<p class="balances-note">(.*?)</p>', inside, re.S)
+    assert note is not None
+    assert " ".join(note.group(1).split()) == BALANCES_QUIET_NOTE
+    assert '<ul class="balances-list" id="balances-quiet"></ul>' in " ".join(
+        inside.split()
+    )
+    # No heading of its own, so the four headings this screen carries stay four and
+    # test_the_four_lists_ship_empty_under_headings_in_the_stated_order is untouched.
+    assert "<h2" not in inside
+
+
+def test_the_signal_sits_between_the_derived_note_and_everything_it_qualifies() -> None:
+    # Immediately after the note saying the figures are derived, because these three
+    # are the rest of that sentence: what the figures are worked out from, and what is
+    # missing from them. Inserted between balances-derived and balances-decision, which
+    # leaves every link of task 15's chain intact.
+    section = balances_section()
+    assert (
+        section.index('id="balances-derived"')
+        < section.index('id="balances-stale"')
+        < section.index('id="balances-never"')
+        < section.index('id="balances-quiet-block"')
+        < section.index('id="balances-decision"')
+        < section.index("Net positions")
+    )
+
+
+def test_no_new_sentence_on_either_screen_carries_a_digit() -> None:
+    # Criterion 33. Every number on screen comes from the payload, so the threshold
+    # cannot be stated in two places that disagree. Read over the new elements' own
+    # text rather than over the whole document, so this fails for the reason it names.
+    doc = Document(markup())
+    source = markup()
+    for element_id in STALENESS_IDS:
+        found = [attrs for _, attrs in doc.tags if attrs.get("id") == element_id]
+        assert len(found) == 1, element_id
+    for element_id, tag in (
+        ("balances-stale", "p"),
+        ("balances-never", "p"),
+        ("balances-quiet-block", "div"),
+        ("feed-stale", "p"),
+    ):
+        text = re.sub(r"<[^>]*>", " ", inner(source, element_id, tag))
+        assert re.search(r"\d", text) is None, (element_id, text)
+    # And the threshold itself appears nowhere under app/, in any file, so there is one
+    # copy of it and it is in src/.
+    for filename in ("index.html", "app.js", "styles.css"):
+        assert "QUIET_AFTER_DAYS" not in (APP / filename).read_text(encoding="utf-8")
+
+
+def test_the_feed_carries_one_age_sentence_above_the_list_it_qualifies() -> None:
+    source = markup()
+    feed = re.search(
+        r'<section\b[^>]*\bid="screen-feed".*?</section>', source, re.S
+    )
+    assert feed is not None
+    section = feed.group(0)
+    assert inner(section, "feed-stale", "p") == FEED_STALE
+    assert 'id="feed-stale" hidden' in section
+    assert (
+        section.index('id="feed-stale"')
+        < section.index('id="feed-currency"')
+        < section.index('id="feed-list"')
+    )
+    # One element, and the balances sentences are not in the feed section.
+    assert section.count('id="feed-stale"') == 1
+    for owned in ("balances-stale", "balances-quiet", "may be missing recent spending"):
+        assert owned not in section, owned
+
+
+def test_the_balances_sentences_are_the_only_thing_task_sixteen_put_outside_the_feed() -> None:
+    # Every other section of the document is untouched: the feed gains one element and
+    # the balances screen gains three, and nothing else in index.html changes.
+    source = markup()
+    outside = source.replace(balances_section(), "")
+    for owned in (
+        "balances-stale",
+        "balances-never",
+        "balances-quiet",
+        "may be missing recent spending",
+        "nothing behind these figures",
+        "No expense entered in the last",
+    ):
+        assert owned not in outside, owned
+
+
+def test_the_feed_sentence_reuses_no_balances_class_and_gains_one_rule() -> None:
+    # Criterion 31. The balances sentences reuse .balances-note and need no rule; the
+    # feed one is a new class and gets one, in the feed block of styles.css where every
+    # selector is namespaced feed- or expense-, never in the balances block, whose own
+    # test refuses a selector that is not prefixed .balances-.
+    css = styles()
+    assert ".feed-stale" in css
+    assert ".feed-stale" not in balances_styles()
+    # And it introduces neither of the two things the balances block is held to.
+    block = without_comments(styles())
+    rule = re.search(r"\.feed-stale\s*\{([^}]*)\}", block)
+    assert rule is not None
+    assert "white-space: nowrap" not in rule.group(1)
+    assert ":empty" not in rule.group(1)
