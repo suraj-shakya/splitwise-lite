@@ -24,11 +24,18 @@ attached to the wrong mutation is the defect this discipline exists to prevent.
 
 The two modules, on the branch with every mutation reverted:
 
-* `tests/test_staleness.py`: **59 tests**, the domain checks this task adds. It was 58
-  when mutations 1 to 4 were measured; the 59th is the positive control added with
-  the repair recorded under mutation 5, and the four figures above it are quoted as
-  they were taken.
-* `tests/test_web_api.py`: **490 tests**, of which 15 are this task's endpoint checks.
+* `tests/test_staleness.py`: **64 tests** today, of which 15 are this task's own new
+  checks beyond the plain domain figures. It has moved twice while this file was being
+  written, and every figure below is quoted as it was taken rather than restated:
+  **58** when mutations 1 to 4 were measured, **59** after the positive control added
+  with the repair under mutation 5, and **64** after the control repair recorded in the
+  last section, which turned one test into five parametrised cases and added one more.
+* `tests/test_web_api.py`: **493 tests**, of which 15 are this task's endpoint checks.
+  The figures quoted against it under mutations 1 to 5 were taken when it held **490**,
+  before this branch merged `bea0da7`, which brought three. The same disclosure the
+  domain module gets, for the same reason: the counts moved for a reason unrelated to
+  any mutation, and a reader re-running this file today gets 493 and should not have to
+  wonder why. QA re-ran all five against 493 and every verdict was unchanged.
 
 **The standing finding, stated once here because it is true of four of the five
 mutations below.** The endpoint module survives almost everything. That is not a gap in
@@ -238,7 +245,10 @@ plus the result.
 ```
 
 Measured through the harness, which reports per scenario rather than per test: of the
-**158 scenarios**, exactly **1 fails**, and it is the `never` one. The failure names the
+**159 scenarios**, exactly **1 fails**, and it is the `never` one. That figure was
+**158** when first taken, before this branch merged `bea0da7`, which added one scenario
+of its own through PR #81; the count of failures is unchanged at exactly one, and QA
+re-measured it live at 159. The failure names the
 word `null` on screen, which is the whole point: a ledger known to hold nothing is
 rendered with the words for a ledger of known age, and the number in that sentence is
 `String(null)`. The two named survivors are the repo's standing control and this
@@ -258,3 +268,66 @@ this working tree is CRLF and the anchor spelled `\n`. `MUTANT_F` already carrie
 scar in its own comment. The two arms of the toggler in `app/app.js` are therefore
 ordered stale-then-never, so that one line carries the whole mutation and the anchor
 cannot rot on a checkout whose line endings differ.
+
+
+## The control on the clock ban: the second survivor that became a killer
+
+Not a mutation of `src/` but of a guard, and it belongs here for the same reason
+mutation 5 does: a check was shown incapable of failing, repaired, and shown to fail.
+QA found this one; I found mutation 5. **They are the same copying error, one test
+apart**, and that is the useful thing about the pair. Both copied a two-part precedent
+from `tests/test_balances.py` in name and kept only the half that cannot bite:
+mutation 5 kept the identity assertion and dropped the runtime-name check, and this one
+kept the shape of a positive control and dropped the part that reads the module.
+
+The mutation is the deletion QA measured, expressed so it can be re-run:
+
+```json
+{
+  "id": "clock-ban-loses-a-spelling",
+  "file": "tests/test_staleness.py",
+  "find": "CLOCK_READS = (\"now(\", \"utcnow(\", \"today(\", \"time.time\", \"monotonic\")",
+  "replace": "CLOCK_READS = (\"now(\", \"today(\", \"time.time\", \"monotonic\")",
+  "kills": ["tests/test_staleness.py::test_every_spelling_in_the_ban_is_measured_for_what_it_alone_catches"],
+  "survives": ["tests/test_staleness.py::test_the_module_never_reads_the_clock"],
+  "result": "killed"
+}
+```
+
+**Before, measured by QA on `24e39b2`:** deleting `"utcnow("` from the real ban left
+`tests/test_staleness.py` at **`6 passed, 52 deselected`** under their filter, green.
+The old control never called `source()`, so it never read `staleness.py`, and it
+carried its own second copy of the ban list, so it asserted five hardcoded strings
+against five other hardcoded strings. The only effect of the deletion was one
+parametrised case silently vanishing, which is how this repository once lost four tests
+unnoticed.
+
+**After, measured here, whole module and unfiltered, deleting each spelling in turn:**
+
+| spelling deleted | `tests/test_staleness.py` (64) | what fails |
+|---|---|---|
+| `"now("` | `2 failed, 61 passed` | the smuggled `datetime.now(` case, and the coverage test |
+| `"utcnow("` | `1 failed, 62 passed` | the coverage test |
+| `"today("` | `2 failed, 61 passed` | the smuggled `date.today()` case, and the coverage test |
+| `"time.time"` | `2 failed, 61 passed` | the smuggled `time.time()` case, and the coverage test |
+| `"monotonic"` | `2 failed, 61 passed` | the smuggled `perf.monotonic()` case, and the coverage test |
+
+Every deletion now fails. It could not before.
+
+**One row of that table is not what was expected, and the reason is a real finding
+about the ban rather than about the control.** `"utcnow("` kills only the coverage
+test, and its smuggled case still passes. Measured: **every string containing
+`utcnow(` also contains `now(`**, so `now(` catches `_Instant.utcnow()` on its own and
+`"utcnow("` is strictly redundant. Deleting it costs no coverage at all, which is
+exactly why a *correct* control cannot fail on that particular deletion by catching an
+escaped read: there is no escaped read to catch. The only way to make it fail that way
+would be to pin the list against a copy of itself, which is the defect being removed.
+
+So the redundancy is measured and stated instead, by
+`test_every_spelling_in_the_ban_is_measured_for_what_it_alone_catches`, which asserts
+which four spellings are load-bearing and that `"utcnow("` alone catches nothing, and
+then refuses its removal with a message saying that criterion 8 names all five and
+taking one out is a decision to record rather than a tidy. That is what keeps the
+deletion loud without duplicating the list. The same redundancy sits in
+`tests/test_store.py`'s list, which this one was modelled on, and is not this task's to
+fix.

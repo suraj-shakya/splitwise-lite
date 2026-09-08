@@ -2402,7 +2402,8 @@ BALANCES_NEVER = (
 )
 
 BALANCES_QUIET_NOTE = (
-    "No expense entered in the last "
+    "Who entered expenses, not who paid for them: somebody named here may have paid "
+    "for things that other people entered. No expense entered in the last "
     '<span id="balances-quiet-days"></span> days by:'
 )
 

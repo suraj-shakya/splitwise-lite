@@ -468,11 +468,26 @@ root, every path is relative to it, and every path in a message or a test id is 
     <p class="balances-note" id="balances-never" hidden>Nothing has been recorded in this group
       yet, so there is nothing behind these figures.</p>
     <div id="balances-quiet-block" hidden>
-      <p class="balances-note">No expense entered in the last
-        <span id="balances-quiet-days"></span> days by:</p>
+      <p class="balances-note">Who entered expenses, not who paid for them: somebody
+        named here may have paid for things that other people entered. No expense
+        entered in the last <span id="balances-quiet-days"></span> days by:</p>
       <ul class="balances-list" id="balances-quiet"></ul>
     </div>
     ```
+
+    > **Corrected 2026-09-08, after the first review of PR #83.** The note used to be
+    > the single sentence "No expense entered in the last N days by:". The reviewer
+    > observed that the whole distinction rested on the one word "entered", and that
+    > the sentence explaining it, `app/index.html`'s comment that this "never implies
+    > anybody owes anybody data, because who is on this list is decided by who entered
+    > an expense and not by who paid for one", is read by nobody who uses the app. The
+    > consequence is real and is stated in `ledger_staleness`'s own docstring: a
+    > flatmate who pays for everything and never opens the app is named here. It is the
+    > one place where a feature built to be less confident could still be confidently
+    > wrong about a person, so the clause is now on screen. One sentence added to the
+    > existing note: no new element, no new id, the wrapper still carries the one
+    > `hidden` flag, and no digit. The structure the rest of this criterion fixes is
+    > unchanged.
 
     Feed:
 
@@ -966,6 +981,31 @@ none of its seven banned substrings: it says "for 9 days", never "days ago", and
    `(later - earlier).days` does not. The rule the criterion states is unaffected: this module's
    check forbids clock **reads**, and an `isinstance` is not one. The comment in the file says
    that rather than repeating the prediction.
+
+### Two decisions review asked me to state rather than leave implicit
+
+**"Seven days" is now spelled in English prose in `README.md` and `CLAUDE.md`, and that
+is accepted.** `test_the_number_seven_is_written_down_in_exactly_one_place_under_src`
+walks every module's AST for the integer constant and cannot see prose, so those two are
+copies it does not guard. They are accepted for a reason that does not generalise: they
+are descriptions of the behaviour in documents whose whole job is to describe the
+behaviour, and both are already held to the shipped app by
+`test_both_documents_agree_on_what_works_today`, which fails if the capability moves. The
+duplication that matters, and which the AST test exists to prevent, is a **second
+authority**: a copy the code reads, or one a screen prints. There is none. `app/` holds
+no digit for the threshold at all, by `test_no_new_sentence_on_either_screen_carries_a_digit`,
+and every number on screen arrives in the payload. If the threshold changes, those two
+sentences go stale and no test says so; that is the accepted cost, and it is the same
+cost every other behavioural sentence in both documents already carries.
+
+**The module split is argued on its own merits first.** `staleness.py`'s header used to
+lead with "`balances.py`'s purity test would fire", which is a test shaping an
+architecture, and the next person to read it would split a module to dodge a check. The
+boundary stands without it: `balances` derives money from the log and is a pure function
+of the log alone, while this derives a caveat from the log **and an instant**, and it is
+the only module in the package that takes one. Different inputs, different output,
+different failure mode. The purity check is still named, second, and labelled as a
+consequence rather than a reason.
 
 ### What was verified, and what was not
 

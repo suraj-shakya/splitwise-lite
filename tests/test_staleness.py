@@ -65,9 +65,21 @@ NOW = datetime(2026, 9, 7, 9, 30, tzinfo=timezone.utc)
 """The instant every test below passes as ``now=``.
 
 Fixed rather than read from the clock, so each fixture's answer is written down in the
-test. A domain test can do this because the function is pure; the endpoint tests in
-tests/test_web_api.py choose their events relative to the real clock instead, because
-there the clock is web.py's and only the difference is theirs to control.
+test. A domain test can do this because the function is pure. The endpoint tests in
+tests/test_web_api.py cannot: the clock there is web.py's, and they replace ``web._now``
+for the request, which is a stub over the one seam rather than a second clock read.
+
+**Corrected 2026-09-08, after review of PR #83.** This paragraph used to end "the
+endpoint tests in tests/test_web_api.py choose their events relative to the real clock
+instead, because there the clock is web.py's and only the difference is theirs to
+control". That is withdrawn, and it mattered more than the other two corrections in
+this file because it was written as guidance and the next author would have followed
+it. It describes the style plans/tasks/16-incompleteness-signal.md's decision 1
+suggested, and that style cannot control the member ages: ``seed_group`` stamps every
+member row with ``at()``, a fixed instant, so a quiet-member assertion written against
+the real clock passes today and fails in a fortnight. Deviation 3 in that file's
+Findings records the choice and the block comment at the head of the new web-api block
+records the reason.
 """
 
 SRC = Path(inspect.getfile(staleness_module))
@@ -433,8 +445,16 @@ def test_a_now_that_is_not_a_datetime_is_a_type_error_not_a_refusal() -> None:
 
 
 def test_a_now_in_another_zone_is_read_as_the_instant_it_names() -> None:
-    # Normalised to UTC rather than rejected, exactly as events._require_utc does, so
-    # two readers in two zones handing over the same instant get the same figure.
+    # Accepted rather than rejected, so two readers in two zones handing over the same
+    # instant get the same figure. Nothing is converted: a difference between two aware
+    # instants is the same whatever zone either one spells itself in, which is why
+    # _require_instant returns the value unchanged and only the subtraction matters.
+    #
+    # **Corrected 2026-09-08, after review of PR #83.** This comment used to read
+    # "Normalised to UTC rather than rejected, exactly as events._require_utc does".
+    # The assertion below was right and that reason was backwards: _require_instant's
+    # own docstring says "Nothing is converted", and says why events._require_utc does
+    # normalise, which is that what it guards is stored. Nothing here is stored.
     ledger = [expense("e1", when=days_before(9))]
     elsewhere = NOW.astimezone(timezone(timedelta(hours=10)))
     assert elsewhere.utcoffset() == timedelta(hours=10)
@@ -491,9 +511,22 @@ def test_the_module_never_reads_the_clock(forbidden: str) -> None:
     # they name and so forbids the name `datetime` at runtime altogether, which a
     # threshold expressed as a timedelta would fire. This rule forbids clock *reads*
     # and permits clock *arithmetic*, because subtracting two instants is the whole
-    # job. As implemented the module needs no runtime `datetime` name at all:
-    # `(now - created_at).days` names no class, so the one import here is annotation
-    # only and carries the same exemption balances.py's does.
+    # job, and permitting it is what this narrower rule buys.
+    #
+    # The module does name `datetime` at runtime, in exactly one place: the isinstance
+    # in _require_instant's type guard, which criterion 7 asks for, because refusing a
+    # naive value the way events._require_utc does means naming the class. Nothing else
+    # does: no timedelta is constructed anywhere and `(now - created_at).days` names no
+    # class. An isinstance is not a clock read, so the rule above is unaffected.
+    #
+    # **Corrected 2026-09-08, after review of PR #83.** This comment used to read "As
+    # implemented the module needs no runtime `datetime` name at all: `(now -
+    # created_at).days` names no class, so the one import here is annotation only and
+    # carries the same exemption balances.py's does." That is withdrawn as false.
+    # staleness.py's own header and deviation 4 of the task Findings both state it
+    # correctly, so this file was the one place in the PR still repeating a prediction
+    # the implementation had already disproved, and two comments in one branch
+    # disagreed about one fact.
     assert forbidden not in clock_reads_in(source()), forbidden
 
 

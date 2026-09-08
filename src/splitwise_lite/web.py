@@ -1226,6 +1226,17 @@ def _staleness_view(
     ``list_expenses``, the balances read passes ``list_events``, and the answer is the
     same either way, which is what the identical-object test above holds them to.
 
+    **Whatever is passed must already be scoped to one group, and that precondition is
+    load-bearing.** Both call sites satisfy it because both read through
+    ``store.list_expenses(group.id)`` or ``store.list_events(group.id)``. A third
+    endpoint that hands over a wider list gets a wrong answer rather than an error:
+    ``ledger_staleness`` refuses a list holding **two** groups, with
+    ``MixedGroupLedger``, because that breach is detectable from inside it, but a list
+    scoped entirely to the *wrong* group satisfies the precondition as written and is
+    computed, and it makes the ledger read fresher than it is. That is the whole failure
+    this feature exists to prevent, arriving through the door it was built to guard, so
+    the group id belongs in the query and not in a filter here.
+
     The instant comes from :func:`_now`, this request's one clock read, so the figure
     is measured against the same instant that stamps anything the request writes.
     ``staleness.py`` reads no clock of its own and takes ``now`` as a required

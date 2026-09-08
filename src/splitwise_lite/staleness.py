@@ -21,6 +21,23 @@ and the same instant always give the same answer, in any order and in any proces
 **Nothing here is a notification.** This is a display signal. It moves no balance,
 appends no event, stores nothing and tells nobody: people find it by opening a screen.
 
+**Why this is its own module and not part of ``balances``.** Different inputs, a
+different output and a different failure mode. ``balances`` derives *money* from the
+log and is a pure function of the log alone; this derives a *caveat* from the log and
+an instant, and it is the only module in the package that takes an instant at all. It
+computes no money, so none of the currency, group and duplicate-id refusals that make
+``balances`` what it is apply here, and a wrong answer from this module misleads a
+reader where a wrong answer from that one misstates a debt. Those are two jobs, and
+putting them in one module would put the only clock-dependent function in the package
+inside the one file whose whole guarantee is that it depends on nothing but its
+arguments.
+
+There is a second reason, and it is deliberately second: ``balances.py``'s purity proof
+forbids the runtime name ``datetime`` there, so a threshold expressed as a ``timedelta``
+inside it would fire that check. That is worth knowing and is a bad reason to split a
+module on its own. A test finding the boundary is not a test choosing it, and anybody
+who reads only that sentence will one day split a module to dodge a check.
+
 Dependency direction: this module imports from ``events`` and from nothing else in the
 package, and nothing in the package imports it except ``web.py``, which is the only
 module that has an instant to hand it.

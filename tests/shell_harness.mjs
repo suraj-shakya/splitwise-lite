@@ -8005,7 +8005,9 @@ const SCENARIOS = [
          on that would be about this stub rather than about the screen. */
       page.is(
         flatText(quietNoteIn(page)),
-        'No expense entered in the last 7 days by:',
+        'Who entered expenses, not who paid for them: somebody named here may have ' +
+          'paid for things that other people entered. No expense entered in the last ' +
+          '7 days by:',
         'what the quiet note says'
       );
       /* No member id is ever rendered as visible text, which is the rule this screen
@@ -8128,7 +8130,9 @@ const SCENARIOS = [
       );
       page.is(
         flatText(quietNoteIn(page)),
-        'No expense entered in the last 7 days by:',
+        'Who entered expenses, not who paid for them: somebody named here may have ' +
+          'paid for things that other people entered. No expense entered in the last ' +
+          '7 days by:',
         'what the quiet note says over a list of one'
       );
       page.is(
