@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import contextlib
 import functools
 import importlib
 import re
@@ -72,13 +73,14 @@ from typing import Any, Final, NamedTuple
 import pytest
 
 from splitwise_lite import accounts, money, web
+from splitwise_lite.events import GroupId, MemberId, SettlementEvent, SettlementId
 from splitwise_lite.groups import (
     GroupDefinition,
     apply_group_definition,
     link_user_to_member,
     resolve_sole_group,
 )
-from splitwise_lite.store import open_store
+from splitwise_lite.store import DuplicateRecord, open_store
 
 REPO: Final = Path(__file__).resolve().parents[1]
 PACKAGE: Final = REPO / "src" / "splitwise_lite"
@@ -1114,7 +1116,28 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
     ),
     # --- store.py ----------------------------------------------------------
     unreachable("store.py", "_require_id", " must be a non-empty id", STORED_VALUE),
-    unreachable("store.py", "_require_name", " must not be blank", STORED_VALUE),
+    Site(
+        # Driven since 2026-09-08. This row was marked NO_REQUEST_REACHES_IT with
+        # STORED_VALUE as its reason, and the guard in tests/conftest.py reached it on
+        # its first run against real requests: STORED_VALUE enumerates ids, amounts
+        # and addresses, and a display name is none of those and arrives in the
+        # request body. The message names the field and no identifier, so nothing
+        # shipped was ever wrong; the mark was.
+        "store.py",
+        "_require_name",
+        " must not be blank",
+        Drive(
+            "POST",
+            SIGNUP,
+            "invalid_record",
+            {
+                "email": "new@example.com",
+                "display_name": "   ",
+                "password": PASSWORD,
+            },
+            who="anonymous",
+        ),
+    ),
     unreachable(
         "store.py", "_require_name", " must be at most  characters, got ", STORED_VALUE
     ),
@@ -1456,13 +1479,28 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
         "this endpoint needs a signed-in session",
         Drive("GET", "/api/members", "not_authenticated", who="anonymous"),
     ),
-    unreachable(
+    Site(
+        # Driven since 2026-09-08. Marked NO_REQUEST_REACHES_IT until the guard in
+        # tests/conftest.py reached it. The old reason was right that no single
+        # request produces the state and wrong about what the marker claims: the
+        # marker says no client can ever be shown this message, and given the state a
+        # request does produce exactly this response. The message names an address,
+        # which is the person's own typed input and not in the identifier set.
         "web.py",
         "_signup",
         "an account already exists for ",
-        "this is the losing racer's answer: the address was free when accounts.sign_up "
-        "checked it and taken by the time the row was written, which needs two "
-        "concurrent signups for one address rather than any single request",
+        Drive(
+            "POST",
+            SIGNUP,
+            "email_already_registered",
+            {
+                "email": "racer@example.com",
+                "display_name": "Racer",
+                "password": PASSWORD,
+            },
+            who="anonymous",
+            setup="racing_signup",
+        ),
     ),
     Site(
         # Spec row 3.
@@ -1684,15 +1722,26 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
             setup="decided",
         ),
     ),
-    unreachable(
+    Site(
+        # Driven since 2026-09-08. Marked NO_REQUEST_REACHES_IT until the guard in
+        # tests/conftest.py reached it. _SETTLEMENT_LOCK is honestly scoped to one
+        # process, so the two-claim state is the state this defensive raise exists
+        # for rather than a test artefact, and a mark claiming nothing reaches it is
+        # the wrong description of a guard that exists because something might. The
+        # message names nobody and no identifier.
         "web.py",
         "_decide_settlement",
         "there is more than one payment from that person waiting for an answer, so "
         "confirming one of them would be a guess; reject the one that is not real and "
         "then confirm the one that is",
-        "it needs two pending settlements from one person, and _create_settlement "
-        "refuses the second one with settlement_already_pending, so building that "
-        "ledger takes direct writes to the store rather than any request",
+        Drive(
+            "POST",
+            "/api/settlements/{settlement}/decision",
+            "settlement_already_pending",
+            {"decision": "confirmed"},
+            who="receiver",
+            setup="two_pending",
+        ),
     ),
     Site(
         # Spec row 10, the one row where the position is worth naming: the path has
@@ -1770,6 +1819,46 @@ def mark_one_payment(app, path: Path) -> str:
     return recorded.get_json()["settlement"]["id"]
 
 
+def mark_two_payments(app, path: Path) -> str:
+    """Sam marks a payment to Ali, and a second unanswered claim for that pair exists.
+
+    The second one goes straight through the store, because one process cannot make
+    it through the endpoint: task 14's 409 refuses a second claim and
+    ``web._SETTLEMENT_LOCK`` makes that refusal exact **within one process**. Two
+    processes hold two locks and the window reopens, which is the state the
+    confirm-side count exists for. So the state is the product's, not the test's, and
+    what this helper fabricates is only the second process.
+    """
+    settlement = mark_one_payment(app, path)
+    names = roster_names(path)
+    with open_store(path) as store:
+        group = resolve_sole_group(store)
+        store.append_settlement(
+            SettlementEvent(
+                id=SettlementId("a-second-unanswered-claim"),
+                group_id=GroupId(group.id),
+                currency=money.Currency(CURRENCY),
+                from_member_id=MemberId(names["Sam"]),
+                to_member_id=MemberId(names["Ali"]),
+                amount_cents=100,
+                created_at=at(13),
+                created_by=MemberId(names["Sam"]),
+            )
+        )
+    return settlement
+
+
+def racing_sign_up(*arguments: Any, **keywords: Any) -> None:
+    """``accounts.sign_up`` losing a race for one address.
+
+    The address was free when it was checked and taken by the time the row was
+    written, which is a second process's signup landing in between. ``web._signup``
+    answers that with the same 409 a plain duplicate gets, and that answer is the row
+    this stands in for. Installed only for the one request that needs it.
+    """
+    raise DuplicateRecord("a user with that email already exists")
+
+
 def answer_one_payment(app, path: Path) -> str:
     """Sam marks a payment to Ali and Ali confirms it, so it is already answered."""
     settlement = mark_one_payment(app, path)
@@ -1779,6 +1868,25 @@ def answer_one_payment(app, path: Path) -> str:
     )
     assert answered.status_code == 200, answered.get_json()
     return settlement
+
+
+SETUPS: Final = (
+    "none",
+    "budget",
+    "pending",
+    "decided",
+    "two_pending",
+    "racing_signup",
+)
+"""Every state a row can ask for before its request, and the whole of the vocabulary.
+
+It grew by two on 2026-09-08, when the guard in tests/conftest.py found three rows
+marked NO_REQUEST_REACHES_IT that a request reaches. Two of those three need a state
+no sequence of requests builds in one process: a second unanswered claim for one
+ordered pair, and a signup that loses a race for its address. Neither is expressible
+as a request, so the vocabulary grew rather than the rows staying unchecked. A value
+not listed here is refused in :func:`drive`, so the vocabulary stays closed.
+"""
 
 
 def client_for(who: str, app, path: Path):
@@ -1811,14 +1919,15 @@ def drive(site: Site, app, path: Path, before: Any = None):
     assert isinstance(drive_row, Drive)
 
     names = dict(roster_names(path))
+    assert drive_row.setup in SETUPS, f"no setup named {drive_row.setup!r}"
     if drive_row.setup == "budget":
         spend_the_login_budget(app)
     elif drive_row.setup == "pending":
         names["settlement"] = mark_one_payment(app, path)
     elif drive_row.setup == "decided":
         names["settlement"] = answer_one_payment(app, path)
-    else:
-        assert drive_row.setup == "none", f"no setup named {drive_row.setup!r}"
+    elif drive_row.setup == "two_pending":
+        names["settlement"] = mark_two_payments(app, path)
 
     client = client_for(drive_row.who, app, path)
     headers: dict[str, str] = {}
@@ -1840,11 +1949,18 @@ def drive(site: Site, app, path: Path, before: Any = None):
         request["content_type"] = drive_row.content_type or "application/json"
     elif drive_row.payload is not None:
         request["json"] = filled(drive_row.payload, names)
-    # Everything above is setup, and some of it is refused. The row's own request is
-    # the next line, and it is the only one a caller watching the answers wants.
-    if before is not None:
-        before()
-    return client.open(target, **request)
+    with contextlib.ExitStack() as during:
+        if drive_row.setup == "racing_signup":
+            # The one setup that has to be in place *while* the request runs rather
+            # than before it, because what it stands in for is a second process
+            # landing between the check and the write.
+            patched = during.enter_context(pytest.MonkeyPatch.context())
+            patched.setattr(web.accounts, "sign_up", racing_sign_up)
+        # Everything above is setup, and some of it is refused. The row's own request
+        # is the next line, and it is the only one a caller watching answers wants.
+        if before is not None:
+            before()
+        return client.open(target, **request)
 
 
 # --- Check A: the enumeration is complete in both directions ----------------
