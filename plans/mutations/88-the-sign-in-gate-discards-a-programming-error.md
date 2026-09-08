@@ -1,25 +1,41 @@
 # Mutations behind the sign-in gate's re-raise (issue #88)
 
-Three mutations, all applied through the harness's own `substitutions` list, which is
-why no `PYTHONDONTWRITEBYTECODE` guard applies to any of them: the JavaScript harness
+Four mutations, all applied through the harness's own `substitutions` list, which is why
+no `PYTHONDONTWRITEBYTECODE` guard applies to any of them: the JavaScript harness
 substitutes into source text at run time and caches nothing. Run each with
 `node tests/shell_harness.mjs < config.json`, where the config is one block below
 wrapped as `{"substitutions": [ ... ]}`, and nothing on disk is touched.
 
-Taken against `87b7b7f` on 2026-09-08, on branch `task-88`. A record quotes a
-measurement, so it carries the tree it was measured on: if an anchor below no longer
-matches exactly once, that is the tree to diff against rather than a defect in the
-record. All three share one anchor, and it was verified to match exactly once in
-`app/app.js` before every run.
+Taken on 2026-09-08, on branch `task-88`. A record quotes a measurement, so it carries
+the tree it was measured on: if an anchor below no longer matches exactly once, that is
+the tree to diff against rather than a defect in the record. Every anchor was verified to
+match exactly once in `app/app.js` before every run.
+
+Every **before**-run below is against `87b7b7f`, which is `app/app.js` as it ships on
+master. Every **after**-run is against this branch's changed `app/app.js`. Each
+replacement is one line standing in for one line, so a stack's line number is the
+committed file's own: `app/app.js:1501` is `        return refresh();` on this branch and
+`app/app.js:1533` is the `.catch` body's write to `#gate-error`, both verified by grep
+after the last run rather than assumed.
 
 **Every `find` here is one line.** `MUTANT_F`, `MUTANT_H` and `MUTANT_I` in
 `tests/test_shell_behaviour.py` each record that a multi-line anchor rots on a CRLF
 checkout, and this working tree is CRLF.
 
-**One anchor cannot carry two replacements in one configuration.** `readSource` in
-`tests/shell_harness.mjs` refuses an anchor that does not match exactly once, and the
-first replacement consumes it. So each block below is its own run and its own config
-file, and none of them can be combined.
+**One anchor cannot carry two replacements**, because `readSource` in
+`tests/shell_harness.mjs` refuses an anchor that does not match exactly once and the
+first replacement consumes it. That is a limit on one anchor and **not** a limit on one
+config: a change with a different anchor rides in the same `substitutions` list, which
+is how the positive control below is one run rather than a hand edit. Two blocks that
+share an anchor, `j1` and `j2` here, are the ones that cannot be combined.
+
+**Nothing here is duplicated into `tests/test_shell_behaviour.py`.** A mutation gets two
+homes, recorded here and re-runnable, or committed as a mutant the suite re-runs and
+which clears the three conditions in `README.md`. `j1` is the only one the suite reads,
+through `THE_GATE_SUCCESS_THROW`, because a test asserts it. The other three live here
+alone: a constant no test references is a second copy of an anchor with nothing keeping
+it in step, which is the drift this task refuses one file away when it declines to copy
+api.js's six kinds into `app/app.js`.
 
 The suite deliberately does not re-verify these anchors; see `README.md` in this
 directory for that reasoning, and for the format and the recipe.
@@ -103,8 +119,7 @@ scenario list unfiltered:
     exit=0
     FAIL lines: 0
     ok lines: 160
-    unhandled rejection occurrences in stderr: 0
-    unhandled rejection occurrences in stdout: 0
+    unhandled rejection: 0 report lines, and 0 raw occurrences in either stream
 
 **Exit 0, 160 of 160 scenarios green, and the string `unhandled rejection` appearing 0
 times anywhere in the run.** A programming error on the sign-in success path, and a
@@ -124,19 +139,26 @@ The same mutation, the same configuration, against the changed `app/app.js`:
 
     exit=1
     FAIL count: 14
-    unhandled rejection count: 16
+    unhandled rejection: 16 report lines
     gate-submit lines: 0
 
     FAIL a_successful_sign_in_keeps_the_screen_the_person_was_on
            unhandled rejection: TypeError: Cannot read properties of undefined (reading 'alsoNope')
-        at ...\app\app.js:1483:76
+        at ...\app\app.js:1501:76
     FAIL a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate
            unhandled rejection: TypeError: Cannot read properties of null (reading 'nope')
-        at ...\app\app.js:1483:71
+        at ...\app\app.js:1501:71
 
 The absolute paths in those stacks are this working tree's and are elided here; the run
-prints them in full. The line number is the substituted source's, not the committed
-file's.
+prints them in full.
+
+**Count report lines, not raw occurrences, and the two differ by exactly a factor of
+two.** The harness prints each failure once in the human report on stderr and once inside
+the JSON report on stdout, so `grep -o 'unhandled rejection'` over both streams of this
+run returns **32** where the report holds **16** lines. Both numbers were measured. Every
+count in this record is of report lines; the before-run's 0 is the one place the two
+readings cannot disagree, and stating the unit is what stops a re-runner reading 32
+against 16 and concluding the record is wrong.
 
 **16 lines across 14 scenarios**, because `everyone_sees_the_same_payment_awaiting_confirmation`
 and `everyone_sees_the_same_rejected_payment` each sign two people in, so the throw
@@ -161,22 +183,68 @@ that returns with `#gate-submit` disabled fails, in all 160 scenarios and every 
 one. Against unmodified `app/` it reds **0** of the 160, which is the state it is meant
 to sit in, so on its own it is a check nobody has seen fail.
 
-This is the run that makes it one. The mutation above applied, the `.catch` re-raising,
-and the trailing handler left as `.then` — the naive fix the issue warns is worse than
-the bug, because a rejected promise skips a fulfilled handler and the gate stays
-disabled for good:
+This is the run that makes it one: `j1` applied, and the trailing handler put back to
+`.then` — the naive fix the issue warns is worse than the bug, because a rejected promise
+skips a fulfilled handler and the gate stays disabled for good. That second change has
+its own anchor, so it is a block and not a sentence:
+
+```json
+{
+  "id": "j1b-the-naive-fix-run-together-with-j1",
+  "file": "app/app.js",
+  "find": "      .finally(function () {",
+  "replace": "      .then(function () {",
+  "kills": [
+    "a_successful_sign_in_keeps_the_screen_the_person_was_on",
+    "a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate",
+    "a_sign_in_the_network_interrupted_still_lets_the_gate_come_back",
+    "a_session_that_expires_after_a_real_sign_in_still_returns_to_the_gate",
+    "creating_an_account_signs_in_straight_after",
+    "an_interrupted_save_keeps_what_was_typed_through_signing_back_in",
+    "an_interrupted_save_keeps_the_split_mode_and_rebuilds_the_person_rows",
+    "signing_out_clears_the_draft_before_the_next_person_signs_in",
+    "a_401_on_save_then_a_different_person_signs_in_starts_a_fresh_entry",
+    "a_401_on_save_then_a_different_person_signs_in_returns_the_split_to_equally",
+    "everyone_sees_the_same_payment_awaiting_confirmation",
+    "an_unlinked_account_is_offered_no_way_to_mark_anything_paid",
+    "everyone_sees_the_same_rejected_payment",
+    "an_unlinked_account_is_offered_no_way_to_answer_anything"
+  ],
+  "survives": [
+    "a_refused_sign_in_tells_the_person_why",
+    "a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone"
+  ],
+  "result": "killed"
+}
+```
+
+**This block is never run alone, and its `kills` is the pair's rather than its own.** The
+anchor matches once, at `app/app.js:1543`, the other `.finally` being
+`    ).finally(done);` at 713. Applied by itself it only puts the chain back to a shape
+where nothing throws, which reds nothing at all. Both blocks go in one `substitutions`
+list:
+
+    {"substitutions": [
+      {"file": "app/app.js", "find": "        return refresh();",
+       "replace": "        return refresh().then(function () { return api.cachedSession().nope.alsoNope; });"},
+      {"file": "app/app.js", "find": "      .finally(function () {",
+       "replace": "      .then(function () {"}
+    ]}
+
+That config, run against this branch:
 
     exit=1
     FAIL count: 14
+    unhandled rejection: 16 report lines
     gate-submit lines: 15
 
     FAIL a_successful_sign_in_keeps_the_screen_the_person_was_on
            unhandled rejection: TypeError: Cannot read properties of undefined (reading 'alsoNope')
-        at ...\app\app.js:1483:76
+        at ...\app\app.js:1501:76
            #gate-submit is still disabled after settle: this scenario left the gate unusable, which is what a sign-in chain that skipped its re-enabling handler looks like from outside
     FAIL a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate
            unhandled rejection: TypeError: Cannot read properties of null (reading 'nope')
-        at ...\app\app.js:1483:71
+        at ...\app\app.js:1501:71
            #gate-submit disabled: expected false, got true
            #gate-submit is still disabled after settle: this scenario left the gate unusable, which is what a sign-in chain that skipped its re-enabling handler looks like from outside
 
@@ -184,6 +252,13 @@ disabled for good:
 that thought to look.** That ratio is the argument for the clause: the same defect was
 visible in 1 scenario before and is visible in 14 now, and would be visible in any
 future scenario that signs a person in.
+
+This run was first taken as a hand edit and written up as a sentence, which was wrong.
+Rule (e) of `.claude/rules/testing.md` is that a mutation is an anchor and a replacement,
+never a sentence, and the reason first given for the exception, that one config cannot
+carry two replacements, is true only of two changes sharing one anchor. These two do not
+share one. The pair above was re-run from the config as written here, and the numbers
+are that run's rather than the hand edit's.
 
 ### Why this is not a tenth committed mutant
 
@@ -256,19 +331,18 @@ broken, not the whole shell.
 }
 ```
 
-**This mutation is asserted by no test, and that is deliberate.** It is recorded so the
-next person re-runs it instead of reconstructing it. It is the case the deleted
-`!error ||` half of the gate's `.catch` used to swallow: a rejection with no reason at
-all, which has no `kind` to read and would have thrown on the read if the test had been
-spelled the other way round. Asserting it would be a second, weaker spelling of what
-the test on the first mutation already asserts, on a reason that carries no stack and so
-delivers no diagnosis.
+**This mutation is asserted by no test, and that is deliberate.** It is the case the
+deleted `!error ||` half of the gate's `.catch` used to swallow: a rejection with no
+reason at all, which has no `kind` to read and would have thrown on the read if the test
+had been spelled the other way round. Asserting it would be a second, weaker spelling of
+what the test on the first mutation already asserts, on a reason that carries no stack
+and so delivers no diagnosis.
 
 Against the changed `app/app.js`:
 
     exit=1
     FAIL count: 14
-    unhandled rejection count: 16
+    unhandled rejection: 16 report lines
     gate-submit lines: 0
 
     FAIL a_successful_sign_in_keeps_the_screen_the_person_was_on
@@ -284,11 +358,66 @@ Against `app/app.js` as it ships at `87b7b7f`, the same configuration:
 
     exit=0
     FAIL count: 0
-    unhandled rejection count: 0
+    unhandled rejection: 0 report lines
 
 Which is the point of recording it. The recogniser answers `false` for a reason that is
 not an object at all, rather than reading `kind` off it, and what used to answer that
 question was `!error ||`.
+
+## A throw inside the catch's own body
+
+```json
+{
+  "id": "j4-the-catch-throws-while-writing-the-gate-message",
+  "file": "app/app.js",
+  "find": "        gateError.textContent = error.say || 'That did not work.';",
+  "replace": "        gateError.textContent = error.say.nope.alsoNope;",
+  "kills": [
+    "a_refused_sign_in_tells_the_person_why",
+    "a_refused_sign_in_with_an_unreadable_body_still_says_something",
+    "creating_an_account_that_already_exists_says_so_on_the_gate",
+    "a_rate_limited_sign_in_reads_on_the_gate_with_no_curtain_over_it",
+    "the_submit_control_is_disabled_while_the_sign_in_is_in_flight",
+    "the_form_never_lets_the_browser_navigate",
+    "the_email_is_trimmed_and_the_password_is_not",
+    "every_request_goes_to_the_api_with_credentials",
+    "the_csrf_token_is_read_at_request_time_not_cached",
+    "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone"
+  ],
+  "survives": [
+    "a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone",
+    "a_successful_sign_in_keeps_the_screen_the_person_was_on"
+  ],
+  "result": "killed"
+}
+```
+
+**Criterion 10 measured rather than inferred.** The task states that a throw inside the
+`.catch` handler's own body, while writing `#gate-error`, now also re-enables the submit
+control where before it did not, and deliberately asserts it nowhere, since it is the
+same property criterion 9 pins. That left it the one claim in this change resting on
+inference, and this block closes it for the cost of one run. Recorded, asserted by no
+test, for the same reason as `j2`.
+
+    exit=1
+    FAIL count: 10
+    unhandled rejection: 11 report lines
+    gate-submit lines: 0
+
+    FAIL a_refused_sign_in_tells_the_person_why
+           unhandled rejection: TypeError: Cannot read properties of undefined (reading 'alsoNope')
+        at ...\app\app.js:1533:48
+
+**`gate-submit lines: 0`, and that is the whole finding.** Ten scenarios take the arm
+that writes on the gate, the write throws out of the `.catch` itself rather than out of
+the fulfilled handler, and the control still comes back: nothing reds on the new clause,
+and `the_submit_control_is_disabled_while_the_sign_in_is_in_flight`, which asserts
+`#gate-submit disabled === false` by hand after settling, carries the rejection line and
+nothing else. Under the trailing `.then` this path had no re-enabling handler at all,
+because a throw inside a `.catch` rejects the promise that handler returns.
+
+The two survivors are the arms that never reach that line: an offline sign-in returns
+early above it, and a successful one never enters the `.catch`.
 
 ## The control on the anchor itself
 

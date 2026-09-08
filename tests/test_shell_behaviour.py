@@ -962,23 +962,14 @@ THE_GATE_SUCCESS_THROW = {
     ),
 }
 
-# The second mutation of task 88's record, kept here so the next person re-runs it
-# rather than reconstructing it. **No test asserts it**, deliberately: it is the case
-# the deleted `!error ||` half of the gate's catch used to swallow, a rejection with no
-# reason at all, and what it demonstrates is that the recogniser answers `false` for a
-# falsy reason instead of reading `kind` off it. Asserting it would be a second, weaker
-# spelling of what the test below already asserts precisely, on a reason that carries
-# no stack and so no diagnosis. Its run is recorded in
-# plans/mutations/88-the-sign-in-gate-discards-a-programming-error.md; one harness
-# configuration cannot carry both, because an anchor must match exactly once and the
-# first replacement consumes it.
-THE_GATE_BARE_REJECTION = {
-    "file": "app/app.js",
-    "find": "        return refresh();",
-    "replace": (
-        "        return refresh().then(function () { return Promise.reject(); });"
-    ),
-}
+# Task 88's other two mutations, a rejection with no reason at all and the control that
+# proves this anchor executes, live in
+# plans/mutations/88-the-sign-in-gate-discards-a-programming-error.md and nowhere else.
+# They were carried here as constants at first, and that was wrong: a mutation gets two
+# homes, recorded in plans/mutations/, or committed as a mutant the suite re-runs, and a
+# constant no test reads is neither. It is a second copy of one anchor with nothing
+# keeping it in step with the first, which is the drift this task refuses one file away
+# when it declines to copy api.js's six kinds into app/app.js.
 
 # The scenario the throw is asserted against: the sign-in succeeds, so the gate's
 # fulfilled handler runs and the substitution fires inside it.
