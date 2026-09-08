@@ -254,7 +254,7 @@ are six lines apart, so two threads in the one process the dev server runs can
 interleave between them. That the omission is deliberate elsewhere is visible in the
 same file: `web._SETTLEMENT_LOCK` is defined at `src/splitwise_lite/web.py:1767` and
 taken on the settlement paths at 1924 and 2021, and the signup path takes nothing. Row
-3 is settled by the package's own comment at `src/splitwise_lite/web.py:2059`, which
+3 is settled by the package's own comment at `src/splitwise_lite/web.py:2060`, which
 says in as many words that the raise is "Unreachable in one process" and exists for two.
 Both reasons are stronger than the ones recorded when the rows were moved, because each
 is a property of the shipped product rather than of a test.

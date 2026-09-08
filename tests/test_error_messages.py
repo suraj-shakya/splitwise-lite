@@ -493,7 +493,7 @@ def four_hundred_raise_sites() -> set[Key]:
 
 # --- The raise-site index ---------------------------------------------------
 #
-# The table records which rows no request reaches. tests/conftest.py watches what
+# The table records which rows no request is ever answered from. conftest.py watches
 # web._handle_error turns into a response, and to say which row an answer came from it
 # has to turn the (file, line) of a traceback frame back into a key. That is this
 # index, and it is built from the spans above rather than from a walk of its own.
@@ -602,7 +602,12 @@ class Site(NamedTuple):
 
 
 def unreachable(module: str, function: str, skeleton: str | None, reason: str) -> Site:
-    """A row no request reaches, with the reason it does not."""
+    """A row no request is ever answered from, with the reason it is not.
+
+    Not "a row no request reaches": that framing is retracted above, dated 2026-09-08,
+    because a marked raise may be executed by a request and the row still be correct.
+    The predicate is stated in ``tests/conftest.py``.
+    """
     return Site(module, function, skeleton, NO_REQUEST_REACHES_IT, reason)
 
 
@@ -2007,7 +2012,7 @@ def missing_rows_message(undeclared: set[Key], stale: set[Key]) -> str:
             "first: no 4xx body this repo sends names one (issue #61). Then either "
             "drive it or mark it NO_REQUEST_REACHES_IT with a reason of at least "
             f"{MIN_REASON} characters saying what would have to be true for a request "
-            "to reach it."
+            "to be answered from it."
         )
     if stale:
         parts.append(

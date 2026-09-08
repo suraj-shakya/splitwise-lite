@@ -1,10 +1,12 @@
-"""What a request is answered with, watched, so fifty marks stop going unchecked.
+"""What a request is answered with, watched, so a marked row's claim gets checked.
 
 GitHub issue #82, sharpened in plans/tasks/82-the-unreachability-claim.md.
 
 ``tests/test_error_messages.py`` declares every refusal ``src/splitwise_lite/`` raises
-with a 4xx status. Fifty of its rows carry the marker ``NO_REQUEST_REACHES_IT``, which
-is a claim about reachability, and it was the one claim in that module nothing
+with a 4xx status. Of its rows, 47 carry the marker ``NO_REQUEST_REACHES_IT``
+(``grep -c '^    unreachable(' tests/test_error_messages.py``, run 2026-09-08; it was
+50 before three of those marks turned out to be false and their rows were driven),
+which is a claim about reachability, and it was the one claim in that module nothing
 verified. The falsifying event is a new route reaching an existing raise: the set of
 raise sites does not change, no message skeleton changes, the enumeration equality
 still holds, and a message interpolating a stored value has silently become something a
@@ -76,9 +78,12 @@ scaffolding between two modules, which this is not.
 ``splitwise_lite.web`` at module scope, so the session imports the package before any
 test runs. ``tests/test_suite_integrity.py``'s docstring says its checks "still run on
 a checkout where the package will not import", and at the session level that is now
-weaker than it was. Importing lazily inside the fixture does not fix it: that was
-measured on 2026-09-08 and the suite reports **92 errors**, because the cause is the
-autouse session scope criterion B1 mandates rather than where the import is written. A
+weaker than it was. Importing lazily inside the fixture does not fix it, measured on
+2026-09-08 with ``PYTHONDONTWRITEBYTECODE=1 uv run python -m pytest
+tests/test_suite_integrity.py -q``, which reports **92 errors**. That is one error per
+test in that one module, which collects 92, and not a count over the whole suite. The
+cause is the autouse session scope criterion B1 mandates rather than where the import
+is written. A
 ``try``/``except ImportError`` here would be a hatch that could mask the observer not
 being installed, which is the one failure the group C proof exists to catch, so there
 is none. The only repair that would actually hold touches
@@ -238,8 +243,8 @@ def _reached_message(key: tuple[Any, ...], answered: Answered) -> str:
         f"  request: {answered.method} {answered.path}\n"
         f"  answer:  {answered.status} {answered.message!r}\n"
         "\n"
-        "The marker is a claim that no request reaches that raise. This request "
-        "reached it: the exception raised there is the exception web._handle_error "
+        "The marker is a claim that no request is ever answered from that raise. "
+        "This one was: the exception raised there is the exception web._handle_error "
         "turned into the response, so that message was shown to a client. Either a "
         "route now reaches the raise, in which case the row moves from "
         "unreachable(...) to a Drive and has to carry no identifier the store holds "
