@@ -41,9 +41,20 @@ negatives on the second. So:
 
 Because every id-bearing site is genuinely unreachable by request, the driven half
 needs no allowlist, no exemption set and no marker comment. There is nothing in it to
-rot. What is **not** covered, stated plainly: a row marked
-:data:`NO_REQUEST_REACHES_IT` is a claim this module records rather than verifies, and
-the identifier set excludes email addresses deliberately.
+rot.
+
+**Retracted 2026-09-08, issue #82.** This passage read:
+
+    What is **not** covered, stated plainly: a row marked
+    :data:`NO_REQUEST_REACHES_IT` is a claim this module records rather than verifies
+
+That is no longer so. ``tests/conftest.py`` watches what ``web._handle_error`` turns
+into a response and reds when the exception raised at a marked row's site is the one
+answered, so the marker is checked on every run rather than recorded. What that check
+does not cover is stated where the predicate is, in ``tests/conftest.py``, and is
+deliberately not restated here.
+
+The identifier set excludes email addresses deliberately.
 ``accounts.EmailAlreadyRegistered`` names a normalised address at 409, that address is
 the person's own typed input, the sign-up screen shows it back, and echoing typed input
 is ``parse_amount``'s already-accepted precedent.
@@ -61,6 +72,8 @@ from __future__ import annotations
 
 import ast
 import builtins
+import contextlib
+import functools
 import importlib
 import re
 import sqlite3
@@ -71,13 +84,14 @@ from typing import Any, Final, NamedTuple
 import pytest
 
 from splitwise_lite import accounts, money, web
+from splitwise_lite.events import GroupId, MemberId, SettlementEvent, SettlementId
 from splitwise_lite.groups import (
     GroupDefinition,
     apply_group_definition,
     link_user_to_member,
     resolve_sole_group,
 )
-from splitwise_lite.store import open_store
+from splitwise_lite.store import DuplicateRecord, open_store
 
 REPO: Final = Path(__file__).resolve().parents[1]
 PACKAGE: Final = REPO / "src" / "splitwise_lite"
@@ -403,18 +417,40 @@ def raised_class(node: ast.expr, module: Any) -> type[BaseException] | None:
     return None
 
 
-def four_hundred_raise_sites() -> set[Key]:
-    """Every ``raise`` in the package whose class maps to a 4xx, keyed for the table.
+class RaiseSpan(NamedTuple):
+    """One ``raise`` statement: the row it belongs to, and the lines it occupies.
+
+    ``file`` is the resolved absolute path, so it compares equal to the path a
+    traceback frame reports for the same module. Three statements that share a ``key``
+    are three spans, because a key identifies a message and a position identifies a
+    statement.
+    """
+
+    key: Key
+    file: Path
+    lineno: int
+    end_lineno: int
+
+
+@functools.cache
+def four_hundred_raise_spans() -> tuple[RaiseSpan, ...]:
+    """Every ``raise`` in the package whose class maps to a 4xx, with its line span.
+
+    This is **the** walk. :func:`four_hundred_raise_sites` and
+    :func:`raise_site_index` are two views of this one result rather than two walks
+    over the same files, so the enumeration equality and the index cannot come to
+    disagree about what the package holds.
 
     One key per ``(module file name, enclosing def name, message skeleton)``. Two
     raises that agree on all three collapse to one key, which is what
     ``accounts.authenticate``'s three identical ``SessionInvalid`` refusals are: one
-    site as far as a message is concerned.
+    site as far as a message is concerned, and three spans as far as a position is.
     """
-    found: set[Key] = set()
+    found: list[RaiseSpan] = []
     for path in sorted(PACKAGE.glob("*.py")):
         module = importlib.import_module(f"splitwise_lite.{path.stem}")
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        absolute = path.resolve()
         stack: list[str] = []
 
         def walk(node: ast.AST) -> None:
@@ -427,13 +463,18 @@ def four_hundred_raise_sites() -> set[Key]:
                 klass = raised_class(node.exc, module)
                 if klass is not None and four_hundred_status(klass) is not None:
                     arguments = node.exc.args if isinstance(node.exc, ast.Call) else []
-                    found.add(
-                        (
-                            path.name,
-                            stack[-1] if stack else "<module>",
-                            message_skeleton(
-                                arguments[0] if arguments else None, module
+                    found.append(
+                        RaiseSpan(
+                            (
+                                path.name,
+                                stack[-1] if stack else "<module>",
+                                message_skeleton(
+                                    arguments[0] if arguments else None, module
+                                ),
                             ),
+                            absolute,
+                            node.lineno,
+                            node.end_lineno or node.lineno,
                         )
                     )
             for child in ast.iter_child_nodes(node):
@@ -442,17 +483,86 @@ def four_hundred_raise_sites() -> set[Key]:
                 stack.pop()
 
         walk(tree)
-    return found
+    return tuple(found)
+
+
+def four_hundred_raise_sites() -> set[Key]:
+    """The keys the walk found, which is what the enumeration equality compares."""
+    return {span.key for span in four_hundred_raise_spans()}
+
+
+# --- The raise-site index ---------------------------------------------------
+#
+# The table records which rows no request is ever answered from. conftest.py watches
+# web._handle_error turns into a response, and to say which row an answer came from it
+# has to turn the (file, line) of a traceback frame back into a key. That is this
+# index, and it is built from the spans above rather than from a walk of its own.
+
+
+@functools.cache
+def raise_site_index() -> dict[tuple[Path, int], Key]:
+    """Every line of every 4xx ``raise`` statement, mapped to that statement's key.
+
+    Every line of the span rather than only the first: Python reports the line of the
+    instruction that raised, and a ``raise`` wrapped across four lines can be reported
+    at any of them.
+    """
+    index: dict[tuple[Path, int], Key] = {}
+    for span in four_hundred_raise_spans():
+        for lineno in range(span.lineno, span.end_lineno + 1):
+            index[(span.file, lineno)] = span.key
+    return index
+
+
+@functools.cache
+def indexed_path(filename: str) -> Path:
+    """``filename`` spelled the way :func:`raise_site_index` spells it.
+
+    Both sides go through ``Path.resolve``, because the index is built from
+    ``PACKAGE.glob`` and a traceback reports the path the import system used. On
+    Windows those two can differ in case or in a short name while naming one file, and
+    a comparison that silently never matches is how this kind of instrument passes
+    over nothing forever.
+    """
+    return Path(filename).resolve()
+
+
+def key_for_raise_site(filename: str, lineno: int) -> Key | None:
+    """The row whose ``raise`` statement occupies ``filename`` line ``lineno``.
+
+    ``None`` for everything else, and that one answer is the whole of the filtering: a
+    line with no 4xx ``raise`` on it, a ``raise`` whose class maps outside 4xx, an
+    implicit ``TypeError``, a werkzeug ``HTTPException``, and every file outside
+    ``src/splitwise_lite/``.
+    """
+    return raise_site_index().get((indexed_path(filename), lineno))
 
 
 # --- The table --------------------------------------------------------------
 
 NO_REQUEST_REACHES_IT: Final = "NO_REQUEST_REACHES_IT"
-"""A site no HTTP request can reach, with a reason saying what would have to be true.
+"""A site no request is ever answered from, with a reason saying what would have to be
+true for one to be.
 
-A claim this module records rather than verifies. Every one of them is a refusal whose
-inputs the server produced itself, a refusal only ``scripts/setup_group.py`` reaches,
-or a refusal another layer catches and re-raises as something else.
+**Escape, not execution, and the difference decides rows.** A marked raise may be
+executed by a request and the row still be correct, so long as the exception is caught
+inside ``src/splitwise_lite/`` and something else is what the client is answered with.
+``store.get_user_by_email``'s refusal runs on every successful signup and is marked,
+correctly. The predicate is stated in ``tests/conftest.py``; this is a pointer to it
+and not a second version of it.
+
+**Retracted 2026-09-08, issue #82.** This docstring read:
+
+    A site no HTTP request can reach, with a reason saying what would have to be true.
+
+    A claim this module records rather than verifies.
+
+Both halves were wrong by then. HTTP requests do reach several of these rows without
+ever being answered from them, and the marker is now checked rather than recorded.
+
+Every one of them is a refusal whose inputs the server produced itself, a refusal only
+``scripts/setup_group.py`` reaches, or a refusal another layer catches and re-raises as
+something else.
 """
 
 
@@ -492,7 +602,12 @@ class Site(NamedTuple):
 
 
 def unreachable(module: str, function: str, skeleton: str | None, reason: str) -> Site:
-    """A row no request reaches, with the reason it does not."""
+    """A row no request is ever answered from, with the reason it is not.
+
+    Not "a row no request reaches": that framing is retracted above, dated 2026-09-08,
+    because a marked raise may be executed by a request and the row still be correct.
+    The predicate is stated in ``tests/conftest.py``.
+    """
     return Site(module, function, skeleton, NO_REQUEST_REACHES_IT, reason)
 
 
@@ -1034,7 +1149,28 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
     ),
     # --- store.py ----------------------------------------------------------
     unreachable("store.py", "_require_id", " must be a non-empty id", STORED_VALUE),
-    unreachable("store.py", "_require_name", " must not be blank", STORED_VALUE),
+    Site(
+        # Driven since 2026-09-08. This row was marked NO_REQUEST_REACHES_IT with
+        # STORED_VALUE as its reason, and the guard in tests/conftest.py reached it on
+        # its first run against real requests: STORED_VALUE enumerates ids, amounts
+        # and addresses, and a display name is none of those and arrives in the
+        # request body. The message names the field and no identifier, so nothing
+        # shipped was ever wrong; the mark was.
+        "store.py",
+        "_require_name",
+        " must not be blank",
+        Drive(
+            "POST",
+            SIGNUP,
+            "invalid_record",
+            {
+                "email": "new@example.com",
+                "display_name": "   ",
+                "password": PASSWORD,
+            },
+            who="anonymous",
+        ),
+    ),
     unreachable(
         "store.py", "_require_name", " must be at most  characters, got ", STORED_VALUE
     ),
@@ -1376,13 +1512,28 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
         "this endpoint needs a signed-in session",
         Drive("GET", "/api/members", "not_authenticated", who="anonymous"),
     ),
-    unreachable(
+    Site(
+        # Driven since 2026-09-08. Marked NO_REQUEST_REACHES_IT until the guard in
+        # tests/conftest.py reached it. The old reason was right that no single
+        # request produces the state and wrong about what the marker claims: the
+        # marker says no client can ever be shown this message, and given the state a
+        # request does produce exactly this response. The message names an address,
+        # which is the person's own typed input and not in the identifier set.
         "web.py",
         "_signup",
         "an account already exists for ",
-        "this is the losing racer's answer: the address was free when accounts.sign_up "
-        "checked it and taken by the time the row was written, which needs two "
-        "concurrent signups for one address rather than any single request",
+        Drive(
+            "POST",
+            SIGNUP,
+            "email_already_registered",
+            {
+                "email": "racer@example.com",
+                "display_name": "Racer",
+                "password": PASSWORD,
+            },
+            who="anonymous",
+            setup="racing_signup",
+        ),
     ),
     Site(
         # Spec row 3.
@@ -1604,15 +1755,26 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
             setup="decided",
         ),
     ),
-    unreachable(
+    Site(
+        # Driven since 2026-09-08. Marked NO_REQUEST_REACHES_IT until the guard in
+        # tests/conftest.py reached it. _SETTLEMENT_LOCK is honestly scoped to one
+        # process, so the two-claim state is the state this defensive raise exists
+        # for rather than a test artefact, and a mark claiming nothing reaches it is
+        # the wrong description of a guard that exists because something might. The
+        # message names nobody and no identifier.
         "web.py",
         "_decide_settlement",
         "there is more than one payment from that person waiting for an answer, so "
         "confirming one of them would be a guess; reject the one that is not real and "
         "then confirm the one that is",
-        "it needs two pending settlements from one person, and _create_settlement "
-        "refuses the second one with settlement_already_pending, so building that "
-        "ledger takes direct writes to the store rather than any request",
+        Drive(
+            "POST",
+            "/api/settlements/{settlement}/decision",
+            "settlement_already_pending",
+            {"decision": "confirmed"},
+            who="receiver",
+            setup="two_pending",
+        ),
     ),
     Site(
         # Spec row 10, the one row where the position is worth naming: the path has
@@ -1690,6 +1852,46 @@ def mark_one_payment(app, path: Path) -> str:
     return recorded.get_json()["settlement"]["id"]
 
 
+def mark_two_payments(app, path: Path) -> str:
+    """Sam marks a payment to Ali, and a second unanswered claim for that pair exists.
+
+    The second one goes straight through the store, because one process cannot make
+    it through the endpoint: task 14's 409 refuses a second claim and
+    ``web._SETTLEMENT_LOCK`` makes that refusal exact **within one process**. Two
+    processes hold two locks and the window reopens, which is the state the
+    confirm-side count exists for. So the state is the product's, not the test's, and
+    what this helper fabricates is only the second process.
+    """
+    settlement = mark_one_payment(app, path)
+    names = roster_names(path)
+    with open_store(path) as store:
+        group = resolve_sole_group(store)
+        store.append_settlement(
+            SettlementEvent(
+                id=SettlementId("a-second-unanswered-claim"),
+                group_id=GroupId(group.id),
+                currency=money.Currency(CURRENCY),
+                from_member_id=MemberId(names["Sam"]),
+                to_member_id=MemberId(names["Ali"]),
+                amount_cents=100,
+                created_at=at(13),
+                created_by=MemberId(names["Sam"]),
+            )
+        )
+    return settlement
+
+
+def racing_sign_up(*arguments: Any, **keywords: Any) -> None:
+    """``accounts.sign_up`` losing a race for one address.
+
+    The address was free when it was checked and taken by the time the row was
+    written, which is a second process's signup landing in between. ``web._signup``
+    answers that with the same 409 a plain duplicate gets, and that answer is the row
+    this stands in for. Installed only for the one request that needs it.
+    """
+    raise DuplicateRecord("a user with that email already exists")
+
+
 def answer_one_payment(app, path: Path) -> str:
     """Sam marks a payment to Ali and Ali confirms it, so it is already answered."""
     settlement = mark_one_payment(app, path)
@@ -1699,6 +1901,25 @@ def answer_one_payment(app, path: Path) -> str:
     )
     assert answered.status_code == 200, answered.get_json()
     return settlement
+
+
+SETUPS: Final = (
+    "none",
+    "budget",
+    "pending",
+    "decided",
+    "two_pending",
+    "racing_signup",
+)
+"""Every state a row can ask for before its request, and the whole of the vocabulary.
+
+It grew by two on 2026-09-08, when the guard in tests/conftest.py found three rows
+marked NO_REQUEST_REACHES_IT that a request reaches. Two of those three need a state
+no sequence of requests builds in one process: a second unanswered claim for one
+ordered pair, and a signup that loses a race for its address. Neither is expressible
+as a request, so the vocabulary grew rather than the rows staying unchecked. A value
+not listed here is refused in :func:`drive`, so the vocabulary stays closed.
+"""
 
 
 def client_for(who: str, app, path: Path):
@@ -1719,20 +1940,27 @@ def client_for(who: str, app, path: Path):
     return linked_client(app, path, "Sam")
 
 
-def drive(site: Site, app, path: Path):
-    """Make the one request ``site`` declares, and return the response."""
+def drive(site: Site, app, path: Path, before: Any = None):
+    """Make the one request ``site`` declares, and return the response.
+
+    ``before`` runs immediately before that one request and after everything the
+    row's ``who`` and ``setup`` do. A caller watching what a request is answered with
+    clears its record there, so the refusals a row's own setup produces are not
+    attributed to the row.
+    """
     drive_row = site.drive
     assert isinstance(drive_row, Drive)
 
     names = dict(roster_names(path))
+    assert drive_row.setup in SETUPS, f"no setup named {drive_row.setup!r}"
     if drive_row.setup == "budget":
         spend_the_login_budget(app)
     elif drive_row.setup == "pending":
         names["settlement"] = mark_one_payment(app, path)
     elif drive_row.setup == "decided":
         names["settlement"] = answer_one_payment(app, path)
-    else:
-        assert drive_row.setup == "none", f"no setup named {drive_row.setup!r}"
+    elif drive_row.setup == "two_pending":
+        names["settlement"] = mark_two_payments(app, path)
 
     client = client_for(drive_row.who, app, path)
     headers: dict[str, str] = {}
@@ -1748,22 +1976,24 @@ def drive(site: Site, app, path: Path):
         headers["Origin"] = drive_row.origin
 
     target = drive_row.path.format_map(names)
+    request: dict[str, Any] = {"method": drive_row.method, "headers": headers}
     if drive_row.raw is not None:
-        return client.open(
-            target,
-            method=drive_row.method,
-            data=drive_row.raw,
-            content_type=drive_row.content_type or "application/json",
-            headers=headers,
-        )
-    if drive_row.payload is None:
-        return client.open(target, method=drive_row.method, headers=headers)
-    return client.open(
-        target,
-        method=drive_row.method,
-        json=filled(drive_row.payload, names),
-        headers=headers,
-    )
+        request["data"] = drive_row.raw
+        request["content_type"] = drive_row.content_type or "application/json"
+    elif drive_row.payload is not None:
+        request["json"] = filled(drive_row.payload, names)
+    with contextlib.ExitStack() as during:
+        if drive_row.setup == "racing_signup":
+            # The one setup that has to be in place *while* the request runs rather
+            # than before it, because what it stands in for is a second process
+            # landing between the check and the write.
+            patched = during.enter_context(pytest.MonkeyPatch.context())
+            patched.setattr(web.accounts, "sign_up", racing_sign_up)
+        # Everything above is setup, and some of it is refused. The row's own request
+        # is the next line, and it is the only one a caller watching answers wants.
+        if before is not None:
+            before()
+        return client.open(target, **request)
 
 
 # --- Check A: the enumeration is complete in both directions ----------------
@@ -1782,7 +2012,7 @@ def missing_rows_message(undeclared: set[Key], stale: set[Key]) -> str:
             "first: no 4xx body this repo sends names one (issue #61). Then either "
             "drive it or mark it NO_REQUEST_REACHES_IT with a reason of at least "
             f"{MIN_REASON} characters saying what would have to be true for a request "
-            "to reach it."
+            "to be answered from it."
         )
     if stale:
         parts.append(
@@ -1999,9 +2229,9 @@ def test_every_site_no_request_reaches_says_what_would_have_to_be_true() -> None
         assert len(site.reason) >= MIN_REASON, (
             f"{site_id(site)} is marked NO_REQUEST_REACHES_IT with a reason of "
             f"{len(site.reason)} characters: {site.reason!r}. Say what would have to "
-            f"be true for a request to reach it, in at least {MIN_REASON} characters. "
-            "This is the one claim here that nothing verifies, so it is the one that "
-            "has to be readable."
+            f"be true for a request to be answered from it, in at least {MIN_REASON} "
+            "characters. tests/conftest.py reds if one ever is, so this reason is what "
+            "a reader compares that failure against."
         )
     for site in DRIVEN:
         assert site.reason == "", (
@@ -2009,3 +2239,229 @@ def test_every_site_no_request_reaches_says_what_would_have_to_be_true() -> None
             "evidence is the request, so the reason field stays empty and nobody has "
             "to wonder which one is true."
         )
+
+
+# --- Check C, part one: the index the observer reads ------------------------
+#
+# tests/conftest.py states the predicate all of this serves, and states it once.
+# Nothing here restates it; these check the machinery it reads.
+
+
+def test_the_key_set_and_the_raise_site_index_come_from_one_walk() -> None:
+    """Two views of one walk, so neither can drift from the other.
+
+    Every key the enumeration equality compares has at least one span in the index,
+    and every key the index yields is one of those. A second walk over the same files
+    is the thing this refuses: two walks are two things to keep in step, and the whole
+    value of the index is that it agrees with the table by construction.
+    """
+    spans = four_hundred_raise_spans()
+    assert spans, (
+        "the ast walk found no 4xx raise span at all, so the index is empty and every "
+        "check that reads it passes over nothing"
+    )
+    assert {span.key for span in spans} == four_hundred_raise_sites()
+    assert set(raise_site_index().values()) == four_hundred_raise_sites()
+    for span in spans:
+        assert raise_site_index()[(span.file, span.lineno)] == span.key
+
+
+def test_the_index_finds_a_site_by_the_path_the_import_system_reports() -> None:
+    """The path a traceback carries, not the one the walk happened to build.
+
+    ``PACKAGE.glob`` and ``splitwise_lite.store.__file__`` are two spellings of one
+    file, and on Windows two spellings of one file can differ in case or in a short
+    name. If they ever stop comparing equal, the observer maps every frame to nothing,
+    records nothing, and passes over an empty set forever. That is this instrument's
+    characteristic silent failure, so the comparison is asserted rather than assumed.
+    """
+    store_module = importlib.import_module("splitwise_lite.store")
+    spans = [span for span in four_hundred_raise_spans() if span.key[0] == "store.py"]
+    assert spans, "no 4xx raise site in store.py, so this checks nothing"
+    for span in spans:
+        assert key_for_raise_site(store_module.__file__, span.lineno) == span.key
+
+
+def test_the_index_maps_every_line_of_a_raise_spread_over_several_lines() -> None:
+    """A raise reported at its last line is found as readily as one at its first.
+
+    Python reports the line of the instruction that raised, which for a ``raise``
+    wrapped across four lines is not reliably the ``raise`` keyword's own line.
+    """
+    wrapped = [
+        span for span in four_hundred_raise_spans() if span.end_lineno > span.lineno
+    ]
+    assert wrapped, (
+        "no 4xx raise in the package spans more than one line, so this checks "
+        "nothing. If that is really so this test can go; until then an empty answer "
+        "means the walk has stopped carrying end_lineno."
+    )
+    for span in wrapped:
+        for lineno in range(span.lineno, span.end_lineno + 1):
+            assert key_for_raise_site(str(span.file), lineno) == span.key
+
+
+def test_three_raises_that_share_one_key_are_three_spans() -> None:
+    """``accounts.authenticate`` refuses in three places with one sentence.
+
+    One row in the table, because a key is a message. Three spans in the index,
+    because a position is a statement. There is no special case for it in either.
+    """
+    key: Key = (
+        "accounts.py",
+        "authenticate",
+        "that token does not name a live session",
+    )
+    assert key in four_hundred_raise_sites()
+    spans = [span for span in four_hundred_raise_spans() if span.key == key]
+    assert len(spans) == 3, [span.lineno for span in spans]
+    assert len({span.lineno for span in spans}) == 3
+
+
+def test_a_row_with_no_message_skeleton_is_indexed_by_position() -> None:
+    """``store._require_free`` composes its message elsewhere, so its skeleton is None.
+
+    The index is keyed by position rather than by message, so a row with no skeleton
+    needs no special case. That is asserted here rather than left to be re-derived.
+    """
+    keys = [key for key in four_hundred_raise_sites() if key[2] is None]
+    assert keys, "no row has a None skeleton, so this checks nothing"
+    for key in keys:
+        spans = [span for span in four_hundred_raise_spans() if span.key == key]
+        assert spans, key
+        for span in spans:
+            assert key_for_raise_site(str(span.file), span.lineno) == key
+
+
+def test_a_line_with_no_four_hundred_raise_on_it_names_no_row() -> None:
+    """The index answers ``None`` rather than guessing, which is what makes it quiet.
+
+    An implicit ``TypeError``, a werkzeug ``HTTPException`` and anything raised
+    outside ``src/splitwise_lite/`` all arrive as a frame the index does not hold, and
+    all three are ignored by the same one answer.
+    """
+    store_module = importlib.import_module("splitwise_lite.store")
+    assert key_for_raise_site(store_module.__file__, 1) is None
+    assert key_for_raise_site(__file__, 1) is None
+    assert key_for_raise_site(str(REPO / "no" / "such" / "file.py"), 1) is None
+
+
+def test_every_error_body_is_composed_inside_the_one_error_handler() -> None:
+    """Every error body this application sends is composed in ``_handle_error``.
+
+    That is what makes the observer in tests/conftest.py complete rather than
+    partial: it wraps one function, and a body composed anywhere else would be an
+    answer it never sees. A second error-body path is the one change that would blind
+    the observer while leaving every other check in this module green, so it is
+    refused here rather than assumed.
+
+    This opens ``src/splitwise_lite/web.py`` and walks it, rather than asserting
+    against an imported symbol or against a literal copied out of it. A check about a
+    module that never opens that module is not a check about that module.
+
+    Measured on this branch with ``rg -n "_error_body\\(" src/splitwise_lite/web.py``:
+    one definition, at line 778, and three calls, at 2704, 2723 and 2725. Neither the
+    count nor the lines are pinned, because moving a call within ``_handle_error`` is
+    not a defect and taking one outside it is.
+    """
+    web_source = PACKAGE / "web.py"
+    tree = ast.parse(web_source.read_text(encoding="utf-8"), filename=str(web_source))
+    handlers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_handle_error"
+    ]
+    assert len(handlers) == 1, (
+        "src/splitwise_lite/web.py defines _handle_error "
+        f"{len(handlers)} times, at lines {[node.lineno for node in handlers]}. The "
+        "observer wraps one function by that name, so it can only be watching one of "
+        "them."
+    )
+    definitions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_error_body"
+    ]
+    assert len(definitions) == 1, [node.lineno for node in definitions]
+
+    inside = {id(node) for node in ast.walk(handlers[0]) if isinstance(node, ast.Call)}
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_error_body"
+    ]
+    assert calls, (
+        "src/splitwise_lite/web.py holds no call to _error_body at all, so this "
+        "check passes over nothing. Either an error body is composed some other way "
+        "now, in which case tests/conftest.py's observer watches the wrong function, "
+        "or this walk has stopped finding calls."
+    )
+    outside = [node for node in calls if id(node) not in inside]
+    assert not outside, (
+        "src/splitwise_lite/web.py calls _error_body outside _handle_error, at lines "
+        f"{[node.lineno for node in outside]}.\n\n"
+        "tests/conftest.py observes what a request is answered with by wrapping "
+        "_handle_error, on the strength of every error body being composed there. A "
+        "second path composes a body the observer never sees, so every row of "
+        "FOUR_HUNDRED_SITES marked NO_REQUEST_REACHES_IT goes back to being a claim "
+        "nothing checks, with the suite still green. Compose the body in "
+        "_handle_error, or move the observer to whatever the new one place is."
+    )
+
+
+# --- Check C, part two: the observer is proved to work, on every run --------
+
+
+@pytest.mark.parametrize("site", DRIVEN, ids=[site_id(s) for s in DRIVEN])
+def test_each_driven_row_answers_from_the_site_it_declares(
+    site: Site, app, seeded: Path, answered_requests: list[Any]
+) -> None:
+    """The 4xx a driven row gets back was raised at the site that row names.
+
+    This is what makes the observer in tests/conftest.py believable, because it runs
+    on every run rather than only when something is wrong. If the wrapper is not
+    installed, or records nothing, or maps every frame to no row -- which is what a
+    path that stops comparing equal does -- this reds for all of the driven rows
+    instead of passing quietly over an empty set. An observer that records nothing is
+    the likely outcome of a rushed implementation and it looks exactly like success,
+    so it gets a proof rather than a reading.
+
+    It is also a guarantee this module did not have. A driven row asserted its status,
+    its error ``code`` and that no identifier the store holds is in the message, and
+    nothing asserted where the answer came from. Several rows share a ``code``,
+    ``malformed_request`` most of all, so rows that nothing could previously tell
+    apart are now told apart, the two ``authentication_failed`` rows of
+    ``accounts._fail_login`` and ``accounts.log_in`` among them.
+
+    The record is cleared immediately before the row's own request and after
+    everything its ``who`` and ``setup`` do, so the refusals that
+    ``spend_the_login_budget``, ``mark_one_payment`` and ``answer_one_payment`` each
+    produce are not attributed to the row.
+    """
+    response = drive(site, app, seeded, before=answered_requests.clear)
+    assert response.status_code in range(400, 500), (site_id(site), response.get_json())
+    assert answered_requests, (
+        f"{site_id(site)} answered {response.status_code} and the observer recorded "
+        "nothing at all. Every error body this application sends is composed in "
+        "web._handle_error, which tests/conftest.py wraps, so an empty record means "
+        "the wrapper is not installed rather than that nothing was refused. Until "
+        "this holds, every row marked NO_REQUEST_REACHES_IT is an unchecked claim "
+        "again and the per-test guard passes over nothing."
+    )
+    answered = answered_requests[-1]
+    assert answered.status == response.status_code, (site_id(site), answered)
+    found = key_for_raise_site(answered.file, answered.lineno)
+    assert found == site.key, (
+        f"{site_id(site)} answered {response.status_code} from "
+        f"{answered.file}:{answered.lineno}, which is "
+        + ("no 4xx raise site this walk knows" if found is None else repr(found))
+        + f", and not the site the row declares, {site.key!r}.\n\n"
+        "A row names where its refusal is raised. Either the row names the wrong "
+        "site, or the request now reaches a different refusal that happens to carry "
+        "the same status and the same code, which is exactly what this check exists "
+        "to tell apart. Correct the row or correct the drive."
+    )
