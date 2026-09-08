@@ -216,7 +216,7 @@ SCENARIOS = [
     "one_quiet_member_reads_grammatically",
 ]
 
-# The six mutants the harness is measured against, as anchored substitutions applied
+# The committed mutants the harness is measured against: anchored substitutions applied
 # to the real source at run time. None is a committed copy of a shipped file, so none
 # can rot into a false pass or be served to a browser by accident, and the text lives
 # here where a reviewer reads it rather than buried in the harness.
@@ -854,6 +854,78 @@ def test_hiding_the_fragment_maker_shows_what_the_feed_was_hiding() -> None:
     # reaches feedRender, so it stays green with the member hidden. It could not have
     # caught this defect on its own and it cannot prove the fix either.
     assert found[THE_EMPTY_FEED]["passed"], found[THE_EMPTY_FEED]["failures"]
+
+
+# --- A programming error in the render carries its own stack ---------------
+
+# The substitution task 72 is built on. One line, anchored inside feedRender, that
+# dereferences a key the payload does not have.
+#
+# Why the payload and not a DOM member. A substitution reaching for something the
+# stub does not define routes through refusedProperty(), which records a failure line
+# against the running scenario at the moment it refuses, whatever the app then does
+# with the exception. The check below would then pass with or without loadFeed's
+# promise shape, because the line it looks for would be the guard's and not the
+# hook's. payload is parsed JSON, no guard is wrapped round it, and a missing key on
+# it throws a plain TypeError that only the shipped chain decides the fate of.
+THE_FEED_RENDER_THROW = {
+    "file": "app/app.js",
+    "find": "    var names = feedNames(members);",
+    "replace": (
+        "    var names = feedNames(members);\n"
+        "    payload.thisKeyIsNotInTheJson.norIsThisOne;"
+    ),
+}
+
+# The feed's refusal path: /expenses is refused, feedState('error') runs and the
+# screen shows #feed-error. It never reaches feedRender, so it is the control for
+# the half of this change that must not happen.
+THE_FEED_REFUSAL = "a_refusal_a_screen_asked_for_leaves_the_app_frame_up"
+
+
+def test_a_throw_inside_the_feed_render_arrives_as_an_unhandled_rejection() -> None:
+    """A broken render reaches the rejection hook carrying its own stack.
+
+    This is diagnosis, not correctness, and the distinction is the reason the check
+    is shaped the way it is. Nothing a person using the app sees changes: the throw
+    happens before feedState('list'), so the screen sits on its loading paragraph
+    under either promise shape, and feedBusy is cleared under either one too.
+
+    **The check this test is deliberately not.** A tenth entry in the MUTANT_A to
+    MUTANT_I family, asserting that this substitution turns the feed scenarios red,
+    would pass before the fix and after it and could therefore prove nothing. The
+    in-flight invariant reds them either way: feedState('list') is the last statement
+    of feedRender, so any throw inside it leaves #feed-loading up. Measured on this
+    substitution over the whole scenario list, the failing set is the same 14
+    scenarios with .then(done, done) and with .finally(done), and the only difference
+    between the two runs is that the second carries the line asserted below. So the
+    assertion is on that line and not on the redness, and the mutation record holds
+    both runs.
+    """
+    completed = run_harness({"substitutions": [THE_FEED_RENDER_THROW]})
+    # Exactly 1, never merely non-zero: a substitution that broke the file into a
+    # syntax error exits 2, and would otherwise be mistaken for a caught defect.
+    assert completed.returncode == 1, (
+        f"expected exit 1, got {completed.returncode}.\nstderr:\n{completed.stderr}"
+    )
+    found = results(parse_report(completed))
+    assert not found[THE_ROW]["passed"]
+    messages = " ".join(found[THE_ROW]["failures"])
+    # The hook fired at all, which is the whole change.
+    assert "unhandled rejection" in messages, messages
+    # And it carries what the invariant's line cannot: the error's own type and the
+    # frame it was thrown from. That is what makes it a diagnosis rather than a
+    # symptom, and it is why the fix is worth a line of shipped source.
+    assert "TypeError" in messages, messages
+    assert "feedRender" in messages, messages
+    # The named survivor, already designated for this role above: the empty feed
+    # never reaches feedRender, so it cannot show this and cannot prove the fix.
+    assert found[THE_EMPTY_FEED]["passed"], found[THE_EMPTY_FEED]["failures"]
+    # The half that must not change. A refused request is not a programming error:
+    # it still reaches feedState('error') and it must not start arriving at the hook.
+    # This scenario asserts #feed-error is up, so it is red either if the refusal
+    # stopped being handled or if handling it stopped showing the notice.
+    assert found[THE_FEED_REFUSAL]["passed"], found[THE_FEED_REFUSAL]["failures"]
 
 
 # --- api.js is the only place a status is interpreted ----------------------
