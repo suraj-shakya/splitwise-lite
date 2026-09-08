@@ -1738,17 +1738,46 @@ def stray_node_ids(section: str) -> list[str]:
 
 
 def stray_node_id_message(where: str, heading: str, identifier: str) -> str:
-    """What the check says about a node id a record names but does not list."""
+    """What the check says about a node id a record names but does not list.
+
+    This message has to teach the citation convention, and that is not decoration. The
+    cheapest way to make this check go green is to add the id to ``survives``, and if
+    the id was a citation rather than a claim, that entry is an observation nobody made.
+    A check whose cheapest resolution is a lie is worse than no check, and it is the
+    defect this module exists to refuse, so the two fixes are spelled out here with the
+    wrong one named as wrong.
+    """
+    module, _, bare = identifier.partition("::")
     return (
         f"{where} section {heading!r} names {identifier} in its prose, and neither "
         "kills nor survives in that section's record lists it.\n"
         "\n"
-        "So the claim and the record disagree about which tests the mutation touched, "
-        "and only the record is checked by anything. Put the id in kills if the "
-        "mutation reddened that test, or in survives if it stayed green. If the prose "
-        "meant a different test, the id is the thing to correct: a claim bound to its "
-        "subject by position in a list is how a correct number ended up against the "
-        "wrong mutation in this repo."
+        "A node id in a record's prose is read as a CLAIM about this mutation: that it "
+        "reddened that test, or that the test stayed green under it. So there are two "
+        "fixes, and only one of them is right for your case.\n"
+        "\n"
+        "1. You meant a claim. Put the id in kills if the mutation reddened that test, "
+        "or in survives if you ran it under the mutant and watched it stay green. Do "
+        "NOT add it to survives if you did not run it. That is an observation nobody "
+        "made, it is the cheapest way to make this check quiet, and it is exactly the "
+        "failure this check exists to refuse.\n"
+        "\n"
+        "2. You meant to CITE the test, as a precedent or an example, and are claiming "
+        "nothing about what this mutation did to it. Then name it bare, without the "
+        "path and the '::', which is how this format tells a citation from a claim. "
+        "The exact edit here is:\n"
+        "\n"
+        f"    {identifier}\n"
+        f"    becomes   {bare} in {module}\n"
+        "\n"
+        "That convention was not invented for this message. It was found by this check "
+        "reddening on plans/mutations/16-incompleteness-signal.md, whose Mutation 5 "
+        "cites the precedent it was copied from: the citation was legitimate and "
+        "reading it as a claim was what was wrong.\n"
+        "\n"
+        "Either way the id ends up bound to its subject, which is the point. A claim "
+        "bound to its subject only by position in a list is how a correct number ended "
+        "up against the wrong mutation in this repo."
     )
 
 
@@ -1830,6 +1859,17 @@ def test_the_stray_node_id_message_says_what_happened() -> None:
     assert "neither kills nor survives" in message
     assert "Put the id in kills" in message
     assert "wrong mutation" in message
+    # The half that stops the cheapest fix being a false entry. A reader who meant a
+    # citation has to be told the citation form at the moment the check fires, because
+    # that is the only moment anybody reads it.
+    assert "read as a CLAIM" in message
+    assert "Do NOT add it to survives if you did not run it" in message
+    assert "observation nobody made" in message
+    assert "name it bare, without the path and the '::'" in message
+    # The exact edit, not a description of it.
+    assert "test_y in tests/test_x.py" in message
+    # And where the convention came from, so it reads as found rather than invented.
+    assert "plans/mutations/16-incompleteness-signal.md" in message
 
 
 # --- The measurement that could not fail, refused in the documents (#58) ---

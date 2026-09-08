@@ -508,7 +508,31 @@ audited guard at a time.
     whose prose names a node id absent from both lists is a finding, and one whose prose names
     only ids that are present is not.
 
-### 70a: the carried baseline
+    > **Corrected 2026-09-08, during implementation of 70a, by contact with a real record
+    > rather than by review.** This criterion reads above, and is left reading, "**every
+    > pytest node id appearing anywhere in a record's prose also appears in that record's
+    > `kills` or `survives`**". That is too broad. It assumes every node id in prose is a
+    > claim about what the mutation did, and **a citation is a second legitimate use it did
+    > not anticipate**: a record may name another test as the precedent it was modelled on,
+    > or as an example, while claiming nothing about that test under the mutation.
+    >
+    > **What is true, and what 70a implements:** a node id in a record's prose is **read as
+    > a claim**, so it must appear in that record's `kills` or `survives`; and a **citation
+    > is written as a bare test name**, without the module path and the `::`, which is how
+    > the format tells the two apart. Nothing else changes: a node id is still recognised by
+    > containing `::`, `REQUIRED_KEYS` is unchanged and no JSON key is added.
+    >
+    > **How it was found**, because that is the part worth keeping. Merging `a595330` into
+    > `task-70` reddened this check against `plans/mutations/16-incompleteness-signal.md`,
+    > whose Mutation 5 names the precedent it was copied from. The citation was legitimate
+    > and the claim reading was wrong. Two fixes were available and both were refused:
+    > adding the id to `survives` would have asserted an observation nobody made, and
+    > narrowing the check would have silenced a red with no clean textual boundary between
+    > a claim and a citation, which is a hole rather than a narrowing. The convention is the
+    > only answer a check can police, so `stray_node_id_message` now teaches it at the
+    > moment the check fires, naming the false-`survives` entry as the wrong fix and giving
+    > the exact bare-name edit. That message is pinned by
+    > `test_the_stray_node_id_message_says_what_happened`.
 
 14. `CARRIED_UNANCHORED_BLOCKS` maps a POSIX test-module path to two things: a frozenset of
     `(enclosing definition name, number of unanchored candidate blocks in it)` pairs, and one

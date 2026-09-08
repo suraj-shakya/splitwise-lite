@@ -44,6 +44,28 @@ enumerates node ids rather than counting them.**
 `test_every_node_id_a_record_names_is_one_it_lists` then holds those ids to the `kills`
 and `survives` beside them.
 
+**A node id in prose is a claim; a citation is written bare.** If you name another test as
+a precedent, an example or a cross-reference, and are claiming nothing about it under the
+mutation, write it as `test_some_name` in `tests/test_module.py` rather than as
+`tests/test_module.py::test_some_name`. The `::` form is what the check reads as a claim,
+and a claim has to appear in that section's `kills` or `survives`. Do not satisfy the
+check by adding a citation to `survives`: `survives` means you ran it under the mutant and
+watched it stay green, and an entry you did not run is an observation nobody made.
+
+> **Found 2026-09-08, by the check reddening on a record that had already merged.** The
+> convention above is not a preference somebody had; it is the answer to a real failure,
+> and this is the third time this mechanism has caught something unplanned. Merging
+> `a595330` into `task-70` reddened
+> `test_every_node_id_a_record_names_is_one_it_lists` against Mutation 5 of
+> `plans/mutations/16-incompleteness-signal.md`, which names in `::` form the precedent it
+> was copied from. The citation was legitimate; reading it as a claim was not. Criterion 13
+> of `plans/tasks/70-substring-assertions-on-exception-messages.md` says every node id in
+> prose must be listed, and that criterion is too broad; it carries a dated correction
+> saying so. The record's citation was reworded to the bare form in the same pull request,
+> because a check landing red on `master` is the failure #49 exists to prevent, and
+> `stray_node_id_message` now teaches this convention at the moment it fires so the
+> cheapest fix stops being a false `survives` entry.
+
 > **Corrected 2026-09-08, after QA failed PR #84.** This paragraph previously said "Every
 > claim names its pytest node id", which was not true of this file when it was written:
 > the `m1` record counted five blocks as two and named one of them without a `::`. The
