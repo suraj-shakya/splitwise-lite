@@ -300,6 +300,19 @@ hold the largest module. Direct and bound figures are from the per-module table 
 | 70g | `tests/test_store.py`, first half | `store.py` | part of 51 | part of 1 |
 | 70h | `tests/test_store.py`, second half | `store.py` | part of 51 | part of 1 |
 
+> **Corrected 2026-09-08, during implementation of 70a.** **This table is incomplete: it
+> has no row for `tests/test_accounts.py`**, which holds one unanchored block, in
+> `test_every_login_failure_is_the_same_type_with_the_same_message`. The table is left as
+> it stands because the gap is the evidence: the rows were derived by ripgrep over nine
+> modules and 70a's walk found a tenth, which is the argument for having a mechanism at
+> all. The note under criterion 28 carries the reasoning and the consequence, and it is
+> repeated here rather than only there because this table is what a 70b to 70h author
+> opens to learn their scope, and criterion 28 is roughly 290 lines below it. Until a row
+> is added, that module's baseline entry names **70h**, the slice that runs last, and
+> criterion 28 as written forbids any slice from touching a module with no row, so the
+> two committed statements contradict each other and adding the row is what reconciles
+> them.
+
 70f is its own slice because its guards are not in `src/` at all: `tests/test_web_shell.py:1068`
 raises out of `shell_digest` and `:1235` out of `omissions_carry_their_reasons`, and
 `tests/test_suite_integrity.py:342` out of `duplicate_definitions`. The mutation targets a file
@@ -564,6 +577,20 @@ audited guard at a time.
     form is the same defect; that the anchor goes on the block; the four accepted anchors; the
     new check's name; and the carried baseline with the statement that it may only shrink and
     that the last slice deletes it.
+
+    > **Corrected 2026-09-08, after the reviewer of PR #84 blocked on this.** "The
+    > statement that it may only shrink" is satisfied here as a **convention and not as a
+    > guarantee**, and the rule says so in those words. Nothing enforces monotonicity:
+    > adding a loose block, adding its `(name, count)` pair and bumping `CARRIED_TOTAL`
+    > passes all three of the baseline's checks, because a set equality is satisfied by
+    > the new pair and a sum equality by the bump. It is a claim about history and the
+    > suite reads one tree, so enforcing it would mean reading git from a test, which is
+    > not worth it and is not done. Writing the bare sentence this criterion asks for
+    > would have put a rule that reads broader than its mechanism into
+    > `.claude/rules/testing.md`, which is the document issue #70 was filed about and the
+    > exact defect criteria 24 and 25 exist to remove from it. So the rule states what the
+    > code does, then states the residual and what actually holds the baseline down, which
+    > is a reviewer reading a three-place diff that includes a declared integer.
 25. **The amendment is a correction, not an edit-away.** The reading being retired, that
     anchoring `match=` is the whole of this rule, is quoted in place in this repo's dated
     correction-note form rather than deleted, with the measurement that retires it: 16 pins
