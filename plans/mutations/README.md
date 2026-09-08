@@ -138,8 +138,8 @@ sum:
   section, so a reader of the record learns it there instead of from a test module.
 
 **What none of them does.** No recorded mutation is re-run, and no `result` is verified.
-A record whose anchor matches is proven **appliable** — the recipe will apply it — and is
-not proven correct. Its recorded verdict is a measurement somebody took against a tree
+A record whose anchor matches is proven **appliable**, meaning the recipe above will
+apply it, and is not proven correct. Its recorded verdict is a measurement somebody took against a tree
 that record names, and only re-running the mutation says whether that verdict still
 holds. Do not finish this section believing the suite now proves a record correct: it
 reads the anchors as text and counts them, and that is the whole of it.

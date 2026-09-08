@@ -145,8 +145,8 @@ exercising what it named.
   test module.
 
   **That list is expected to grow, and saying so exactly matters in this file.** A
-  correct change to `src/` legitimately rots an anchor — #61 was right — so refusing
-  growth would be refusing the change. What the check refuses is an **undeclared** stale
+  correct change to `src/` legitimately rots an anchor, and #61 was right to make one,
+  so refusing growth would be refusing the change. What the check refuses is an **undeclared** stale
   anchor. What holds the list honest is a reviewer reading a diff that includes a bump
   to a declared integer, plus the dated note in the record itself; the suite reads one
   tree and cannot tell an anchor that rotted from one that never matched, and its

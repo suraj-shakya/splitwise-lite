@@ -1974,9 +1974,9 @@ def test_the_stray_node_id_message_says_what_happened() -> None:
 # checked on exactly the same terms as a `killed` one.
 #
 # The ossification argument the section above makes is answered rather than abandoned. A
-# correct change to src/ legitimately rots an anchor — #61 was right to take
+# correct change to src/ legitimately rots an anchor. #61 was right to take
 # `{list(ordered)}` out of split.py's repeated-member refusal, and that is issue #87's
-# own central point — so this list is expected to GROW, what the check refuses is an
+# own central point. So this list is expected to GROW, what the check refuses is an
 # UNDECLARED stale anchor, and no repair is demanded of anybody. Unlike #70's baseline
 # above, nothing here says or implies that this list only shrinks.
 #
