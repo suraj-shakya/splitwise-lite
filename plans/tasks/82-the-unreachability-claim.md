@@ -205,6 +205,79 @@ Two files, neither of them one PR #70a touches:
 - **Issue #70** concerns substring assertions with a superstring hazard. Different
   defect, same family. Untouched.
 
+## Correction, 2026-09-08: three of the fifty marks were false
+
+The guard this task builds was run against the suite, chunked by module. It reached
+three rows marked `NO_REQUEST_REACHES_IT`. Measured with
+`PYTHONDONTWRITEBYTECODE=1 uv run python -m pytest tests/test_web_api.py -q`, which
+reported `493 passed, 4 errors`, those four being teardown failures of the guard over
+three distinct rows:
+
+| row | raised at | how it was answered |
+| --- | --- | --- |
+| `store.py::_require_name::" must not be blank"` | `src/splitwise_lite/store.py:264` | 400 `User display_name must not be blank`, to a plain `POST /api/signup` carrying a blank `display_name` |
+| `web.py::_signup::"an account already exists for "` | `src/splitwise_lite/web.py:1347` | 409, with `accounts.sign_up` stubbed to raise `DuplicateRecord` |
+| `web.py::_decide_settlement::"there is more than one payment ..."` | `src/splitwise_lite/web.py:2064` | 409, with a second unanswered claim written straight through the store |
+
+**All three marks are false, and the reasoning matters more than the verdict.**
+`NO_REQUEST_REACHES_IT` claims that no client can ever be shown that message, which is
+what would make it safe for the message to carry a stored value. A measurement showing
+that, given a state, a request does produce that response falsifies exactly that claim.
+How hard the state is to reach is not what the marker asserts. Row 3 makes it sharpest:
+a second unanswered claim for one ordered pair is what `web._SETTLEMENT_LOCK` exists to
+prevent, and that lock is honestly scoped to one process, so the state is the one the
+defensive raise exists for rather than an artefact of a test. A mark claiming nothing
+reaches it is the wrong description of a guard that exists because something might.
+
+**None of the three leaks an identifier.** All three now pass the driven half's
+assertion that no identifier the store holds appears in the body. Nothing shipped was
+ever wrong: the defect was in the description, not in the behaviour.
+
+### What is retracted
+
+> **F2.** In the shipped diff, no row of `FOUR_HUNDRED_SITES` changes its `drive`,
+> `reason` or `skeleton`. The anchored counts stay at 50 marked and 56 driven, measurable
+> with the two patterns in the table at the top of this file.
+
+and, from **Out of scope**:
+
+> **Driving any currently marked row.** No row moves from marked to driven in the
+> shipped diff. If the check reveals that one is reachable, that is a finding to report,
+> and fixing it is its own task.
+
+Both were written before anybody knew these three rows existed. Together with D1 and D4
+they left no permitted route to a green branch: the guard must red on a false mark, no
+skip, no xfail and no allowlist is available, and the rows could not be corrected. They
+are withdrawn **for exactly these three rows** and for nothing else.
+
+**What replaces them.** No row of `FOUR_HUNDRED_SITES` changes its `drive`, `reason` or
+`skeleton` except the three named above, each of which moves from `unreachable(...)` to
+a `Drive`. The anchored counts become **47 marked and 59 driven**, still 106 rows,
+measured with the same two patterns over `tests/test_error_messages.py`:
+`grep -c '^    unreachable('` reports 47, and `grep -c '^    Site('` reports 59.
+
+D1 and D4 are unchanged. That the guard reds on a false mark is shown by a recorded
+mutation in `plans/mutations/82-the-unreachability-claim.md`, not by leaving a real red
+in the branch: that is the difference between a check proved to work and a branch nobody
+can merge.
+
+### Why `Drive.setup`'s vocabulary grew
+
+`Drive` could express who makes a request, what it carries, and what state a sequence of
+earlier requests leaves behind. It could express neither state rows 2 and 3 need,
+because neither is reachable by any sequence of requests in one process. Its four values
+were asserted in one place; that assertion is now made against a named `SETUPS` tuple
+carrying six. The two new ones:
+
+- `two_pending`, a second unanswered claim for one ordered pair, written through the
+  store because task 14's 409 refuses the second one through the endpoint.
+- `racing_signup`, `accounts.sign_up` raising `DuplicateRecord`, installed only for the
+  duration of the one request, because what it stands in for is a second process landing
+  between the check and the write.
+
+The vocabulary stays closed: a value not in `SETUPS` is refused in `drive`, and the
+refusal is what keeps it a vocabulary rather than a free string.
+
 ## Goal
 
 The fifty rows of `FOUR_HUNDRED_SITES` marked `NO_REQUEST_REACHES_IT` stop being a claim
@@ -344,9 +417,12 @@ there.
 
 - F1. `tests/test_suite_integrity.py` is not edited, and neither is
   `.claude/rules/testing.md`. Both are PR #70a's.
-- F2. In the shipped diff, no row of `FOUR_HUNDRED_SITES` changes its `drive`, `reason`
-  or `skeleton`. The anchored counts stay at 50 marked and 56 driven, measurable with the
-  two patterns in the table at the top of this file.
+- F2. **Superseded by the correction dated 2026-09-08 above,** which quotes the
+  withdrawn wording. In the shipped diff, no row of `FOUR_HUNDRED_SITES` changes its
+  `drive`, `reason` or `skeleton` except the three the guard found to be falsely marked,
+  each of which moves from `unreachable(...)` to a `Drive`. The anchored counts become 47
+  marked and 59 driven, still 106 rows, measurable with the two patterns in the table at
+  the top of this file.
 - F3. No file under `src/splitwise_lite/` changes. The observer patches at run time from
   the test side and the package is untouched.
 - F4. No file under `app/` changes, so `app/sw.js` needs no `SHELL_DIGEST` line and the
@@ -376,9 +452,11 @@ there.
 - **Rewording any message.** Not the two rows in issue #79, not the raw cents in
   `store._require_storable_cents`, not anything else. This task changes what is checked,
   not what is said.
-- **Driving any currently marked row.** No row moves from marked to driven in the shipped
-  diff. If the check reveals that one is reachable, that is a finding to report, and
-  fixing it is its own task.
+- **Driving any currently marked row. Superseded by the correction dated 2026-09-08
+  above,** which quotes the withdrawn wording. No row moves from marked to driven except
+  the three this task's own guard found reachable, which are corrected here rather than
+  left as a red nobody can merge. A reachable row found after this lands is a finding to
+  report and its own task.
 - **Verifying the marks that this predicate does not cover.** A row whose raise never
   executes and a row whose raise executes and is swallowed are treated alike here: both
   pass. Proving that a raise cannot execute at all is not attempted.
