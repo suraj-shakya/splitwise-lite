@@ -1,7 +1,8 @@
 """The suite's check on itself.
 
-Three failures in this repo reported success without exercising the thing they named,
-and this module answers them with something that runs: GitHub issues #67, #65 and #60.
+Four failures in this repo reported success without exercising the thing they named,
+and this module answers them with something that runs: GitHub issues #67, #65, #70
+and #60.
 
 The duplicate-definition check refuses a test module that binds one name twice at
 module level, because Python rebinds silently and pytest then collects only the last
@@ -9,7 +10,15 @@ definition, so the earlier test is deleted with nothing anywhere reporting an er
 The anchored-pin check refuses a ``pytest.raises(match=)`` whose pattern is not
 anchored with ``^`` and carries no ``# unanchored:`` reason, because ``match=`` is an
 ``re.search`` and an unanchored pattern can be satisfied by a superstring that somebody
-else's guard raised. A fourth failure, GitHub issue #58, gets the third refusal here and
+else's guard raised. The unanchored-block check, GitHub issue #70, states the converse
+for the commoner form: a ``pytest.raises`` block that reads the exception's message has
+to carry an anchor somewhere, because ``"x" in str(exc.value)`` is the same operation
+``match="x"`` performs and there were sixteen pins against a hundred-odd of those. It
+carries the blocks that were already loose in a declared baseline, which is checked in
+both directions but which shrinks only by convention and not by any check, so
+**it makes no existing assertion able to fail**; that is the audit, issue #70's slices
+70b to 70h, and reading this module's green run as covering them is the misreading it is
+written to prevent. A further failure, GitHub issue #58, gets the last refusal here and
 is refused in the documents rather than in the code: no specification under ``plans/``,
 and neither ``README.md`` nor ``CLAUDE.md``, may ask outside a blockquote for
 ``document.documentElement.scrollWidth`` against its ``clientWidth``, because ``body``
@@ -39,6 +48,7 @@ import json
 import re
 import tokenize
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -620,6 +630,901 @@ def test_the_unanchored_pin_message_says_what_happened() -> None:
     assert "has to be a literal for this check to read it" in other
 
 
+# --- The unanchored-block check (#70) --------------------------------------
+#
+# The guarantee here is one sentence and it is the converse of the one above: a
+# `match=` (or an equivalent whole-message comparison) EXISTS wherever a block reads
+# the exception's message. `test_every_message_pin_is_anchored_or_says_why` owns the
+# other half, that any `match=` which exists is anchored. Neither check restates the
+# other's guarantee, and neither re-decides the other's question: nothing here reads a
+# pattern for a leading `^`.
+#
+# What this check does NOT do, stated where a reader will hit it before drawing the
+# wrong conclusion from a green run: it makes no existing assertion able to fail. Every
+# block carried in CARRIED_UNANCHORED_BLOCKS below is exactly as loose after this check
+# as before it. Making them able to fail is the audit, issue #70's slices 70b to 70h,
+# one deleted guard at a time. This is the mechanism only.
+
+# The unit is the block, not the assertion, and the reason is measurable. A block
+# routinely asserts several fragments about one message — tests/test_store.py:2983 and
+# :2984 assert "u1" and "u2" — and at most one fragment can be at the start of a
+# message, so "put ^ on each" is unsatisfiable. Once one anchor in a block has
+# established which guard raised, every fragment assertion beside it stops being a pin
+# and becomes documentation.
+#
+# WHAT A BLOCK IS HERE, and this is a correction to the wording of criterion 5 of
+# plans/tasks/70-substring-assertions-on-exception-messages.md, recorded rather than
+# quietly applied. That criterion says the candidate is a `with` "whose body reads that
+# name's message". Measured on this branch 2026-09-08 over tests/*.py: of the 132
+# `str(NAME.value)` calls in the suite, **zero** are inside the `with` body and 132 are
+# after it. They cannot be inside: pytest populates `excinfo.value` in `__exit__`, and
+# the body has already been left by the exception in any case. Read literally, that
+# criterion finds nothing anywhere, CARRIED_TOTAL is 0, and this becomes a fourth check
+# that cannot fail — the exact defect this module exists to refuse. So the block is the
+# `with` statement TOGETHER WITH the statements that follow it in the same suite, up to
+# the next `raises`-binding `with` in that suite or the end of the suite: the region in
+# which that block's bound name is the live one. Criterion 15 already assumes this
+# reading, because it asks the baseline to notice "one of two blocks in a function"
+# being anchored, which only has a referent when a function's statements are divided
+# between its blocks.
+#
+# Shapes deliberately NOT seen, with the count each has on this branch, in the manner
+# message_pins' docstring lists its exclusions. Measured 2026-09-08 over tests/*.py:
+#   NAME.value.args                     0 occurrences
+#   repr(NAME.value)                    0 occurrences
+#   an f-string holding {NAME.value}    0 occurrences
+#   an annotated assignment `m: str = str(NAME.value)`   0 occurrences
+#   a walrus `(m := str(NAME.value))`   0 occurrences
+#   pytest.warns(...) as NAME           0 occurrences
+# A future occurrence of any of those six is invisible to this check: the block would not
+# be a candidate at all, so it would be neither flagged nor carried, and nothing anywhere
+# would report it. Two levels of local binding are also not followed, and a binding made
+# outside the block is not followed across the function boundary.
+#
+# The seventh is different in kind, and it is the one to read carefully, because it is a
+# FALSE NEGATIVE rather than an invisibility:
+#   a nested `with raises(...) as NAME` rebinding the same NAME inside a candidate
+#   region                                               0 occurrences
+# The region runs to the next `raises`-binding `with` in the SAME suite, so it does not
+# stop at a rebinding one level down. Given an unanchored block followed by a loop whose
+# body rebinds the same name and compares that message with `==`, the anchor search walks
+# the whole region, finds the inner equality and calls the OUTER block anchored:
+# message_blocks returns 2 and unanchored_message_blocks returns 0. The other six leave a
+# block out of the population, so it is at least absent from the baseline. This one puts
+# a loose block on the anchored side of a check whose entire job is that side, and
+# nothing prints anything.
+# Measured 2026-09-08 across all 19 modules in TEST_SOURCES: 0 occurrences, so 107 is not
+# an undercount and this is latent rather than live. Found by the reviewer of PR #84, and
+# recorded rather than fixed, because narrowing the region to stop at a nested rebinding
+# would change the walk on a tree where it changes no number, and an audit slice that
+# writes the shape is the point at which it earns the change.
+
+
+class MessageBlock(NamedTuple):
+    """One ``pytest.raises`` block that reads the exception's message.
+
+    ``lineno`` and ``end_lineno`` are the block's first and last physical lines, the
+    last being the end of the region described above rather than the end of the ``with``
+    suite. ``header_end`` is the last line of the ``with`` header, which is where the
+    marker is looked for. ``enclosing`` is the innermost definition's name, or
+    ``"<module>"``, taken the way ``four_hundred_raise_sites`` takes it.
+    """
+
+    lineno: int
+    end_lineno: int
+    header_end: int
+    name: str
+    enclosing: str
+    anchored: bool
+
+
+def message_call(node: ast.AST, name: str) -> bool:
+    """``node`` is a call to ``str`` whose single argument is ``NAME.value``."""
+    return (
+        isinstance(node, ast.Call)
+        and callee_name(node) == "str"
+        and not node.keywords
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Attribute)
+        and node.args[0].attr == "value"
+        and isinstance(node.args[0].value, ast.Name)
+        and node.args[0].value.id == name
+    )
+
+
+def message_locals(region: list[ast.stmt], name: str) -> set[str]:
+    """Names an assignment in this block binds to ``str(NAME.value)``.
+
+    One level of binding. A local bound to another local is not followed, and neither is
+    a binding made outside the block, so nothing here crosses a function boundary.
+    """
+    bound: set[str] = set()
+    for statement in region:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Assign) and message_call(node.value, name):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bound.add(target.id)
+    return bound
+
+
+def is_message(node: ast.AST, name: str, bound: set[str]) -> bool:
+    """``node`` is the exception's message, in either of the two shapes seen."""
+    if message_call(node, name):
+        return True
+    return (
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in bound
+    )
+
+
+def region_reads_message(region: list[ast.stmt], name: str) -> bool:
+    """The block reads the message, which is what makes it a candidate at all."""
+    bound = message_locals(region, name)
+    return any(
+        is_message(node, name, bound)
+        for statement in region
+        for node in ast.walk(statement)
+    )
+
+
+def region_is_anchored(call: ast.Call, region: list[ast.stmt], name: str) -> bool:
+    """Whether anything in the block establishes which guard raised.
+
+    Three of the four accepted anchors; the fourth, the ``# unanchored:`` marker, is a
+    comment and is applied by ``unanchored_message_blocks``. The ``match=`` keyword is
+    read off the ``raises`` call itself and never off some other call in the block, for
+    the same reason ``NOT_A_PIN_OTHER_CALL`` exists. Whether that pattern starts with
+    ``^`` is not re-decided here: the sibling check owns that guarantee.
+    """
+    if any(keyword.arg == "match" for keyword in call.keywords):
+        return True
+    bound = message_locals(region, name)
+    for statement in region:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Compare) and any(
+                isinstance(op, ast.Eq) for op in node.ops
+            ):
+                if is_message(node.left, name, bound) or any(
+                    is_message(other, name, bound) for other in node.comparators
+                ):
+                    return True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "startswith"
+                and is_message(node.func.value, name, bound)
+            ):
+                return True
+    return False
+
+
+def raises_bindings(
+    statements: list[ast.stmt],
+) -> list[tuple[int, ast.With | ast.AsyncWith, ast.Call, ast.Name]]:
+    """Every ``with ... raises(...) as NAME:`` directly in one suite, in order."""
+    found: list[tuple[int, ast.With | ast.AsyncWith, ast.Call, ast.Name]] = []
+    for index, statement in enumerate(statements):
+        if not isinstance(statement, (ast.With, ast.AsyncWith)):
+            continue
+        for item in statement.items:
+            call, bound = item.context_expr, item.optional_vars
+            if (
+                isinstance(call, ast.Call)
+                and callee_name(call) == "raises"
+                and isinstance(bound, ast.Name)
+            ):
+                found.append((index, statement, call, bound))
+                break
+    return found
+
+
+def message_blocks(source: str, where: str) -> list[MessageBlock]:
+    """One entry per candidate block in ``source``, ordered by line."""
+    tree = parsed(source, where)
+    found: list[MessageBlock] = []
+    stack: list[str] = []
+
+    def read_suite(statements: list[ast.stmt]) -> None:
+        starts = raises_bindings(statements)
+        for order, (index, statement, call, bound) in enumerate(starts):
+            end = starts[order + 1][0] if order + 1 < len(starts) else len(statements)
+            region = statements[index:end]
+            if not region_reads_message(region, bound.id):
+                continue
+            found.append(
+                MessageBlock(
+                    statement.lineno,
+                    max(node.end_lineno or node.lineno for node in region),
+                    max(
+                        call.end_lineno or call.lineno,
+                        bound.end_lineno or bound.lineno,
+                    ),
+                    bound.id,
+                    stack[-1] if stack else "<module>",
+                    region_is_anchored(call, region, bound.id),
+                )
+            )
+
+    def walk(node: ast.AST) -> None:
+        named = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        if named:
+            stack.append(node.name)  # type: ignore[attr-defined]
+        for field in ("body", "orelse", "finalbody"):
+            suite = getattr(node, field, None)
+            if isinstance(suite, list) and suite and isinstance(suite[0], ast.stmt):
+                read_suite(suite)
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+        if named:
+            stack.pop()
+
+    walk(tree)
+    found.sort()
+    return found
+
+
+def unanchored_message_blocks(source: str, where: str) -> list[MessageBlock]:
+    """The candidate blocks that are neither anchored nor marked."""
+    marked = marked_lines(source, where)
+    return [
+        block
+        for block in message_blocks(source, where)
+        if not block.anchored
+        and not any(
+            line in marked for line in range(block.lineno, block.header_end + 1)
+        )
+    ]
+
+
+def unanchored_block_message(where: str, line: int, name: str) -> str:
+    """What the check says about one block that pins nothing."""
+    return (
+        f"{where}:{line} opens a pytest.raises block that reads {name}.value's "
+        "message, and nothing in the block establishes which guard raised it.\n"
+        "\n"
+        f'\'"x" in str({name}.value)\' is the same operation match="x" performs. For a '
+        "pattern with no metacharacters an re.search is a substring test, so the PR #62 "
+        "collision applies to it unchanged: the assertion passes for any message "
+        "holding that fragment, including one somebody else's guard raised.\n"
+        "\n"
+        "The fix goes on the block, not on each assertion. A block routinely asserts "
+        "several fragments about one message and at most one can start the message, so "
+        "there is no per-assertion form of it. Once one anchor has established which "
+        "guard raised, every fragment assertion beside it stops being a pin and becomes "
+        "documentation, and none of them has to change.\n"
+        "\n"
+        "A negative assertion is weaker still rather than safer: any message lacking "
+        "the string satisfies it, including one from an entirely different guard.\n"
+        "\n"
+        "Any one of these anchors the block, and they are the whole accepted set:\n"
+        "\n"
+        '    match=r"^..." on the pytest.raises call\n'
+        f'    assert str({name}.value) == "..."\n'
+        f'    assert str({name}.value).startswith("...")\n'
+        "    # unanchored: <why> on the with statement, with a reason of at least "
+        f"{MINIMUM_REASON} characters\n"
+        "\n"
+        "Whether a match= pattern really starts with ^ is not decided here. "
+        "test_every_message_pin_is_anchored_or_says_why already guarantees that, and "
+        "these two checks state one guarantee each."
+    )
+
+
+# The blocks that were already unanchored when this check landed, carried so that the
+# check can refuse everything new without either fixing a hundred assertions in one
+# unauditable merge or converting them unaudited, which is the worse defect.
+#
+# This is not an allowlist, and it is not the equal of the `# unanchored:` hatch either.
+# Four properties separate it from an allowlist, and all four are checked below: it is
+# checked in BOTH directions, so a carried entry that is no longer unanchored is a
+# failure naming it and the baseline cannot outlive its subject; its entries carry
+# counts, not just names, so anchoring one of two blocks in a function moves a number;
+# its total is a single declared integer, so growing it is a one-line diff a reviewer
+# cannot miss; and each entry names the audit slice that will retire it, under the same
+# floor MINIMUM_REASON puts under the marker.
+#
+# Stated exactly and not claimed as more: a determined author can still legalise a new
+# unanchored block by editing three places, and that costs a placement plus a bump to a
+# visible integer, not a written justification per block. That is weaker than
+# `# unanchored:` demands, which enforces twenty characters of reason, and stronger than
+# a bare allowlist. It is temporary by construction, because the last audit slice
+# deletes this constant, CARRIED_TOTAL, and the carried direction of the check.
+#
+# Never keyed by a line number and never by an ordinal. Line numbers churn on every edit
+# above them, which would make this a merge-conflict generator, and an ordinal is bound
+# to its subject only by position in a list, which is the defect that put a correct
+# number against the wrong mutation in this repo. A name and a count is bound to
+# neither.
+CARRIED_UNANCHORED_BLOCKS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
+    "tests/test_accounts.py": (
+        frozenset(
+            {
+                ("test_every_login_failure_is_the_same_type_with_the_same_message", 1),
+            }
+        ),
+        "no row of the 70b to 70h slice table covers this module; 70h, last, takes it",
+    ),
+    "tests/test_balances.py": (
+        frozenset(
+            {
+                ("test_a_foreign_currency_raises_currency_mismatch_for_a_walk_too", 1),
+                ("test_a_foreign_currency_raises_currency_mismatch_naming_both_codes", 1),
+                ("test_a_foreign_group_is_refused_on_the_same_terms_as_the_fold", 1),
+                ("test_a_foreign_group_names_the_event_and_both_groups", 1),
+                ("test_a_member_cannot_owe_themselves", 1),
+                ("test_a_member_id_that_is_not_a_str_raises_type_error_naming_the_type", 1),
+                ("test_a_repeated_event_id_is_refused_for_a_walk_too", 1),
+            }
+        ),
+        "slice 70c retires this module, one deleted guard in balances.py at a time",
+    ),
+    "tests/test_groups.py": (
+        frozenset(
+            {
+                ("test_a_definition_cannot_carry_an_address", 1),
+                ("test_a_different_currency_is_refused_naming_both_codes", 1),
+                ("test_a_different_group_name_is_refused_naming_both", 1),
+                ("test_a_directory_is_named_rather_than_raising_an_os_error", 1),
+                ("test_a_file_that_is_not_utf_8_is_named_rather_than_raising_a_decode_error", 1),
+                ("test_a_group_name_that_is_not_a_string_is_refused", 1),
+                ("test_a_lowercase_currency_is_refused_and_the_message_names_the_fix", 1),
+                ("test_a_member_of_another_group_is_refused_naming_both_groups", 1),
+                ("test_a_member_pointing_at_another_user_is_refused_and_left_alone", 1),
+                ("test_a_missing_key_is_named", 1),
+                ("test_a_path_that_does_not_exist_is_named", 1),
+                ("test_a_user_another_member_of_that_group_holds_is_refused", 1),
+                ("test_an_omitted_name_is_refused_and_writes_nothing", 1),
+                ("test_an_unknown_key_is_named_rather_than_ignored", 1),
+                ("test_an_unknown_member_id_or_user_id_is_named", 2),
+                ("test_an_unlinked_user_and_an_unknown_group_are_told_apart_by_type", 1),
+                ("test_apply_with_an_unknown_group_id_raises_record_not_found", 1),
+                ("test_apply_with_two_groups_and_no_id_raises_ambiguous", 1),
+                ("test_malformed_toml_carries_the_decode_error_as_its_cause", 1),
+                ("test_max_members_is_fifty_and_is_enforced", 1),
+                ("test_members_must_be_an_array_of_strings", 1),
+                ("test_resolve_on_an_empty_store_names_the_setup_command", 1),
+                ("test_resolve_with_two_groups_names_every_id", 1),
+                ("test_two_names_that_casefold_equal_are_refused_and_the_message_says_what_to_do", 1),
+                ("test_two_names_that_differ_only_by_unicode_normalisation_are_refused", 1),
+                ("test_two_stored_members_of_one_name_refuse_a_reconcile", 1),
+            }
+        ),
+        "slice 70e retires this module, one deleted guard in groups.py at a time",
+    ),
+    "tests/test_money.py": (
+        frozenset(
+            {
+                ("test_currency_rejects_lowercase_rather_than_coercing", 1),
+                ("test_parse_amount_error_message_carries_the_offending_input", 1),
+            }
+        ),
+        "slice 70b retires this module, one deleted guard in money.py at a time",
+    ),
+    "tests/test_simplify.py": (
+        frozenset(
+            {
+                ("test_a_member_in_pairwise_but_absent_from_net_still_has_to_agree", 1),
+                ("test_a_member_owing_themselves_is_refused", 1),
+                ("test_a_money_in_another_currency_raises_currency_mismatch", 1),
+                ("test_a_net_that_does_not_sum_to_zero_is_refused_by_its_residue", 1),
+                ("test_a_pair_stored_in_both_directions_is_refused_naming_both", 1),
+                ("test_a_pairwise_debt_that_is_not_strictly_positive_is_refused", 1),
+                ("test_anything_that_is_not_a_balances_is_a_type_error", 1),
+                ("test_net_and_pairwise_disagreeing_is_refused_naming_both_figures", 1),
+            }
+        ),
+        "slice 70b retires this module, one deleted guard in simplify.py at a time",
+    ),
+    "tests/test_split.py": (
+        frozenset(
+            {
+                ("test_split_exact_rejects_amounts_that_fall_short", 1),
+                ("test_split_exact_rejects_amounts_that_overshoot", 1),
+            }
+        ),
+        "slice 70b retires this module, one deleted guard in split.py at a time",
+    ),
+    "tests/test_store.py": (
+        frozenset(
+            {
+                ("test_a_duplicate_decision_leaves_the_stored_row_untouched", 1),
+                ("test_a_duplicate_email_is_rejected", 1),
+                ("test_a_duplicate_expense_id_leaves_the_stored_row_untouched", 1),
+                ("test_a_duplicate_settlement_id_leaves_the_stored_row_untouched", 1),
+                ("test_a_duplicate_token_hash_is_rejected_and_overwrites_nothing", 1),
+                ("test_a_duplicate_user_id_is_rejected_and_leaves_the_row_alone", 1),
+                ("test_a_raw_delete_of_an_allocation_is_rejected", 1),
+                ("test_a_raw_delete_of_an_expense_is_rejected", 1),
+                ("test_a_raw_settlement_in_the_wrong_currency_is_rejected_by_the_foreign_key", 1),
+                ("test_a_raw_update_of_a_groups_currency_is_rejected", 1),
+                ("test_a_raw_update_of_an_allocation_is_rejected", 1),
+                ("test_a_raw_update_of_an_expense_is_rejected", 1),
+                ("test_a_raw_update_or_delete_of_a_decision_is_rejected", 2),
+                ("test_a_raw_update_or_delete_of_a_settlement_is_rejected", 2),
+                ("test_a_settlement_amount_above_the_bound_is_rejected", 1),
+                ("test_a_settlement_in_the_wrong_currency_raises_currency_mismatch", 1),
+                ("test_a_total_above_the_bound_is_rejected_naming_the_field", 1),
+                ("test_add_user_with_credential_rejects_a_taken_id_or_address", 2),
+                ("test_an_allocation_above_the_bound_is_rejected_naming_the_field", 1),
+                ("test_an_expense_in_the_wrong_currency_raises_currency_mismatch", 1),
+                ("test_delete_sessions_for_an_unknown_user_raises_not_found", 1),
+                ("test_get_member_for_user_for_an_unknown_group_raises_not_found", 1),
+                ("test_get_member_for_user_raises_not_found_naming_both_ids", 1),
+                ("test_get_password_hash_raises_not_found_for_a_user_with_no_credential", 1),
+                ("test_get_session_raises_not_found_naming_the_hash", 1),
+                ("test_get_user_by_email_raises_not_found_naming_the_address", 1),
+                ("test_list_events_for_an_unknown_group_raises_not_found", 1),
+                ("test_list_expenses_for_an_unknown_group_raises_not_found", 1),
+                ("test_list_settlement_decisions_for_an_unknown_settlement_raises_not_found", 1),
+                ("test_list_settlements_for_an_unknown_group_raises_not_found", 1),
+                ("test_opening_a_file_that_is_not_a_database_names_the_path", 1),
+                ("test_opening_a_newer_schema_version_raises_rather_than_reading_it", 1),
+                ("test_opening_a_version_3_database_still_raises", 1),
+                ("test_opening_an_old_sqlite_library_raises_a_named_error", 1),
+                ("test_opening_under_a_missing_directory_names_the_path", 1),
+                ("test_reading_an_unknown_id_raises_not_found_naming_it", 1),
+                ("test_set_member_user_for_an_unknown_member_names_the_id", 1),
+                ("test_set_member_user_for_an_unknown_user_names_the_id", 1),
+                ("test_set_member_user_refuses_a_member_that_already_points_at_a_user", 1),
+                ("test_set_member_user_refuses_a_second_member_for_one_user_in_a_group", 1),
+                ("test_strict_tables_reject_text_in_an_integer_column", 1),
+            }
+        ),
+        "slices 70g and 70h split this module, at a point taken from this census",
+    ),
+    "tests/test_suite_integrity.py": (
+        frozenset(
+            {
+                ("test_a_module_that_will_not_parse_names_the_file_and_quotes_the_error", 1),
+            }
+        ),
+        "slice 70f retires this module, whose guard sits in tests/ and not under src/",
+    ),
+    "tests/test_web_api.py": (
+        frozenset(
+            {
+                ("test_a_declared_route_the_app_does_not_serve_is_refused", 1),
+                ("test_a_declared_shell_route_the_app_does_not_serve_is_refused", 1),
+                ("test_a_route_outside_the_api_prefix_is_refused_by_the_audit_too", 1),
+                ("test_a_route_row_refuses_a_field_it_cannot_use", 1),
+                ("test_a_route_row_refuses_an_access_that_is_not_an_access_level", 1),
+                ("test_a_shell_row_under_the_api_prefix_is_refused_at_build_time", 1),
+                ("test_an_api_route_added_after_the_factory_is_refused_by_the_audit", 1),
+                ("test_an_in_memory_store_is_refused_with_a_reason", 1),
+                ("test_the_api_prefix_is_a_path_segment_and_not_a_string_prefix", 1),
+                ("test_the_decision_route_must_be_declared_or_the_app_will_not_build", 1),
+                ("test_the_request_time_refusal_claims_no_provenance_it_cannot_see", 1),
+                ("test_the_settlements_route_must_be_declared_or_the_app_will_not_build", 1),
+                ("test_two_rows_sharing_an_endpoint_name_are_refused_by_the_access_map", 1),
+            }
+        ),
+        "slice 70d retires this module, one deleted guard in web.py at a time",
+    ),
+    "tests/test_web_shell.py": (
+        frozenset(
+            {
+                ("test_an_omission_with_no_reason_is_refused", 1),
+                ("test_the_digest_refuses_an_entry_it_cannot_classify", 1),
+            }
+        ),
+        "slice 70f retires this module, whose guards sit in tests/ and not under src/",
+    ),
+}
+
+# The sum of every count above, declared once. Produced by the check itself and pasted
+# back; no number here is a hand count.
+CARRIED_TOTAL = 107
+
+# The reason each entry carries has to name the slice that retires it, so an entry
+# cannot be added with a reason that commits nobody to anything.
+RETIRING_SLICE = re.compile(r"\b70[b-h]\b")
+
+NO_REASON_YET = "<why this module is carried, and which of 70b to 70h retires it>"
+
+
+def carried_counts(source: str, where: str) -> dict[str, int]:
+    """How many unanchored blocks each definition in ``source`` holds."""
+    counts: dict[str, int] = {}
+    for block in unanchored_message_blocks(source, where):
+        counts[block.enclosing] = counts.get(block.enclosing, 0) + 1
+    return counts
+
+
+def carried_entry_literal(where: str, counts: dict[str, int], reason: str) -> str:
+    """The CARRIED_UNANCHORED_BLOCKS entry for ``where``, ready to paste back."""
+    if not counts:
+        return f'    (delete the "{where}" entry: it carries nothing now)'
+    pairs = "\n".join(
+        f'                ("{name}", {count}),' for name, count in sorted(counts.items())
+    )
+    return (
+        f'    "{where}": (\n'
+        "        frozenset(\n"
+        "            {\n"
+        f"{pairs}\n"
+        "            }\n"
+        "        ),\n"
+        f'        "{reason}",\n'
+        "    ),"
+    )
+
+
+def computed_carried_total() -> int:
+    """What CARRIED_TOTAL should read, over every test module."""
+    return sum(
+        len(unanchored_message_blocks(read(path), posix(path))) for path in TEST_SOURCES
+    )
+
+
+def spelled_entries(entries: set[tuple[str, int]]) -> str:
+    """One ``name: count`` per line, ordered, for a failure to list."""
+    return "\n".join(f"    {name}: {count}" for name, count in sorted(entries))
+
+
+def carried_baseline_message(
+    where: str,
+    unlisted: set[tuple[str, int]],
+    stale: set[tuple[str, int]],
+    literal: str,
+    total: int,
+) -> str:
+    """What the check says when the walk and the baseline disagree.
+
+    Following ``stale_digest_message`` in tests/test_web_shell.py, which is how this
+    repo maintains a constant the suite computes: the message ends with the exact text
+    to paste back, so nobody counts anything by hand.
+    """
+    parts = [
+        f"{where}: the unanchored pytest.raises blocks in this module and the entry "
+        "CARRIED_UNANCHORED_BLOCKS holds for it have gone out of step."
+    ]
+    if unlisted:
+        parts.append(
+            "These are unanchored and not carried, so they are new:\n"
+            f"{spelled_entries(unlisted)}\n"
+            "\n"
+            'A new one is not carried. Anchor the block instead: put match=r"^..." on '
+            "the pytest.raises call, or compare the whole message with == or "
+            ".startswith, or say why not with '# unanchored: <why>' on the with "
+            f"statement, with a reason of at least {MINIMUM_REASON} characters. "
+            "The baseline may only shrink, and nothing enforces that: it is a "
+            "convention this message is asking you to keep."
+        )
+    if stale:
+        parts.append(
+            "These are carried but are no longer unanchored, so the entry has outlived "
+            f"its subject:\n{spelled_entries(stale)}\n"
+            "\n"
+            "That is the direction that stops this baseline becoming an allowlist "
+            "nobody retires. If an audit slice anchored them, take them out of the "
+            "entry and lower CARRIED_TOTAL by the same number."
+        )
+    # The literal is printed in both directions, because a computed constant's failure
+    # ends with the text to paste back and that is how this repo maintains one. But a
+    # failure's last line is what people act on, and in the new-block direction the
+    # paste-back is the anti-instruction: it carries the block instead of anchoring it.
+    # So it is labelled rather than withheld, which keeps it available for the
+    # retirement direction in a failure that reports both.
+    handed = (
+        "Paste this in place of this module's entry in CARRIED_UNANCHORED_BLOCKS:"
+        if not unlisted
+        else (
+            "Below is that entry as it would now read. It is here for the retirement "
+            "direction, and it is NOT the answer to a new unanchored block: pasting it "
+            "carries the block instead of anchoring it, and grows the baseline, which "
+            "is the one thing the baseline is not for. Anchor the block instead, as "
+            "above."
+        )
+    )
+    parts.append(
+        f"{handed}\n"
+        "\n"
+        f"{literal}\n"
+        "\n"
+        "and set:\n"
+        "\n"
+        f"    CARRIED_TOTAL = {total}"
+    )
+    return "\n\n".join(parts)
+
+
+def test_the_carried_baseline_message_says_which_direction_it_is_for() -> None:
+    """The paste-back is labelled, so it is not read as the fix for a new block.
+
+    A failure's last line is what people act on, and this check prints the same literal
+    whichever direction it fired in. Without the label the new-block direction ends by
+    handing the reader the text that carries the block rather than anchors it.
+    """
+    literal = '    "tests/test_pretend.py": (...),'
+    new_block = carried_baseline_message(
+        "tests/test_pretend.py", {("test_thing", 1)}, set(), literal, 108
+    )
+    assert "test_thing: 1" in new_block
+    assert "NOT the answer to a new unanchored block" in new_block
+    assert "carries the block instead of anchoring it" in new_block
+    # The honest form of the convention, in the same message that asks for it.
+    assert "nothing enforces that" in new_block
+    # Criterion 18 still holds in both directions: the text ends with the entry and the
+    # CARRIED_TOTAL line, so a computed constant is still maintained by pasting back.
+    assert new_block.rstrip().endswith("CARRIED_TOTAL = 108")
+    retirement = carried_baseline_message(
+        "tests/test_pretend.py", set(), {("test_thing", 1)}, literal, 106
+    )
+    assert "Paste this in place of" in retirement
+    assert "NOT the answer" not in retirement
+    assert retirement.rstrip().endswith("CARRIED_TOTAL = 106")
+
+
+@pytest.mark.parametrize("path", TEST_SOURCES, ids=SOURCE_IDS)
+def test_every_message_block_is_anchored_or_carried(path: Path) -> None:
+    """A raises block that reads a message either anchors, or is one of the carried."""
+    where = posix(path)
+    counts = carried_counts(read(path), where)
+    found = set(counts.items())
+    carried, reason = CARRIED_UNANCHORED_BLOCKS.get(where, (frozenset(), NO_REASON_YET))
+    if found != carried:
+        pytest.fail(
+            carried_baseline_message(
+                where,
+                found - carried,
+                set(carried) - found,
+                carried_entry_literal(where, counts, reason),
+                computed_carried_total(),
+            )
+        )
+
+
+def test_the_carried_total_is_the_sum_of_the_baseline() -> None:
+    """One declared integer, so growing the baseline is a diff a reviewer reads."""
+    counted = sum(
+        count
+        for carried, _ in CARRIED_UNANCHORED_BLOCKS.values()
+        for _, count in carried
+    )
+    assert CARRIED_TOTAL == counted, (
+        f"CARRIED_TOTAL says {CARRIED_TOTAL} and the entries sum to {counted}. "
+        "The entries are the subject; set CARRIED_TOTAL to what they sum to."
+    )
+
+
+def test_every_carried_module_names_the_slice_that_retires_it() -> None:
+    """No entry is added with a reason that commits nobody to retiring it."""
+    for where, (_, reason) in sorted(CARRIED_UNANCHORED_BLOCKS.items()):
+        assert len(reason) >= MINIMUM_REASON, f"{where}: {reason!r} is not a reason"
+        assert RETIRING_SLICE.search(reason), (
+            f"{where}: {reason!r} names no audit slice. An entry carried by nobody is "
+            "an allowlist entry, and the reason is what stops it becoming one."
+        )
+
+
+BLOCK_FLAGGED_PLAIN = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert "currency must be a Currency" in str(raised.value)\n'
+)
+# That constant is not a hypothetical shape. Measured on this branch 2026-09-08,
+# src/splitwise_lite/money.py raises "currency must be a Currency, got ..." at line 246
+# and "Money currency must be a Currency, got ..." at line 148, and the shorter sentence
+# sits inside the longer one from index 6. So that one assertion is satisfied by either
+# of two live guards, and it is the `in` spelling of the repair PR #62 approved and then
+# found defective. Quoted as measured on that date and not re-read from source: if the
+# wording has changed the collision is a different one and the check is unchanged.
+BLOCK_ACCEPTED_MATCH = (
+    'with pytest.raises(TypeError, match=r"^currency must be a Currency") as raised:\n'
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_ACCEPTED_EQUALITY = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert str(raised.value) == "currency must be a Currency, got NoneType: None"\n'
+)
+BLOCK_ACCEPTED_STARTSWITH = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert str(raised.value).startswith("currency must be a Currency")\n'
+)
+BLOCK_FLAGGED_BOUND = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    "message = str(raised.value)\n"
+    'assert "currency must be a Currency" in message\n'
+)
+BLOCK_ACCEPTED_BOUND_EQUALITY = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    "message = str(raised.value)\n"
+    'assert message == "currency must be a Currency, got NoneType: None"\n'
+)
+BLOCK_ACCEPTED_MARKED = (
+    "with pytest.raises(TypeError) as raised:  "
+    "# unanchored: the arrangement can raise nothing else\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_EMPTY_MARKER = (
+    "with pytest.raises(TypeError) as raised:  # unanchored:\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_SHORT_MARKER = (
+    "with pytest.raises(TypeError) as raised:  # unanchored: too short\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_ACCEPTED_MARKER_ON_LAST_LINE = (
+    "with pytest.raises(\n"
+    "    TypeError,\n"
+    ") as raised:  # unanchored: the arrangement can raise nothing else\n"
+    "    Money(1, None)\n"
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_NOT_A_CANDIDATE_NO_BINDING = (
+    "with pytest.raises(TypeError):\n    Money(1, None)\n"
+)
+BLOCK_NOT_A_CANDIDATE_UNREAD = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    "assert raised.type is TypeError\n"
+)
+BLOCK_FLAGGED_NEGATIVE_ONLY = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'assert "the secret" not in str(raised.value)\n'
+)
+BLOCK_ACCEPTED_MANY_FRAGMENTS = (
+    "def test_it() -> None:\n"
+    "    with pytest.raises("
+    'TypeError, match=r"^currency must be a Currency") as raised:\n'
+    "        Money(1, None)\n"
+    '    assert "NoneType" in str(raised.value)\n'
+    '    assert "None" in str(raised.value)\n'
+    '    assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_MANY_FRAGMENTS = (
+    "def test_it() -> None:\n"
+    "    with pytest.raises(TypeError) as raised:\n"
+    "        Money(1, None)\n"
+    '    assert "NoneType" in str(raised.value)\n'
+    '    assert "None" in str(raised.value)\n'
+    '    assert "Currency" in str(raised.value)\n'
+)
+BLOCK_FLAGGED_OTHER_CALL_MATCH = (
+    "with pytest.raises(TypeError) as raised:\n"
+    "    Money(1, None)\n"
+    'record = dict(match="^currency must be a Currency")\n'
+    'assert "Currency" in str(raised.value)\n'
+)
+BLOCK_TWO_IN_ONE_FUNCTION = (
+    "def test_two() -> None:\n"
+    "    with pytest.raises(TypeError) as first:\n"
+    "        Money(1, None)\n"
+    '    assert "Currency" in str(first.value)\n'
+    "    with pytest.raises("
+    'ValueError, match=r"^cents must be an int") as second:\n'
+    "        Money(None, AUD)\n"
+    '    assert "int" in str(second.value)\n'
+)
+
+
+def test_the_message_block_check_still_bites() -> None:
+    """Proof that the check refuses what it must and accepts what it must not refuse.
+
+    Every accepted case below is labelled with the branch of the accepted set it is the
+    positive control for, so removing that branch reds a named assertion here. The two
+    cases that hold by construction say so and say what they do guard against instead. A
+    section of self-tests that cannot fail is the defect this module exists to refuse.
+    """
+    # a. A bare substring assertion on the message is flagged. Positive control for the
+    #    walk itself: if message_blocks stops finding candidates, this reds first.
+    flagged = unanchored_message_blocks(BLOCK_FLAGGED_PLAIN, "<a>")
+    assert len(flagged) == 1
+    assert flagged[0].name == "raised"
+    assert flagged[0].enclosing == "<module>"
+    assert flagged[0].lineno == 1
+    # b. match= on the raises call is accepted. Positive control for branch (a) of the
+    #    accepted set; delete that branch and this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MATCH, "<b>") == []
+    # c. An equality against the message is accepted. Positive control for branch (b);
+    #    delete that branch and this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_EQUALITY, "<c>") == []
+    # d. .startswith on the message is accepted. Positive control for branch (c);
+    #    delete that branch and this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_STARTSWITH, "<d>") == []
+    # e. The bound form is a candidate and is flagged.
+    #
+    #    This one is flagged by construction under any mutation of the local-binding
+    #    walk, because `message = str(raised.value)` is itself the str() call shape, so
+    #    the block is a candidate whether or not the local is followed. What it guards
+    #    against is a walk that only looks at `assert` statements. The case that really
+    #    exercises the local-binding walk is the one below it.
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_BOUND, "<e>")) == 1
+    # e2. An equality against a local the block bound to the message is accepted.
+    #     Positive control for the one level of local binding in criterion 6(b): stop
+    #     following the local and this block is no longer anchored, so this reds. That
+    #     is 27 lines of the real population, so a walk that misses it misses a quarter
+    #     of the job.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_BOUND_EQUALITY, "<e2>") == []
+    # f. The marker with a real reason is accepted; empty or too short is not a reason.
+    #    Positive control for branch (d) and for MINIMUM_REASON.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MARKED, "<f1>") == []
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_EMPTY_MARKER, "<f2>")) == 1
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_SHORT_MARKER, "<f3>")) == 1
+    # g. The marker may sit on the last line of a raises call wrapped over several
+    #    lines. Positive control for the header range: narrow it to the first line and
+    #    this reds.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MARKER_ON_LAST_LINE, "<g>") == []
+    # h. A raises that binds no name is not a candidate.
+    #
+    #    Partly by construction: with no name bound there is no message expression to
+    #    find either, so this stays empty under a mutation of the `as` condition alone.
+    #    What it guards against is a future rewrite that treats every raises block as a
+    #    candidate and then asks separately whether it is anchored, which would report a
+    #    finding on every `with pytest.raises(X):` in the suite.
+    assert message_blocks(BLOCK_NOT_A_CANDIDATE_NO_BINDING, "<h>") == []
+    # i. A block that binds a name and never reads its message is not a candidate.
+    #    Positive control for the reads-the-message condition: drop it and this reds.
+    #    A block that asserts nothing about a message has nothing to anchor.
+    assert message_blocks(BLOCK_NOT_A_CANDIDATE_UNREAD, "<i>") == []
+    # j. A block holding only a negative assertion is still a candidate and is still
+    #    flagged, because reading the message is what makes it one.
+    #
+    #    By construction here, since this walk never looks at the `in` operator at all.
+    #    What it guards against is the rewrite issue #70 itself proposes, which keys on
+    #    `assert X in str(Y)`: that shape would drop all 17 negative assertions in the
+    #    suite, and a negative is the weaker case, not the safer one — any message
+    #    lacking the string satisfies it, including one from an entirely different
+    #    guard.
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_NEGATIVE_ONLY, "<j>")) == 1
+    # k. Several fragment assertions with one anchor are accepted once, and the same
+    #    block without the anchor is one finding rather than one per fragment. Positive
+    #    control for the unit being the block: count per assertion and both of these
+    #    read 3.
+    assert unanchored_message_blocks(BLOCK_ACCEPTED_MANY_FRAGMENTS, "<k1>") == []
+    assert len(message_blocks(BLOCK_ACCEPTED_MANY_FRAGMENTS, "<k1>")) == 1
+    many = unanchored_message_blocks(BLOCK_FLAGGED_MANY_FRAGMENTS, "<k2>")
+    assert len(many) == 1
+    assert many[0].enclosing == "test_it"
+    # l. A match= on a call that is not the raises is not an anchor, for the same reason
+    #    NOT_A_PIN_OTHER_CALL exists. Positive control for reading the keyword off the
+    #    context expression rather than off any call in the region.
+    assert len(unanchored_message_blocks(BLOCK_FLAGGED_OTHER_CALL_MATCH, "<l>")) == 1
+    # m. Two blocks in one function are two candidates, and anchoring one moves the
+    #    count from two to one. This is the case criterion 15 keys the baseline on a
+    #    count for, and a baseline keyed by name alone would miss it.
+    assert len(message_blocks(BLOCK_TWO_IN_ONE_FUNCTION, "<m>")) == 2
+    two = unanchored_message_blocks(BLOCK_TWO_IN_ONE_FUNCTION, "<m>")
+    assert len(two) == 1
+    assert two[0].name == "first"
+    assert two[0].enclosing == "test_two"
+
+
+def test_the_unanchored_block_message_says_what_happened() -> None:
+    """Every element the message has to carry, fed a synthetic path, line and name."""
+    message = unanchored_block_message("tests/test_pretend.py", 12, "raised")
+    assert "tests/test_pretend.py" in message
+    assert "12" in message
+    assert "raised" in message
+    # `in` is the same operation, so the PR #62 collision applies to it unchanged.
+    assert "re.search" in message
+    assert "no metacharacters" in message
+    assert "PR #62" in message
+    # The anchor goes on the block, and why.
+    assert "on the block" in message
+    assert "several fragments" in message
+    assert "at most one can start the message" in message
+    # A negative assertion is weaker still.
+    assert "any message lacking the string satisfies it" in message
+    # All four accepted anchors, spelled.
+    assert "match=" in message
+    assert "==" in message
+    assert ".startswith" in message
+    assert "# unanchored:" in message
+    assert str(MINIMUM_REASON) in message
+
+
 # --- The mutation records (#60) --------------------------------------------
 #
 # These two checks read the records as data: that a record parses, that it is complete,
@@ -742,6 +1647,23 @@ def test_every_recorded_mutation_is_machine_readable() -> None:
     assert not failures, "\n\n".join(failures)
 
 
+def record_sections(text: str) -> list[tuple[str, str]]:
+    """Each ``##`` section of a record file, as ``(heading, section text)``.
+
+    Whatever a file writes above its first ``##`` is its introduction rather than a
+    record, and is not returned. That is the residual of the check below, stated rather
+    than left to be discovered: a node id named in an introduction is nobody's ``kills``
+    and could not be checked against one.
+    """
+    starts = [match.start() for match in SECTION.finditer(text)]
+    sections: list[tuple[str, str]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(text)
+        section = text[start:end]
+        sections.append((section.split("\n", 1)[0].strip(), section))
+    return sections
+
+
 def test_a_mutation_record_holds_no_prose_only_section() -> None:
     """Every section carries the record itself, not a description of one.
 
@@ -751,12 +1673,7 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
     failures: list[str] = []
     for path in record_files():
         where = posix(path)
-        text = read(path)
-        starts = [match.start() for match in SECTION.finditer(text)]
-        for position, start in enumerate(starts):
-            end = starts[position + 1] if position + 1 < len(starts) else len(text)
-            section = text[start:end]
-            heading = section.split("\n", 1)[0].strip()
+        for heading, section in record_sections(read(path)):
             if not JSON_BLOCK.search(section):
                 failures.append(
                     f"{where} section {heading!r} holds no fenced JSON block, so it "
@@ -765,6 +1682,261 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
                     "mutation and a different result."
                 )
     assert not failures, "\n\n".join(failures)
+
+
+# A record's prose and its JSON have to agree about which tests a mutation touched.
+# mutation_record_problems type-checks `kills` and `survives` and never reads the list
+# of covered tests written beside them, so a wrong entry there is invisible to the
+# suite. plans/mutations/65-message-pins.md is the worked example of the shape that goes
+# wrong: it numbers its pins 1 to 13 across sections, so an entry is bound to its
+# subject only by its position in a list that lives in a different section from the
+# guard it describes. At thirteen that survives; at the fifty-odd guards issue #70's
+# audit will delete, it is a defect generator, and this repo has already published a
+# number attached to the wrong mutation for exactly that reason.
+#
+# So a node id is the vocabulary: it is unique, it carries its own subject, and it is
+# already what `kills` and `survives` hold. This check makes the two agree in the one
+# direction that matters, prose to JSON. It does not require the reverse: a record may
+# list a node id in `kills` and not mention it in prose, because `kills` is the complete
+# list and the prose is commentary on it.
+#
+# REQUIRED_KEYS does not change and no new JSON key is added; this reads the seven that
+# exist.
+# A node id is recognised by ``.py::`` and not by ``::`` alone, and the reason is that
+# the taught citation form has to be followable for every shape of id.
+#
+# For a class-nested id, ``tests/test_x.py::TestClass::test_y``, the bare form the
+# failure message asks for is ``TestClass::test_y in tests/test_x.py``, which still holds
+# a ``::``. Under a bare-``::`` rule that edit leaves the check red, so the instruction
+# could not be followed, and a guidance string that cannot be followed is the same family
+# of defect as a check that cannot fail.
+#
+# This is not a hole, and the distinction is worth stating because the previous fix in
+# this family was praised for narrowing nothing. A pytest node id always begins with the
+# test file's path, so ``TestClass::test_y`` on its own is not a node id: nothing can run
+# it. The set of real node ids is unchanged. A class-nested id written as a CLAIM still
+# holds ``.py::`` and is still caught; only the citation form, which was never runnable,
+# stops being mistaken for a claim. Measured 2026-09-08: 0 class-based test classes in
+# tests/, so this shape is latent today and the change is about the instruction being
+# followable when one appears, not about anything currently detected.
+NODE_ID_MARKER = ".py::"
+
+
+def prose_node_ids(prose: str) -> set[str]:
+    """Every pytest node id the prose names, recognised by holding ``.py::``.
+
+    Markdown decoration is stripped from both ends, and sentence punctuation from the
+    end only, so a parametrised id keeps its trailing ``]``.
+    """
+    found: set[str] = set()
+    for token in re.split(r"[\s`]+", prose):
+        candidate = token.strip("`\"'*()").rstrip(".,;:")
+        if NODE_ID_MARKER in candidate:
+            found.add(candidate)
+    return found
+
+
+def stray_node_ids(section: str) -> list[str]:
+    """Node ids this section's prose names that its JSON blocks do not list."""
+    listed: set[str] = set()
+    for block in JSON_BLOCK.findall(section):
+        try:
+            record = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        for key in ("kills", "survives"):
+            value = record.get(key)
+            if isinstance(value, list):
+                listed.update(item for item in value if isinstance(item, str))
+    prose = JSON_BLOCK.sub("", section)
+    return sorted(prose_node_ids(prose) - listed)
+
+
+def stray_node_id_message(where: str, heading: str, identifier: str) -> str:
+    """What the check says about a node id a record names but does not list.
+
+    This message has to teach the citation convention, and that is not decoration. The
+    cheapest way to make this check go green is to add the id to ``survives``, and if
+    the id was a citation rather than a claim, that entry is an observation nobody made.
+    A check whose cheapest resolution is a lie is worse than no check, and it is the
+    defect this module exists to refuse, so the two fixes are spelled out here with the
+    wrong one named as wrong.
+    """
+    module, _, bare = identifier.partition("::")
+    return (
+        f"{where} section {heading!r} names {identifier} in its prose, and neither "
+        "kills nor survives in that section's record lists it.\n"
+        "\n"
+        "A node id in a record's prose is read as a CLAIM about this mutation: that it "
+        "reddened that test, or that the test stayed green under it. So there are two "
+        "fixes, and only one of them is right for your case.\n"
+        "\n"
+        "1. You meant a claim. Put the id in kills if the mutation reddened that test, "
+        "or in survives if you ran it under the mutant and watched it stay green. Do "
+        "NOT add it to survives if you did not run it. That is an observation nobody "
+        "made, it is the cheapest way to make this check quiet, and it is exactly the "
+        "failure this check exists to refuse.\n"
+        "\n"
+        "2. You meant to CITE the test, as a precedent or an example, and are claiming "
+        "nothing about what this mutation did to it. Then name it bare, without the "
+        "path and the '::', which is how this format tells a citation from a claim. "
+        "The exact edit here is:\n"
+        "\n"
+        f"    {identifier}\n"
+        f"    becomes   {bare} in {module}\n"
+        "\n"
+        "That convention was not invented for this message. It was found by this check "
+        "reddening on plans/mutations/16-incompleteness-signal.md, whose Mutation 5 "
+        "cites the precedent it was copied from: the citation was legitimate and "
+        "reading it as a claim was what was wrong.\n"
+        "\n"
+        "Either way the id ends up bound to its subject, which is the point. A claim "
+        "bound to its subject only by position in a list is how a correct number ended "
+        "up against the wrong mutation in this repo."
+    )
+
+
+def taught_citation_form(identifier: str) -> str:
+    """The replacement text ``stray_node_id_message`` actually prints for ``identifier``.
+
+    Read back out of the message rather than recomputed, and that is the whole point of
+    this helper existing. A followability test that re-derives the formula behind the
+    message pins the formula and not the message: change how the message splits the id
+    and such a test stays green while the printed instruction stops clearing the check.
+    That is a check about a thing that never opens that thing, which is the defect this
+    module exists to refuse, so the instruction is parsed from the text a reader is
+    given.
+    """
+    message = stray_node_id_message("<where>", "<section>", identifier)
+    for line in message.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("becomes"):
+            return stripped[len("becomes") :].strip()
+    raise AssertionError(
+        "stray_node_id_message no longer prints a 'becomes <form>' line, so the "
+        "instruction it gives cannot be read back and checked for followability. "
+        "Either restore that line or delete the followability test with it, but do "
+        "not leave a test asserting about an instruction that is no longer printed."
+    )
+
+
+def test_every_node_id_a_record_names_is_one_it_lists() -> None:
+    """A record's prose names no test that its own kills and survives do not."""
+    failures: list[str] = []
+    for path in record_files():
+        where = posix(path)
+        for heading, section in record_sections(read(path)):
+            failures += [
+                stray_node_id_message(where, heading, identifier)
+                for identifier in stray_node_ids(section)
+            ]
+    assert not failures, "\n\n".join(failures)
+
+
+RECORD_WITH_A_STRAY_NODE_ID = """\
+## A guard
+
+```json
+{
+  "id": "g1",
+  "file": "src/splitwise_lite/example.py",
+  "find": "raise X",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+
+Covers `tests/test_example.py::test_one` and `tests/test_example.py::test_three`.
+"""
+
+RECORD_WITH_ONLY_LISTED_NODE_IDS = """\
+## A guard
+
+```json
+{
+  "id": "g1",
+  "file": "src/splitwise_lite/example.py",
+  "find": "raise X",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one[a-case]"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+
+Covers `tests/test_example.py::test_one[a-case]`, and
+**tests/test_example.py::test_two** stayed green.
+"""
+
+
+def test_the_node_id_check_still_bites() -> None:
+    """The positive control: a stray id is a finding and a listed one is not.
+
+    Every record on the branch today names no node id in prose at all, so without these
+    two the check would be green over the whole directory whatever it did.
+    """
+    stray = stray_node_ids(RECORD_WITH_A_STRAY_NODE_ID)
+    assert stray == ["tests/test_example.py::test_three"]
+    # Not the ids that are listed, and a parametrised id keeps its trailing bracket
+    # rather than being trimmed into a different id that would then read as stray.
+    assert stray_node_ids(RECORD_WITH_ONLY_LISTED_NODE_IDS) == []
+    assert "tests/test_example.py::test_one[a-case]" in prose_node_ids(
+        RECORD_WITH_ONLY_LISTED_NODE_IDS
+    )
+    # A class-nested id used as a CLAIM is still caught: it holds `.py::`. Recognising
+    # ids by `.py::` rather than by `::` alone therefore loses nothing that was ever a
+    # node id, which is what keeps the citation fix below from being a hole.
+    assert prose_node_ids("see `tests/test_x.py::TestThing::test_y` for it") == {
+        "tests/test_x.py::TestThing::test_y"
+    }
+    # And the bare form the failure message tells a citer to write does clear the
+    # check, which is the whole point of recognising ids by `.py::`. Under a bare-`::`
+    # rule this would still be a finding and the taught instruction could not be
+    # followed.
+    assert prose_node_ids("see `TestThing::test_y` in `tests/test_x.py`") == set()
+    # The instruction the message actually prints, followed exactly, clears the check,
+    # for every shape of id. The taught form is read out of stray_node_id_message by
+    # taught_citation_form rather than recomputed here: an earlier version of this
+    # assertion re-derived `partition("::")` itself, which pinned the formula and not
+    # the message, so swapping the message to `rpartition` left it green while the
+    # printed instruction stopped working for a class-nested id. That is recorded as
+    # m5-the-taught-form-split-from-the-wrong-end in
+    # plans/mutations/70a-message-block-check.md.
+    for shape in (
+        "tests/test_x.py::test_y",
+        "tests/test_x.py::test_y[a-case]",
+        "tests/test_x.py::TestThing::test_y",
+    ):
+        assert prose_node_ids(f"cited {shape} here") == {shape}, shape
+        assert prose_node_ids(taught_citation_form(shape)) == set(), shape
+
+
+def test_the_stray_node_id_message_says_what_happened() -> None:
+    """The message names the file, the section, the id, and what to do about it."""
+    message = stray_node_id_message(
+        "plans/mutations/70a-pretend.md", "## A guard", "tests/test_x.py::test_y"
+    )
+    assert "plans/mutations/70a-pretend.md" in message
+    assert "## A guard" in message
+    assert "tests/test_x.py::test_y" in message
+    assert "neither kills nor survives" in message
+    assert "Put the id in kills" in message
+    assert "wrong mutation" in message
+    # The half that stops the cheapest fix being a false entry. A reader who meant a
+    # citation has to be told the citation form at the moment the check fires, because
+    # that is the only moment anybody reads it.
+    assert "read as a CLAIM" in message
+    assert "Do NOT add it to survives if you did not run it" in message
+    assert "observation nobody made" in message
+    assert "name it bare, without the path and the '::'" in message
+    # The exact edit, not a description of it.
+    assert "test_y in tests/test_x.py" in message
+    # And where the convention came from, so it reads as found rather than invented.
+    assert "plans/mutations/16-incompleteness-signal.md" in message
 
 
 # --- The measurement that could not fail, refused in the documents (#58) ---
@@ -989,14 +2161,60 @@ THE_THREE_BULLETS = (
     "- Never mark a test skipped or xfail to make the suite green",
 )
 
-ENFORCING_MECHANISMS = (
+# Entries naming a definition this module really makes. These get a second check,
+# because a substring assertion on markdown cannot see a rename: change the name in the
+# code and in the tuple literal together, and the rules text and the substring check are
+# both untouched and green while the rule names a function that is gone. That is the #70
+# defect inside the mechanism meant to prevent it, and it is measured rather than
+# argued: mutation m4-a-named-check-renamed in plans/mutations/70a-message-block-check.md
+# renames one of these and only the resolution check below reds.
+ENFORCING_SYMBOLS = (
+    "test_every_message_pin_is_anchored_or_says_why",
+    "test_every_message_block_is_anchored_or_carried",
+    "CARRIED_UNANCHORED_BLOCKS",
+    "CARRIED_TOTAL",
+)
+
+# Entries naming a path, resolved against the filesystem for the same reason.
+ENFORCING_PATHS = (
     "tests/test_suite_integrity.py",
     "plans/mutations/",
+)
+
+# Entries resolving to nothing but themselves: a marker, an environment variable, a
+# standard-library function named in prose and a source form. There is no definition and
+# no path to resolve, so a substring in the rules text is the whole of the check for
+# these four. Stated rather than assumed, because the claim this comment used to make,
+# that a rename would go red, was true of none of them.
+ENFORCING_CONVENTIONS = (
     "# unanchored:",
     "PYTHONDONTWRITEBYTECODE",
     "re.search",
     'match=r"^',
 )
+
+ENFORCING_MECHANISMS = ENFORCING_SYMBOLS + ENFORCING_PATHS + ENFORCING_CONVENTIONS
+
+
+def unresolved_mechanisms(
+    symbols: tuple[str, ...], paths: tuple[str, ...], namespace: dict[str, object]
+) -> list[str]:
+    """Named mechanisms that resolve to nothing, so the rule names something gone."""
+    problems: list[str] = []
+    for symbol in symbols:
+        if symbol not in namespace:
+            problems.append(
+                f"{posix(RULES)} names {symbol}, and tests/test_suite_integrity.py "
+                "defines no such name. Either the rule is naming something that was "
+                "renamed or deleted, or this tuple is. A rule naming something gone is "
+                "the shape of defect every issue in this module is about."
+            )
+    for path in paths:
+        if not (REPO / path).exists():
+            problems.append(
+                f"{posix(RULES)} names {path}, which does not exist in this checkout."
+            )
+    return problems
 
 
 def test_the_testing_rules_keep_the_three_they_had() -> None:
@@ -1019,3 +2237,51 @@ def test_the_testing_rules_name_the_mechanisms_that_enforce_them() -> None:
     text = read(RULES)
     for mechanism in ENFORCING_MECHANISMS:
         assert mechanism in text, mechanism
+
+
+def test_every_named_mechanism_resolves_to_something_that_exists() -> None:
+    """A mechanism the rules file names is a definition or a path, not just a string.
+
+    The check above asserts the name appears in the markdown, which a rename does not
+    disturb: rename the function and the tuple entry together and it stays green while
+    the rule names something gone. This one resolves the identifier-shaped entries
+    against this module's namespace and the path-shaped ones against the filesystem, so
+    the rename reds here instead.
+    """
+    assert unresolved_mechanisms(ENFORCING_SYMBOLS, ENFORCING_PATHS, globals()) == []
+
+
+def test_every_named_mechanism_is_classified() -> None:
+    """No entry escapes into the substring-only group by being added unclassified."""
+    grouped = ENFORCING_SYMBOLS + ENFORCING_PATHS + ENFORCING_CONVENTIONS
+    assert sorted(ENFORCING_MECHANISMS) == sorted(grouped)
+    assert len(set(grouped)) == len(grouped), "an entry is in two groups"
+    # The conventions are the entries with nothing to resolve to. Shape is the wrong
+    # test for that: PYTHONDONTWRITEBYTECODE is a valid identifier and is an environment
+    # variable, not a definition. What matters is that a convention resolves to neither
+    # a name this module defines nor a path on disk, because if it ever did it would
+    # belong in a group that gets the resolution check and leaving it here would exempt
+    # it silently.
+    for convention in ENFORCING_CONVENTIONS:
+        assert convention not in globals(), convention
+        assert not (REPO / convention).exists(), convention
+
+
+def test_the_mechanism_resolution_check_still_bites() -> None:
+    """Proof the resolution check refuses a name that resolves to nothing.
+
+    Without this the check would be green over a tuple whose entries all happen to
+    exist, and nothing would show that it had ever looked.
+    """
+    # a. A symbol this module does not define is a finding naming it.
+    gone = unresolved_mechanisms(("test_a_check_that_was_renamed",), (), globals())
+    assert len(gone) == 1
+    assert "test_a_check_that_was_renamed" in gone[0]
+    assert "defines no such name" in gone[0]
+    # b. A path that does not exist is a finding naming it.
+    missing = unresolved_mechanisms((), ("plans/nowhere-at-all/",), globals())
+    assert len(missing) == 1
+    assert "plans/nowhere-at-all/" in missing[0]
+    # c. A real definition and a real path are not findings, which is what keeps (a)
+    #    and (b) from passing because the helper always returns something.
+    assert unresolved_mechanisms(("posix",), ("README.md",), globals()) == []

@@ -200,7 +200,7 @@ nothing about whether either is used.
 
 The cause was narrow and worth naming, because it is a copying error anybody could
 repeat: the precedent it was modelled on,
-`tests/test_balances.py::test_the_fold_sorts_with_the_ordering_key_events_py_defines`,
+`test_the_fold_sorts_with_the_ordering_key_events_py_defines` in `tests/test_balances.py`,
 carries **two** assertions, and only the second was copied. The first,
 `"ordering_key" in _runtime_names(_module_tree(balances_module))`, is the half that
 bites.
