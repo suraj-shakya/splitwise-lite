@@ -11,12 +11,24 @@ the tree it was measured on: if an anchor below no longer matches exactly once, 
 the tree to diff against rather than a defect in the record. Every anchor was verified to
 match exactly once in `app/app.js` before every run.
 
-Every **before**-run below is against `87b7b7f`, which is `app/app.js` as it ships on
-master. Every **after**-run is against this branch's changed `app/app.js`. Each
-replacement is one line standing in for one line, so a stack's line number is the
-committed file's own: `app/app.js:1501` is `        return refresh();` on this branch and
-`app/app.js:1533` is the `.catch` body's write to `#gate-error`, both verified by grep
-after the last run rather than assumed.
+Every **before**-run below is against `87b7b7f`, which was master's tip when this branch
+was cut and is `app/app.js` unchanged. Every **after**-run is against this branch's
+changed `app/app.js`.
+
+**Sites in this record are named by their anchor text, not by a line number.** That is
+not fastidiousness: a line number in this document's prose has gone stale three times on
+this branch, once for each comment that was rewritten above the site it named, and the
+last of the three shipped and was caught in review. Anchor text is also what the harness
+actually matches, in `readSource`, so it is the citation that can be re-run rather than
+merely read.
+
+Two line numbers are kept, because the runs below paste stacks and something has to say
+what those stacks point at. Both are pinned to one commit rather than left bare, and
+both were verified by grep against it: at **`f060612`**, `app/app.js:1501` is
+`        return refresh();` and `app/app.js:1533` is the `.catch` body's write to
+`#gate-error`. Each replacement is one line standing in for one line, so a stack's line
+number is that committed file's own. Read them as of that commit; if the file has moved
+since, the anchor text is what still finds the site.
 
 **Every `find` here is one line.** `MUTANT_F`, `MUTANT_H` and `MUTANT_I` in
 `tests/test_shell_behaviour.py` each record that a multi-line anchor rots on a CRLF
@@ -219,10 +231,12 @@ its own anchor, so it is a block and not a sentence:
 ```
 
 **This block is never run alone, and its `kills` is the pair's rather than its own.** The
-anchor matches once, at `app/app.js:1543`, the other `.finally` being
-`    ).finally(done);` at 713. Applied by itself it only puts the chain back to a shape
-where nothing throws, which reds nothing at all. Both blocks go in one `substitutions`
-list:
+anchor, `      .finally(function () {`, matches `app/app.js` exactly once, and so does
+the file's only other `.finally`, `    ).finally(done);` in `loadFeed`, which this block
+must leave alone. Both counts were taken with `str.count` over the file's text, which is
+`readSource`'s own test, rather than read off a listing. Applied by itself this block
+only puts the gate's chain back to a shape where nothing throws, which reds nothing at
+all. Both blocks go in one `substitutions` list:
 
     {"substitutions": [
       {"file": "app/app.js", "find": "        return refresh();",
