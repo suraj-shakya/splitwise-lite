@@ -72,6 +72,14 @@ The assertion that the anchor matches **exactly once** is the part not to skip. 
 anchor that matches twice mutates two places, and an anchor that matches zero times
 mutates nothing while the run still reports a result.
 
+That assertion is also checked in the suite now, over every record in this directory, by
+`test_every_recorded_anchor_matches_once_or_is_carried` in
+`tests/test_suite_integrity.py`, so a committed record whose anchor will not apply is a
+failing test rather than a surprise for whoever next tries to re-run it. The JavaScript
+half asserts the same thing at run time: `tests/shell_harness.mjs` throws a harness
+error, exit status 2, when a substitution matched anything other than exactly once. Both
+appliers want the same precondition, which is why one check covers both.
+
 ## Always set PYTHONDONTWRITEBYTECODE=1
 
 Every Python mutation run sets `PYTHONDONTWRITEBYTECODE=1`, or deletes `__pycache__`
@@ -105,14 +113,66 @@ example, with `UNRELATED` as the named surviving control, and `mutated()` there 
 makes an anchor self-checking — it asserts the anchor still matches exactly once and
 tells you to re-express the mutant rather than weaken it.
 
-## The suite does not re-verify these anchors
+## What the suite checks about these anchors, and what it does not
 
-`tests/test_suite_integrity.py` checks that a record is machine readable and complete.
-It deliberately does **not** check that a record's `find` still matches the live source
-file.
+`tests/test_suite_integrity.py` checks four things about this directory. Each states one
+guarantee and none of them restates another's, so read the boundaries rather than the
+sum:
 
-Re-verifying would put every past mutation in the path of every future refactor, which
-is precisely the ossification #60 warns against: a rename in `src/` would red a dozen
-historical records that were correct when they were taken. A committed mutant is
-re-run; a recorded one is re-runnable. That difference is the whole reason both exist,
-and it is why a record going stale is expected rather than a failure.
+- **A record parses and is complete**, seven keys and no others:
+  `test_every_recorded_mutation_is_machine_readable`.
+- **A section records a mutation rather than describing one**:
+  `test_a_mutation_record_holds_no_prose_only_section`.
+- **A node id in a record's prose is one that record lists**:
+  `test_every_node_id_a_record_names_is_one_it_lists`.
+- **A record's `find` occurs exactly once in the file its own `file` key names, or the
+  record is declared stale with a reason**:
+  `test_every_recorded_anchor_matches_once_or_is_carried`, added for issue #87. Exactly
+  once is the precondition of both appliers, so a green run of that check is the
+  statement that the recipe above will apply the record. The declarations live in
+  `CARRIED_STALE_ANCHORS`, keyed by record file and record id and never by a section
+  heading, an ordinal or a line number, totalled in the declared integer
+  `CARRIED_STALE_TOTAL`, and checked as a set equality in both directions so a
+  declaration cannot outlive its subject. Every reason names the change that broke the
+  anchor with a `#NN`, and every declared record also carries a dated note in its own
+  section, so a reader of the record learns it there instead of from a test module.
+
+**What none of them does.** No recorded mutation is re-run, and no `result` is verified.
+A record whose anchor matches is proven **appliable** — the recipe will apply it — and is
+not proven correct. Its recorded verdict is a measurement somebody took against a tree
+that record names, and only re-running the mutation says whether that verdict still
+holds. Do not finish this section believing the suite now proves a record correct: it
+reads the anchors as text and counts them, and that is the whole of it.
+
+**No repair is demanded of anybody, and the ossification argument is answered rather
+than abandoned.** A rename in `src/` may rot a dozen historical anchors, and not one of
+them has to be edited, re-derived or deleted. The answer is a declaration: one entry per
+record file, plus a dated note in the record. So the baseline is expected to grow
+whenever a correct change breaks an anchor, and what the check refuses is an
+**undeclared** stale anchor rather than a stale one. A record going stale is still
+expected rather than a defect; what has changed is that it is now recorded when it
+happens rather than discovered years later by somebody trying to re-run it.
+
+**Re-deriving `find` against today's source is the wrong repair.** The worked example is
+`g2-repeated-member` in `65-message-pins.md`, which matched zero times from the day #61
+edited the guard it quotes. Editing its `find` would leave the message it recorded, its
+result and its node ids standing beside an anchor they were never measured against.
+It is retired in place with a dated note instead, and repair, for whoever wants it, is a
+fresh run and a **new** record with a new id.
+
+> **Retired 2026-09-08 for issue #87**, per
+> `plans/tasks/87-a-mutation-records-anchor-matches-zero-times.md`. This section was
+> headed "The suite does not re-verify these anchors" and said that
+> `tests/test_suite_integrity.py` "deliberately does **not** check that a record's
+> `find` still matches the live source file". That sentence is now false, and the
+> heading with it. Its reasoning was: "Re-verifying would put every past mutation in the
+> path of every future refactor, which is precisely the ossification #60 warns against:
+> a rename in `src/` would red a dozen historical records that were correct when they
+> were taken." That worry was right and is not retired; the declaration route is the
+> answer to it, because a rotted anchor is declared once with a reason and never
+> repaired under duress. The section also closed: "A committed mutant is re-run; a
+> recorded one is re-runnable. That difference is the whole reason both exist, and it is
+> why a record going stale is expected rather than a failure." That distinction stands
+> word for word. What issue #87 found is that nothing was checking the re-runnable half,
+> so a record could quietly stop being re-runnable and the suite stayed green over it
+> for as long as nobody tried.

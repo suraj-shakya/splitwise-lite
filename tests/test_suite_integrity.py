@@ -1,8 +1,8 @@
 """The suite's check on itself.
 
-Four failures in this repo reported success without exercising the thing they named,
-and this module answers them with something that runs: GitHub issues #67, #65, #70
-and #60.
+Five failures in this repo reported success without exercising the thing they named,
+and this module answers them with something that runs: GitHub issues #67, #65, #70,
+#60 and #87.
 
 The duplicate-definition check refuses a test module that binds one name twice at
 module level, because Python rebinds silently and pytest then collects only the last
@@ -33,8 +33,16 @@ author who has not read it, which is the failure mode
 
 The third issue, #60, is answered by a format rather than by a check on behaviour:
 ``plans/mutations/`` holds mutation records an anchor and a replacement at a time, and
-the last two checks here keep those records machine readable so the next person can
-re-run one instead of reconstructing it from a sentence.
+four checks here read that directory as data. Issue #87 is the promise the first three
+of them did not keep. A record can be re-run only while its ``find`` still occurs
+exactly once in the file it names, which is what both appliers assert and what neither
+of those checks read, so one record's anchor had matched zero times ever since #61
+edited the guard it quotes and the suite was green over it. The fourth check counts
+them, so a record can stop being appliable only in the open: in a declared baseline
+carrying a reason that names the change, and a dated note in the record itself. What
+that buys is narrower than it looks, and the check's own comment says so: a record
+whose anchor matches is proven appliable, never proven correct, because nothing here
+re-runs a mutation or verifies a ``result``.
 
 Standard library and pytest only, and nothing from ``splitwise_lite``, so these checks
 still run on a checkout where the package will not import.
@@ -2928,6 +2936,9 @@ ENFORCING_SYMBOLS = (
     "test_every_message_block_is_anchored_or_carried",
     "CARRIED_UNANCHORED_BLOCKS",
     "CARRIED_TOTAL",
+    "test_every_recorded_anchor_matches_once_or_is_carried",
+    "CARRIED_STALE_ANCHORS",
+    "CARRIED_STALE_TOTAL",
 )
 
 # Entries naming a path, resolved against the filesystem for the same reason.
