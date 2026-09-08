@@ -376,6 +376,35 @@ audited guard at a time.
 5. A new `message_blocks(source, where)` returns one entry per **candidate block**: a `with`
    statement one of whose items is a call whose `callee_name` is `raises`, which binds a name
    with `as`, and whose body **reads that name's message**.
+
+   > **Corrected 2026-09-08, during implementation of 70a.** This criterion reads above, and
+   > is left reading, "a `with` statement one of whose items is a call whose `callee_name` is
+   > `raises`, which binds a name with `as`, and whose body **reads that name's message**".
+   > The words "whose body" are wrong, and taken literally they make the check vacuous.
+   >
+   > **The durable half of this correction is mechanical: a `pytest.raises` body cannot read
+   > the message, because pytest populates `excinfo.value` in `__exit__`.** The attribute
+   > does not exist until the block has been left, and the raised exception has left the body
+   > in any case. That fact does not go stale. **The measured half will move:** over
+   > `tests/*.py` on branch `task-70` on 2026-09-08, of the **132** `str(NAME.value)` calls
+   > in the suite, **0** are inside a `with` body and **132** follow one.
+   >
+   > So read literally this criterion finds no candidate anywhere, `CARRIED_TOTAL` is 0, and
+   > 70a ships a check that cannot fail, in a task whose purpose is to remove checks that
+   > cannot fail. Criteria 14, 16, 17, 19 and 34 each separately contradict that outcome, so
+   > the document was internally inconsistent rather than merely loose.
+   >
+   > **What a block is, therefore, and what 70a implements:** the `with` statement together
+   > with the statements that follow it in the same suite, up to the next `raises`-binding
+   > `with` in that suite or the end of the suite. That is the region in which the block's
+   > bound name is the live one. Criterion 15 already assumes this reading, because "one of
+   > two blocks in a function" has a referent only if a function's statements are divided
+   > between its blocks.
+   >
+   > The same correction governs four further sites, wrong in the same way and left standing
+   > for the same reason: "in the same block" in criterion 6(b), "the block body" in criteria
+   > 10(b) and 10(c), and "the block's first and last line numbers" in criterion 11, where
+   > the last line is the end of that region and not the end of the `with` suite.
 6. "Reads the message" is exactly two shapes, and the criterion states both because the second
    is 27 lines of the population and a walk that misses it misses a quarter of the job:
    (a) a call to `str` whose single argument is `NAME.value`; (b) a load of a local that an
@@ -405,9 +434,32 @@ audited guard at a time.
     c. the block body calls `.startswith` on that message expression.
     d. some physical line of the `with` statement carries `# unanchored:` with a reason of at
        least `MINIMUM_REASON` characters.
+
+    > **Measured 2026-09-08 on branch `task-70`, and recorded here so the next person finds
+    > it rather than rediscovers it.** Branch (c), `.startswith`, has **no live subject in
+    > the suite today**: not one block in `tests/` is anchored that way. That is not a guess
+    > from grepping. Mutation `m3-startswith-branch-deleted` in
+    > `plans/mutations/70a-message-block-check.md` deleted the branch and reddened only the
+    > synthetic self-test, leaving all nineteen parametrised cases of the baseline check
+    > green. Branch (b), `==`, is the contrast: the same treatment reddened two real test
+    > modules, because two live blocks are anchored by an equality and nothing else.
+    >
+    > A branch exercised by a synthetic alone is legitimate here, because the accepted set
+    > has to be complete rather than merely populated, and 70b to 70h may yet give (c) a
+    > live subject. But anybody weighing its deletion should weigh that fact, not re-measure
+    > it, and should know that the self-test is the whole of what currently guards it.
 11. Anything else is a finding. `unanchored_message_blocks(source, where)` returns the findings,
     each carrying the block's first and last line numbers and the enclosing definition's name,
     taken as `stack[-1] if stack else "<module>"` in the manner `four_hundred_raise_sites` uses.
+
+    > **Corrected 2026-09-08, during implementation of 70a.** "The block body" in 10(b) and
+    > 10(c) above, and "the block's first and last line numbers" here, are wrong in the way
+    > criterion 5 is wrong, and the correction under criterion 5 governs them. Repeated here
+    > rather than left to a cross-reference, because a reader who enters this section at the
+    > accepted set does not pass criterion 5 on the way. In short: a `pytest.raises` body
+    > cannot hold any of these, because pytest populates `excinfo.value` in `__exit__`, so
+    > the block is the `with` statement plus the statements following it in the same suite,
+    > and the last line is the end of that region.
 
 ### 70a: what a failure says
 
@@ -517,6 +569,27 @@ Each of these applies **to each slice**, and a slice is not done until all of th
 
 28. The slice names its test module or modules and its source module or modules, matching one
     row of the slice table, and touches no test module outside that row.
+
+    > **Corrected 2026-09-08, during implementation of 70a.** This criterion assumes the slice
+    > table is complete, and on 2026-09-08 it was not: **the table has no row for
+    > `tests/test_accounts.py`**, and that module holds one unanchored block, in
+    > `test_every_login_failure_is_the_same_type_with_the_same_message`, which collects
+    > `str(caught.value)` inside a loop. The table above is left as it stands rather than
+    > edited, because the gap is the evidence and not only the defect.
+    >
+    > **How it was found, which is the argument for the mechanism.** The table and the
+    > per-module figures it derives from were built by ripgrep over nine modules. The walk
+    > 70a implements found a tenth. A grep counts the spellings somebody thought of; the walk
+    > counts the blocks that exist. That is better evidence for building a mechanism at all
+    > than any of the counts in this document.
+    >
+    > **The consequence, stated so it is not discovered late.** Under this criterion as
+    > written no slice may touch `tests/test_accounts.py`, so its carried entry could never
+    > be retired and criterion 38, which has the last slice delete the baseline, would be
+    > unsatisfiable. 70a therefore carries that entry with a reason naming **70h**, the slice
+    > that runs last, as the fallback. A row should be added for it when the audit slices are
+    > filed, so that 70h does not arrive expecting to delete a baseline that still holds an
+    > entry no row assigns to anybody.
 29. For **each** carried block the slice retires: the guard the block exists to pin is deleted,
     the block's node id is run **alone** with `PYTHONDONTWRITEBYTECODE=1`, the result is
     observed, and the tree is reverted with `git checkout -- <file>` before the next deletion.
