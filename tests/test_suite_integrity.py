@@ -675,10 +675,28 @@ def test_the_unanchored_pin_message_says_what_happened() -> None:
 #   an annotated assignment `m: str = str(NAME.value)`   0 occurrences
 #   a walrus `(m := str(NAME.value))`   0 occurrences
 #   pytest.warns(...) as NAME           0 occurrences
-# A future occurrence of any of them is invisible to this check: the block would not be
-# a candidate at all, so it would be neither flagged nor carried, and nothing anywhere
+# A future occurrence of any of those six is invisible to this check: the block would not
+# be a candidate at all, so it would be neither flagged nor carried, and nothing anywhere
 # would report it. Two levels of local binding are also not followed, and a binding made
 # outside the block is not followed across the function boundary.
+#
+# The seventh is different in kind, and it is the one to read carefully, because it is a
+# FALSE NEGATIVE rather than an invisibility:
+#   a nested `with raises(...) as NAME` rebinding the same NAME inside a candidate
+#   region                                               0 occurrences
+# The region runs to the next `raises`-binding `with` in the SAME suite, so it does not
+# stop at a rebinding one level down. Given an unanchored block followed by a loop whose
+# body rebinds the same name and compares that message with `==`, the anchor search walks
+# the whole region, finds the inner equality and calls the OUTER block anchored:
+# message_blocks returns 2 and unanchored_message_blocks returns 0. The other six leave a
+# block out of the population, so it is at least absent from the baseline. This one puts
+# a loose block on the anchored side of a check whose entire job is that side, and
+# nothing prints anything.
+# Measured 2026-09-08 across all 19 modules in TEST_SOURCES: 0 occurrences, so 107 is not
+# an undercount and this is latent rather than live. Found by the reviewer of PR #84, and
+# recorded rather than fixed, because narrowing the region to stop at a nested rebinding
+# would change the walk on a tree where it changes no number, and an audit slice that
+# writes the shape is the point at which it earns the change.
 
 
 class MessageBlock(NamedTuple):
