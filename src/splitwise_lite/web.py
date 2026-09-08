@@ -118,7 +118,17 @@ from typing import Any, Callable, Final
 
 import flask
 
-from . import accounts, balances, events, groups, money, simplify, split, store
+from . import (
+    accounts,
+    balances,
+    events,
+    groups,
+    money,
+    simplify,
+    split,
+    staleness,
+    store,
+)
 from .store import open_store
 
 __all__ = [
@@ -1171,6 +1181,96 @@ def _settlement_view(
     }
 
 
+_STALENESS_STATE_WIRE: Final[dict[staleness.StalenessState, str]] = {
+    staleness.StalenessState.NEVER: "never",
+    staleness.StalenessState.FRESH: "fresh",
+    staleness.StalenessState.STALE: "stale",
+}
+"""The wire spelling of every ``StalenessState``, on the same terms as
+:data:`_ENTRY_KIND_WIRE`: an explicit map rather than the enum's own values, so
+renaming a domain member cannot silently rename a JSON value the front end branches
+on. Exhaustive over the enum, and a test says so.
+
+Three values rather than a boolean and a nullable count, for the same reason
+``direction`` exists on a net row: what counts as stale is a product rule, it lives in
+one place, and the client never compares a count against a threshold. A boolean beside
+a count can express "stale, and I do not know how stale", which is issue #44's shape;
+three states cannot.
+"""
+
+
+def _staleness_view(
+    ledger: tuple[events.LedgerEvent, ...], members: tuple[store.Member, ...]
+) -> dict[str, Any]:
+    """How much this ledger does not know, in the four keys the wire carries.
+
+    **One builder for both reads.** ``GET /api/expenses`` and ``GET /api/balances``
+    call this and nothing else, so the feed and the balances screen cannot disagree
+    about how stale the group is. Two differently shaped objects both named
+    ``staleness`` would be two copies of one contract with nothing forcing them to
+    agree, and a screen whose job is to stop the app sounding confident must not itself
+    be able to say two things at once.
+
+    **The feed renders only half of what this sends, on purpose.** It shows the age
+    sentence and no quiet list, because who has entered nothing is a caveat on
+    *figures* and the feed presents none. ``quiet_member_ids`` still goes to the feed,
+    because the alternative is two shapes for one contract. Do not trim it to "just
+    what the feed renders":
+    ``tests/test_web_api.py::test_both_reads_send_the_identical_staleness_object_for_one_ledger``
+    and ``test_the_feed_carries_the_quiet_list_it_does_not_render`` both go red if
+    somebody does, and they are there for that reason.
+
+    ``ledger`` may be any of a group's events or only its expenses. Everything below
+    reads expenses and ignores settlements and decisions, so each endpoint hands over
+    the list it has already read rather than making a second query: the feed passes
+    ``list_expenses``, the balances read passes ``list_events``, and the answer is the
+    same either way, which is what the identical-object test above holds them to.
+
+    **Whatever is passed must already be scoped to one group, and that precondition is
+    load-bearing.** Both call sites satisfy it because both read through
+    ``store.list_expenses(group.id)`` or ``store.list_events(group.id)``. A third
+    endpoint that hands over a wider list gets a wrong answer rather than an error:
+    ``ledger_staleness`` refuses a list holding **two** groups, with
+    ``MixedGroupLedger``, because that breach is detectable from inside it, but a list
+    scoped entirely to the *wrong* group satisfies the precondition as written and is
+    computed, and it makes the ledger read fresher than it is. That is the whole failure
+    this feature exists to prevent, arriving through the door it was built to guard, so
+    the group id belongs in the query and not in a filter here.
+
+    The instant comes from :func:`_now`, this request's one clock read, so the figure
+    is measured against the same instant that stamps anything the request writes.
+    ``staleness.py`` reads no clock of its own and takes ``now`` as a required
+    keyword-only argument, which is what makes that unforgettable rather than
+    conventional.
+    """
+    signal = staleness.ledger_staleness(
+        ledger,
+        # Roster order in, roster order out: ``ledger_staleness`` promises the result
+        # follows this mapping's iteration order and sorts nothing itself, and
+        # ``store.list_members`` is ``(created_at, id)`` ascending, which is the order
+        # every other list on these two screens is already in.
+        {
+            events.MemberId(member.id): member.created_at
+            for member in members
+        },
+        now=_now(),
+    )
+    return {
+        "state": _STALENESS_STATE_WIRE[signal.state],
+        # A JSON integer or null, never a formatted string: it is a whole count of
+        # days and no amount, currency or display edge is involved anywhere in it.
+        "days_since_last_expense": signal.days_since_last_expense,
+        # Sent so the client can print the threshold without knowing it. Hard-coding
+        # 7 into app/index.html would be two copies of one number with nothing forcing
+        # them to agree, which this repository has paid for twice.
+        "quiet_after_days": signal.quiet_after_days,
+        # Ids only. No member ``created_at`` reaches the wire: the server works out who
+        # is quiet, and task 9's decision that a member view is id and display name
+        # only stands.
+        "quiet_member_ids": list(signal.quiet_member_ids),
+    }
+
+
 # --- Authentication and the acting member -----------------------------------
 
 
@@ -1352,13 +1452,29 @@ def _list_expenses() -> flask.Response:
     descending and keeps one ordering rule in one place. There is no pagination: a flat
     logs a few hundred expenses a year, and paging now would be a second ordering
     contract to keep in step with the first.
+
+    ``staleness`` says how old the newest expense is, and it rides on this read rather
+    than on one of its own for the same reason ``pending`` rides on the balances read:
+    a signal about a ledger that arrived at a different instant from the ledger could
+    disagree with it, and a feed that says one thing while the balances screen says
+    another is the confusion this signal exists to prevent.
+
+    **The cost, stated rather than hidden: this read now queries the roster.** A feed
+    load asks for the roster twice across its two requests, once here for
+    ``ledger_staleness`` and once through ``GET /api/members`` for the display names.
+    That is accepted at flat scale, where a roster is a handful of rows on the same
+    SQLite connection. The alternative was to send the feed only the half it renders,
+    and :func:`_staleness_view` records why that was rejected.
     """
     group = flask.g.group
     expenses = _store().list_expenses(group.id)
+    members = _store().list_members(group.id)
     return _json_response(
         {
             "currency": group.currency.code,
             "expenses": [_expense_view(expense) for expense in reversed(expenses)],
+            # Built from the expenses already read, so no second query of the log.
+            "staleness": _staleness_view(expenses, members),
         },
         200,
     )
@@ -1588,8 +1704,11 @@ def _read_balances() -> flask.Response:
         (settlement.from_member_id, settlement.to_member_id)
         for settlement in pending
     }
+    # Read once and used twice, for the net rows and for the staleness signal, so the
+    # roster both are built from is one snapshot and not two.
+    members = _store().list_members(group.id)
     net = []
-    for member in _store().list_members(group.id):
+    for member in members:
         position = derived.net_for(events.MemberId(member.id))
         net.append(
             {
@@ -1635,6 +1754,11 @@ def _read_balances() -> flask.Response:
                 _settlement_view(settlement, events.SettlementState.REJECTED)
                 for settlement in rejected
             ],
+            # From the same one snapshot as everything above it, so the caveat and the
+            # figures it is a caveat on are the same instant. The one thing this screen
+            # cannot tell you is whether an expense was left unrecorded, and this is
+            # where it says so instead of looking complete.
+            "staleness": _staleness_view(ledger, members),
         },
         200,
     )

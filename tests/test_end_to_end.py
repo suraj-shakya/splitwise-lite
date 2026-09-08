@@ -102,8 +102,28 @@ def test_the_whole_product_walks_from_seeding_to_a_cleared_balance(
     assert list(by_name(sam)) == ["Sam", "Ali", "Jo"]
 
     body = read_balances(jo)
-    assert set(body) == {"currency", "net", "transfers", "pending", "rejected"}
+    assert set(body) == {
+        "currency",
+        "net",
+        "transfers",
+        "pending",
+        "rejected",
+        # Task 16. This file is not in that task's stated file list, and it had to be
+        # edited anyway: the payload gained a key and this set is pinned exactly, which
+        # is the interlock doing its job. The walk asserts the new signal rather than
+        # merely tolerating it.
+        "staleness",
+    }
     assert body["currency"] == "AUD"
+    # Nothing has been recorded, so the age is unknown rather than zero, and nobody is
+    # named as quiet. Every net figure above reads 0.00, and this is the sentence that
+    # stops a brand-new flat reading three zeroes as a settled position.
+    assert body["staleness"] == {
+        "state": "never",
+        "days_since_last_expense": None,
+        "quiet_after_days": 7,
+        "quiet_member_ids": [],
+    }
     # ``net`` is compared positionally because it is ``store.list_members`` order, which
     # is roster insertion order and is pinned by test_web_api.py's
     # test_the_roster_is_the_group_in_store_order_with_two_keys_each. Contrast
