@@ -30,6 +30,69 @@ exercising what it named.
   is still an `re.search`. A deliberate substring pin carries `# unanchored: <why>`, and
   `tests/test_suite_integrity.py` refuses one without a reason. The anchored form looks
   like `match=r"^currency must be a Currency"`.
+
+  > **Corrected 2026-09-08 for issue #70**, per
+  > `plans/tasks/70-substring-assertions-on-exception-messages.md`. This rule used to stop
+  > there, and a reader finished it believing that anchoring a `match=` was the whole of
+  > it. Measured on `bea0da7`: the suite holds **16** real `match=` pins, every one of
+  > them anchored, against **101 occurrences** of `assert <needle> in str(<name>.value)`,
+  > on 100 lines across seven modules, plus everything asserted through the 27 lines that
+  > bind the message to a local first. The count is of occurrences and not of lines,
+  > because one line in `tests/test_simplify.py` carries two. So the rule as written
+  > covered the rarer form and read as covering the commoner one, which is a document
+  > reporting coverage it does not have: the same defect as a check reporting success
+  > without exercising what it names, one level up.
+
+  `assert "x" in str(exc.value)` is the same defect and not a milder one. For a pattern
+  with no metacharacters an `re.search` **is** a substring test, so that assertion and
+  `match="x"` are the same operation and the PR #62 collision applies to it unchanged.
+  Measured on `bea0da7` (2026-09-08), `money.py:246` raises `currency must be a Currency,
+  got ...` and `money.py:148` raises `Money currency must be a Currency, got ...`, so one
+  such assertion is satisfied by either of two live guards. A negative, `assert x not in
+  str(exc.value)`, is weaker still rather than safer: any message lacking the string
+  satisfies it, including one from an entirely different guard.
+
+  **The anchor goes on the block, not on each assertion.** A block routinely asserts
+  several fragments about one message and at most one of them can start it, so there is no
+  per-assertion form of this fix. Once one anchor has established which guard raised,
+  every fragment assertion beside it stops being a pin and becomes documentation, and none
+  of them has to change. Any one of these four anchors a block and they are the whole
+  accepted set: `match=r"^..."` on the `raises` call; `==` against the whole message;
+  `.startswith` on it; or `# unanchored: <why>` on the `with` statement, at the same
+  twenty-character floor. That is what `test_every_message_block_is_anchored_or_carried`
+  in `tests/test_suite_integrity.py` enforces, and it is the converse of the check above
+  rather than a second copy of it: `test_every_message_pin_is_anchored_or_says_why`
+  guarantees that any `match=` which exists is anchored, and this one guarantees that a
+  `match=` exists wherever a message is read. Counted as blocks rather than as assertions,
+  which is the unit the fix has, that population was **107** measured on `109d7e9`
+  (2026-09-08), computed by the check and not by anybody's grep. Every audit slice from
+  70b on lowers it, so read that number off `CARRIED_TOTAL` rather than off this sentence.
+
+  The blocks that were already loose when the check landed are carried in
+  `CARRIED_UNANCHORED_BLOCKS`, keyed by test module, enclosing definition name and count,
+  never by a line number or an ordinal, and totalled in one declared integer.
+
+  What the suite actually enforces about that baseline, stated exactly, because this rule
+  sits in the document issue #70 was filed about and a rule reading broader than its
+  mechanism is the whole complaint: set equality per module in **both** directions, so a
+  carried entry that is no longer unanchored is a failure naming it and an entry cannot
+  outlive its subject; `CARRIED_TOTAL` equal to the sum of the counts; and a reason of at
+  least twenty characters naming one of slices 70b to 70h.
+
+  **That the baseline only ever shrinks is a convention, not a check.** Nothing refuses a
+  new entry. Adding a loose block, adding its `(name, count)` pair and bumping
+  `CARRIED_TOTAL` passes all three of those, because a set equality is satisfied by the
+  new pair and a sum equality by the bump. It is a claim about history and the suite reads
+  one tree, so enforcing it would mean reading git from a test, which is not worth it.
+  What holds the baseline down is a reviewer reading a three-place diff that includes a
+  bump to a declared integer. That is weaker than the `# unanchored:` hatch, which demands
+  twenty characters of written reason for every block it exempts, so do not describe the
+  two as equals; it is a visibility cost rather than a written justification, and it is
+  enough while the audit is in flight. The last of issue #70's audit slices deletes the
+  baseline outright, which is the only thing that ends it. Carrying a block is not
+  anchoring one:
+  nothing in that baseline can fail for the reason its assertions name until its slice has
+  deleted the guard behind it and run.
 - **A test function defined twice in one module deletes the first one.** Python rebinds
   silently and pytest collects only what the module ends up holding. Scar: on PR #64
   four parametrised cases stopped running with the suite green, found only because
