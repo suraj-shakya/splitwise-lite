@@ -229,12 +229,14 @@
     </div>
 
     <!-- Two refusals this screen makes itself, and one that carries the server's own
-         words verbatim. At most one of the three is ever visible. -->
+         words verbatim. At most one of the three is ever visible. The roster refusal
+         names no cause, because the roster panel above already states which of the
+         three it is, so the two can never contradict each other (issue #44). -->
     <div class="add-errors" id="add-error" role="alert" hidden>
       <p class="add-error-text" id="add-error-amount" hidden>Type an amount before
         saving.</p>
-      <p class="add-error-text" id="add-error-roster" hidden>The people in this group
-        have not arrived yet, so this cannot be saved.</p>
+      <p class="add-error-text" id="add-error-roster" hidden>The app has nobody to
+        record this expense against, so it cannot be saved.</p>
       <p class="add-error-text" id="add-error-server" hidden></p>
     </div>
   </section>

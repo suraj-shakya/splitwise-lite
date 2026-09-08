@@ -32,7 +32,7 @@
    worker could never be replaced. */
 
 var VERSION = 'v4';
-var SHELL_DIGEST = '26859757a810';
+var SHELL_DIGEST = 'f8453329c392';
 var CACHE = 'splitwise-lite-shell-' + VERSION + '-' + SHELL_DIGEST;
 
 /* Exactly the shell. Relative, like every other URL in app/, so the directory can
