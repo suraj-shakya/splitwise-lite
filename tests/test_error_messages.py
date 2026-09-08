@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import functools
 import importlib
 import re
 import sqlite3
@@ -403,18 +404,40 @@ def raised_class(node: ast.expr, module: Any) -> type[BaseException] | None:
     return None
 
 
-def four_hundred_raise_sites() -> set[Key]:
-    """Every ``raise`` in the package whose class maps to a 4xx, keyed for the table.
+class RaiseSpan(NamedTuple):
+    """One ``raise`` statement: the row it belongs to, and the lines it occupies.
+
+    ``file`` is the resolved absolute path, so it compares equal to the path a
+    traceback frame reports for the same module. Three statements that share a ``key``
+    are three spans, because a key identifies a message and a position identifies a
+    statement.
+    """
+
+    key: Key
+    file: Path
+    lineno: int
+    end_lineno: int
+
+
+@functools.cache
+def four_hundred_raise_spans() -> tuple[RaiseSpan, ...]:
+    """Every ``raise`` in the package whose class maps to a 4xx, with its line span.
+
+    This is **the** walk. :func:`four_hundred_raise_sites` and
+    :func:`raise_site_index` are two views of this one result rather than two walks
+    over the same files, so the enumeration equality and the index cannot come to
+    disagree about what the package holds.
 
     One key per ``(module file name, enclosing def name, message skeleton)``. Two
     raises that agree on all three collapse to one key, which is what
     ``accounts.authenticate``'s three identical ``SessionInvalid`` refusals are: one
-    site as far as a message is concerned.
+    site as far as a message is concerned, and three spans as far as a position is.
     """
-    found: set[Key] = set()
+    found: list[RaiseSpan] = []
     for path in sorted(PACKAGE.glob("*.py")):
         module = importlib.import_module(f"splitwise_lite.{path.stem}")
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        absolute = path.resolve()
         stack: list[str] = []
 
         def walk(node: ast.AST) -> None:
@@ -427,13 +450,18 @@ def four_hundred_raise_sites() -> set[Key]:
                 klass = raised_class(node.exc, module)
                 if klass is not None and four_hundred_status(klass) is not None:
                     arguments = node.exc.args if isinstance(node.exc, ast.Call) else []
-                    found.add(
-                        (
-                            path.name,
-                            stack[-1] if stack else "<module>",
-                            message_skeleton(
-                                arguments[0] if arguments else None, module
+                    found.append(
+                        RaiseSpan(
+                            (
+                                path.name,
+                                stack[-1] if stack else "<module>",
+                                message_skeleton(
+                                    arguments[0] if arguments else None, module
+                                ),
                             ),
+                            absolute,
+                            node.lineno,
+                            node.end_lineno or node.lineno,
                         )
                     )
             for child in ast.iter_child_nodes(node):
@@ -442,7 +470,59 @@ def four_hundred_raise_sites() -> set[Key]:
                 stack.pop()
 
         walk(tree)
-    return found
+    return tuple(found)
+
+
+def four_hundred_raise_sites() -> set[Key]:
+    """The keys the walk found, which is what the enumeration equality compares."""
+    return {span.key for span in four_hundred_raise_spans()}
+
+
+# --- The raise-site index ---------------------------------------------------
+#
+# The table records which rows no request reaches. tests/conftest.py watches what
+# web._handle_error turns into a response, and to say which row an answer came from it
+# has to turn the (file, line) of a traceback frame back into a key. That is this
+# index, and it is built from the spans above rather than from a walk of its own.
+
+
+@functools.cache
+def raise_site_index() -> dict[tuple[Path, int], Key]:
+    """Every line of every 4xx ``raise`` statement, mapped to that statement's key.
+
+    Every line of the span rather than only the first: Python reports the line of the
+    instruction that raised, and a ``raise`` wrapped across four lines can be reported
+    at any of them.
+    """
+    index: dict[tuple[Path, int], Key] = {}
+    for span in four_hundred_raise_spans():
+        for lineno in range(span.lineno, span.end_lineno + 1):
+            index[(span.file, lineno)] = span.key
+    return index
+
+
+@functools.cache
+def indexed_path(filename: str) -> Path:
+    """``filename`` spelled the way :func:`raise_site_index` spells it.
+
+    Both sides go through ``Path.resolve``, because the index is built from
+    ``PACKAGE.glob`` and a traceback reports the path the import system used. On
+    Windows those two can differ in case or in a short name while naming one file, and
+    a comparison that silently never matches is how this kind of instrument passes
+    over nothing forever.
+    """
+    return Path(filename).resolve()
+
+
+def key_for_raise_site(filename: str, lineno: int) -> Key | None:
+    """The row whose ``raise`` statement occupies ``filename`` line ``lineno``.
+
+    ``None`` for everything else, and that one answer is the whole of the filtering: a
+    line with no 4xx ``raise`` on it, a ``raise`` whose class maps outside 4xx, an
+    implicit ``TypeError``, a werkzeug ``HTTPException``, and every file outside
+    ``src/splitwise_lite/``.
+    """
+    return raise_site_index().get((indexed_path(filename), lineno))
 
 
 # --- The table --------------------------------------------------------------
@@ -2009,3 +2089,175 @@ def test_every_site_no_request_reaches_says_what_would_have_to_be_true() -> None
             "evidence is the request, so the reason field stays empty and nobody has "
             "to wonder which one is true."
         )
+
+
+# --- Check C, part one: the index the observer reads ------------------------
+#
+# tests/conftest.py states the predicate all of this serves, and states it once.
+# Nothing here restates it; these check the machinery it reads.
+
+
+def test_the_key_set_and_the_raise_site_index_come_from_one_walk() -> None:
+    """Two views of one walk, so neither can drift from the other.
+
+    Every key the enumeration equality compares has at least one span in the index,
+    and every key the index yields is one of those. A second walk over the same files
+    is the thing this refuses: two walks are two things to keep in step, and the whole
+    value of the index is that it agrees with the table by construction.
+    """
+    spans = four_hundred_raise_spans()
+    assert spans, (
+        "the ast walk found no 4xx raise span at all, so the index is empty and every "
+        "check that reads it passes over nothing"
+    )
+    assert {span.key for span in spans} == four_hundred_raise_sites()
+    assert set(raise_site_index().values()) == four_hundred_raise_sites()
+    for span in spans:
+        assert raise_site_index()[(span.file, span.lineno)] == span.key
+
+
+def test_the_index_finds_a_site_by_the_path_the_import_system_reports() -> None:
+    """The path a traceback carries, not the one the walk happened to build.
+
+    ``PACKAGE.glob`` and ``splitwise_lite.store.__file__`` are two spellings of one
+    file, and on Windows two spellings of one file can differ in case or in a short
+    name. If they ever stop comparing equal, the observer maps every frame to nothing,
+    records nothing, and passes over an empty set forever. That is this instrument's
+    characteristic silent failure, so the comparison is asserted rather than assumed.
+    """
+    store_module = importlib.import_module("splitwise_lite.store")
+    spans = [span for span in four_hundred_raise_spans() if span.key[0] == "store.py"]
+    assert spans, "no 4xx raise site in store.py, so this checks nothing"
+    for span in spans:
+        assert key_for_raise_site(store_module.__file__, span.lineno) == span.key
+
+
+def test_the_index_maps_every_line_of_a_raise_spread_over_several_lines() -> None:
+    """A raise reported at its last line is found as readily as one at its first.
+
+    Python reports the line of the instruction that raised, which for a ``raise``
+    wrapped across four lines is not reliably the ``raise`` keyword's own line.
+    """
+    wrapped = [
+        span for span in four_hundred_raise_spans() if span.end_lineno > span.lineno
+    ]
+    assert wrapped, (
+        "no 4xx raise in the package spans more than one line, so this checks "
+        "nothing. If that is really so this test can go; until then an empty answer "
+        "means the walk has stopped carrying end_lineno."
+    )
+    for span in wrapped:
+        for lineno in range(span.lineno, span.end_lineno + 1):
+            assert key_for_raise_site(str(span.file), lineno) == span.key
+
+
+def test_three_raises_that_share_one_key_are_three_spans() -> None:
+    """``accounts.authenticate`` refuses in three places with one sentence.
+
+    One row in the table, because a key is a message. Three spans in the index,
+    because a position is a statement. There is no special case for it in either.
+    """
+    key: Key = (
+        "accounts.py",
+        "authenticate",
+        "that token does not name a live session",
+    )
+    assert key in four_hundred_raise_sites()
+    spans = [span for span in four_hundred_raise_spans() if span.key == key]
+    assert len(spans) == 3, [span.lineno for span in spans]
+    assert len({span.lineno for span in spans}) == 3
+
+
+def test_a_row_with_no_message_skeleton_is_indexed_by_position() -> None:
+    """``store._require_free`` composes its message elsewhere, so its skeleton is None.
+
+    The index is keyed by position rather than by message, so a row with no skeleton
+    needs no special case. That is asserted here rather than left to be re-derived.
+    """
+    keys = [key for key in four_hundred_raise_sites() if key[2] is None]
+    assert keys, "no row has a None skeleton, so this checks nothing"
+    for key in keys:
+        spans = [span for span in four_hundred_raise_spans() if span.key == key]
+        assert spans, key
+        for span in spans:
+            assert key_for_raise_site(str(span.file), span.lineno) == key
+
+
+def test_a_line_with_no_four_hundred_raise_on_it_names_no_row() -> None:
+    """The index answers ``None`` rather than guessing, which is what makes it quiet.
+
+    An implicit ``TypeError``, a werkzeug ``HTTPException`` and anything raised
+    outside ``src/splitwise_lite/`` all arrive as a frame the index does not hold, and
+    all three are ignored by the same one answer.
+    """
+    store_module = importlib.import_module("splitwise_lite.store")
+    assert key_for_raise_site(store_module.__file__, 1) is None
+    assert key_for_raise_site(__file__, 1) is None
+    assert key_for_raise_site(str(REPO / "no" / "such" / "file.py"), 1) is None
+
+
+def test_every_error_body_is_composed_inside_the_one_error_handler() -> None:
+    """Every error body this application sends is composed in ``_handle_error``.
+
+    That is what makes the observer in tests/conftest.py complete rather than
+    partial: it wraps one function, and a body composed anywhere else would be an
+    answer it never sees. A second error-body path is the one change that would blind
+    the observer while leaving every other check in this module green, so it is
+    refused here rather than assumed.
+
+    This opens ``src/splitwise_lite/web.py`` and walks it, rather than asserting
+    against an imported symbol or against a literal copied out of it. A check about a
+    module that never opens that module is not a check about that module.
+
+    Measured on this branch with ``rg -n "_error_body\\(" src/splitwise_lite/web.py``:
+    one definition, at line 778, and three calls, at 2704, 2723 and 2725. Neither the
+    count nor the lines are pinned, because moving a call within ``_handle_error`` is
+    not a defect and taking one outside it is.
+    """
+    web_source = PACKAGE / "web.py"
+    tree = ast.parse(web_source.read_text(encoding="utf-8"), filename=str(web_source))
+    handlers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_handle_error"
+    ]
+    assert len(handlers) == 1, (
+        "src/splitwise_lite/web.py defines _handle_error "
+        f"{len(handlers)} times, at lines {[node.lineno for node in handlers]}. The "
+        "observer wraps one function by that name, so it can only be watching one of "
+        "them."
+    )
+    definitions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_error_body"
+    ]
+    assert len(definitions) == 1, [node.lineno for node in definitions]
+
+    inside = {id(node) for node in ast.walk(handlers[0]) if isinstance(node, ast.Call)}
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_error_body"
+    ]
+    assert calls, (
+        "src/splitwise_lite/web.py holds no call to _error_body at all, so this "
+        "check passes over nothing. Either an error body is composed some other way "
+        "now, in which case tests/conftest.py's observer watches the wrong function, "
+        "or this walk has stopped finding calls."
+    )
+    outside = [node for node in calls if id(node) not in inside]
+    assert not outside, (
+        "src/splitwise_lite/web.py calls _error_body outside _handle_error, at lines "
+        f"{[node.lineno for node in outside]}.\n\n"
+        "tests/conftest.py observes what a request is answered with by wrapping "
+        "_handle_error, on the strength of every error body being composed there. A "
+        "second path composes a body the observer never sees, so every row of "
+        "FOUR_HUNDRED_SITES marked NO_REQUEST_REACHES_IT goes back to being a claim "
+        "nothing checks, with the suite still green. Compose the body in "
+        "_handle_error, or move the observer to whatever the new one place is."
+    )
