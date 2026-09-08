@@ -1006,6 +1006,28 @@ function page(scripts, name, provokeRunawayTimer, hideDocumentMembers) {
           );
         }
       });
+      /* And the opposite bug, which that loop cannot see. Those two ids are elements a
+         dead render leaves *showing*; this is a control a dead chain leaves *disabled*,
+         and no element's hidden flag says so. #gate-submit is disabled for exactly as
+         long as a sign-in is in flight, so a scenario that returns with it still
+         disabled is a gate that will refuse every further attempt until the page is
+         reloaded, which on an installed shell is the least obvious act there is.
+
+         It reads a disabled property rather than a hidden one, which is why it is a
+         clause beside that loop rather than a third id inside it.
+
+         Measured against unmodified app/ when this landed: 0 of the 160 scenarios red
+         on it, because submitted()'s trailing handler re-enables the control on every
+         path that reaches it. Inert is the intended state. What it buys is that the
+         property is now asserted in all 160 scenarios and in every future one, instead
+         of only in the three that thought to look for it by hand. */
+      if (byId('gate-submit').disabled) {
+        failures.push(
+          '#gate-submit is still disabled after settle: this scenario left the gate ' +
+            'unusable, which is what a sign-in chain that skipped its re-enabling ' +
+            'handler looks like from outside'
+        );
+      }
       calls.forEach((call, index) => wellFormed(call, index, failures));
       if (declaredRequests === null) {
         failures.push(
