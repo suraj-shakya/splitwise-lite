@@ -5,17 +5,17 @@ Four mutations, all run and all killed, against the checks this task adds: that 
 blocks which were already loose are carried in a baseline the suite checks in both
 directions.
 
-Taken against `ee77fdb` on 2026-09-08, on branch `task-70`. A record quotes a
+Taken against `bdca309` on 2026-09-08, on branch `task-70`, and re-taken there after merging `a595330`, which grew this module. A record quotes a
 measurement, so it carries the tree it was measured on: if an anchor below no longer
 matches exactly once, that is the tree to diff against rather than a defect in the
 record. The suite deliberately does not re-verify these anchors; see `README.md` in this
 directory for that reasoning, and for the format and the recipe.
 
 **What each run was, named as a quantity rather than left to be inferred.** Every run
-below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **86
+below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **89
 tests** at this revision, and the figures quoted are that module's failed and passed
 counts. Nothing was selected with `-k`, so a claim that a mutation is caught by one test
-is a claim about the other eighty-five staying green, not about a filtered subset. The
+is a claim about the other eighty-eight staying green, not about a filtered subset. The
 second record also ran the whole of `tests/test_money.py`, **181 tests**. Every run set
 `PYTHONDONTWRITEBYTECODE=1` and reverted with `git checkout -- <file>` before the next
 one.
@@ -99,7 +99,7 @@ watched it stay green, and an entry you did not run is an observation nobody mad
 }
 ```
 
-**What the run printed:** `3 failed, 83 passed`.
+**What the run printed:** `3 failed, 86 passed`.
 
 **Which criterion this is evidence for.** Criterion 22a: a branch of the accepted set is
 deleted and the self-test that covers it reds. The branch is 10b, an `==` against the
@@ -212,7 +212,7 @@ tree rather than read out of the guard's source:
 
     currency code must be three uppercase A-Z letters: 'aud'
 
-**What the run printed:** `1 failed, 85 passed` over
+**What the run printed:** `1 failed, 88 passed` over
 `tests/test_suite_integrity.py`, and `181 passed` over `tests/test_money.py`.
 
 **Which criterion this is evidence for.** Criterion 22b: the **stale** direction of the
@@ -261,7 +261,7 @@ a real file, names the real function, and prints the real replacement.
 }
 ```
 
-**What the run printed:** `1 failed, 85 passed`.
+**What the run printed:** `1 failed, 88 passed`.
 
 **Which criterion this is evidence for.** Criterion 21, that each accepted case in the
 self-tests is one that goes red if the branch accepting it is removed. This is the third
@@ -307,7 +307,7 @@ that will give it a live subject.
 }
 ```
 
-**What the run printed:** `1 failed, 85 passed`.
+**What the run printed:** `1 failed, 88 passed`.
 
 **Which finding this is evidence for.** The reviewer's second blocking finding on PR #84:
 that the comment beside `ENFORCING_MECHANISMS` claimed renaming a named check "would
