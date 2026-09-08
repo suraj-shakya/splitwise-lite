@@ -26,7 +26,8 @@ file at the path quoted beside it. Anything a run would be needed for is written
 criterion for the implementer to run and record, never as a result.
 
 Measured in the worktree `splitwise-lite-task-82`, branch `task-82`, over
-`tests/test_error_messages.py`:
+`tests/test_error_messages.py` **as it stood on 2026-09-07, when this spec was
+written**. These are not the live counts; see the note under the table.
 
 | Pattern (ripgrep, over that one file) | Count |
 | --- | --- |
@@ -37,12 +38,24 @@ Measured in the worktree `splitwise-lite-task-82`, branch `task-82`, over
 So: **50 marked rows, 56 driven rows, 106 rows in `FOUR_HUNDRED_SITES`.** The unanchored
 count is 51 because it also matches the helper's own `def unreachable(` line at
 `tests/test_error_messages.py:494`. The issue's warning about this trap is correct and
-the anchored figures above are the ones to quote.
+the anchored patterns above are the ones to measure with.
 
-An independent cross-check, by reading the table rather than by pattern: the marked rows
-distribute as `accounts.py` 4, `balances.py` 1, `groups.py` 8, `money.py` 3,
-`simplify.py` 1, `split.py` 2, `store.py` 29, `web.py` 2, which sums to 50 and agrees
-with the anchored count. Two measurements by different means, one answer.
+> **Superseded 2026-09-08.** Three of those fifty marks turned out to be false and
+> those rows are now driven, so the live figures are **47 marked and 59 driven**, still
+> 106 rows. The correction section below carries the measurement and the reasoning. The
+> table above is kept because it is the reading this spec was written against, and it
+> is not the current count: quote 47 and 59, measured with the same two patterns.
+
+An independent cross-check, by reading the table rather than by pattern: on 2026-09-07
+the marked rows distributed as `accounts.py` 4, `balances.py` 1, `groups.py` 8,
+`money.py` 3, `simplify.py` 1, `split.py` 2, `store.py` 29, `web.py` 2, which sums to 50
+and agreed with the anchored count. Two measurements by different means, one answer.
+
+Re-measured 2026-09-08, after the three rows moved: `accounts.py` 4, `balances.py` 1,
+`groups.py` 8, `money.py` 3, `simplify.py` 1, `split.py` 2, `store.py` 28, `web.py` 0,
+which sums to **47** and agrees with the anchored count of 47. The three that moved are
+one in `store.py` and both of `web.py`'s, which is why those two figures are the only
+ones that change.
 
 Other reads used below:
 
@@ -232,6 +245,19 @@ reaches it is the wrong description of a guard that exists because something mig
 **None of the three leaks an identifier.** All three now pass the driven half's
 assertion that no identifier the store holds appears in the body. Nothing shipped was
 ever wrong: the defect was in the description, not in the behaviour.
+
+**Better reasons than the ones first recorded, found in review and verified here.** Row
+2 needs no second process at all. `scripts/serve.py:127` runs `app.run(threaded=True)`,
+and `web._signup` takes no lock around `accounts.sign_up`, whose read at
+`src/splitwise_lite/accounts.py:658` and write at `src/splitwise_lite/accounts.py:664`
+are six lines apart, so two threads in the one process the dev server runs can
+interleave between them. That the omission is deliberate elsewhere is visible in the
+same file: `web._SETTLEMENT_LOCK` is defined at `src/splitwise_lite/web.py:1767` and
+taken on the settlement paths at 1924 and 2021, and the signup path takes nothing. Row
+3 is settled by the package's own comment at `src/splitwise_lite/web.py:2059`, which
+says in as many words that the raise is "Unreachable in one process" and exists for two.
+Both reasons are stronger than the ones recorded when the rows were moved, because each
+is a property of the shipped product rather than of a test.
 
 ### What is retracted
 

@@ -72,6 +72,19 @@ run after every test in the suite. ``tests/test_end_to_end.py`` records this rep
 reason for not introducing a conftest, and that reason is about sharing fixture
 scaffolding between two modules, which this is not.
 
+**What importing the package here costs, measured.** This file imports
+``splitwise_lite.web`` at module scope, so the session imports the package before any
+test runs. ``tests/test_suite_integrity.py``'s docstring says its checks "still run on
+a checkout where the package will not import", and at the session level that is now
+weaker than it was. Importing lazily inside the fixture does not fix it: that was
+measured on 2026-09-08 and the suite reports **92 errors**, because the cause is the
+autouse session scope criterion B1 mandates rather than where the import is written. A
+``try``/``except ImportError`` here would be a hatch that could mask the observer not
+being installed, which is the one failure the group C proof exists to catch, so there
+is none. The only repair that would actually hold touches
+``tests/test_suite_integrity.py``, which this task may not edit because PR #70a owns
+it, so this is recorded rather than fixed.
+
 Standard library, pytest and the package under test only, which is the limit
 ``tests/test_error_messages.py`` already holds to.
 """
@@ -82,7 +95,6 @@ import json
 from types import ModuleType
 from typing import Any, Final, NamedTuple
 
-import flask
 import pytest
 
 from splitwise_lite import web
@@ -165,8 +177,11 @@ def _observing(original: Any) -> Any:
                     Answered(
                         raised[0],
                         raised[1],
-                        flask.request.method,
-                        flask.request.path,
+                        # ``web.flask`` rather than a second import of the
+                        # framework into this file, which is the preference
+                        # tests/test_web_api.py records.
+                        web.flask.request.method,
+                        web.flask.request.path,
                         response.status_code,
                         _message_of(response),
                     )
@@ -229,7 +244,7 @@ def _reached_message(key: tuple[Any, ...], answered: Answered) -> str:
         "route now reaches the raise, in which case the row moves from "
         "unreachable(...) to a Drive and has to carry no identifier the store holds "
         "(issue #61), or the request is wrong. The predicate is stated at the top of "
-        "tests/conftest.py, and it is stated there only."
+        "tests/conftest.py."
     )
 
 

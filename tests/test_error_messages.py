@@ -41,9 +41,20 @@ negatives on the second. So:
 
 Because every id-bearing site is genuinely unreachable by request, the driven half
 needs no allowlist, no exemption set and no marker comment. There is nothing in it to
-rot. What is **not** covered, stated plainly: a row marked
-:data:`NO_REQUEST_REACHES_IT` is a claim this module records rather than verifies, and
-the identifier set excludes email addresses deliberately.
+rot.
+
+**Retracted 2026-09-08, issue #82.** This passage read:
+
+    What is **not** covered, stated plainly: a row marked
+    :data:`NO_REQUEST_REACHES_IT` is a claim this module records rather than verifies
+
+That is no longer so. ``tests/conftest.py`` watches what ``web._handle_error`` turns
+into a response and reds when the exception raised at a marked row's site is the one
+answered, so the marker is checked on every run rather than recorded. What that check
+does not cover is stated where the predicate is, in ``tests/conftest.py``, and is
+deliberately not restated here.
+
+The identifier set excludes email addresses deliberately.
 ``accounts.EmailAlreadyRegistered`` names a normalised address at 409, that address is
 the person's own typed input, the sign-up screen shows it back, and echoing typed input
 is ``parse_amount``'s already-accepted precedent.
@@ -530,11 +541,28 @@ def key_for_raise_site(filename: str, lineno: int) -> Key | None:
 # --- The table --------------------------------------------------------------
 
 NO_REQUEST_REACHES_IT: Final = "NO_REQUEST_REACHES_IT"
-"""A site no HTTP request can reach, with a reason saying what would have to be true.
+"""A site no request is ever answered from, with a reason saying what would have to be
+true for one to be.
 
-A claim this module records rather than verifies. Every one of them is a refusal whose
-inputs the server produced itself, a refusal only ``scripts/setup_group.py`` reaches,
-or a refusal another layer catches and re-raises as something else.
+**Escape, not execution, and the difference decides rows.** A marked raise may be
+executed by a request and the row still be correct, so long as the exception is caught
+inside ``src/splitwise_lite/`` and something else is what the client is answered with.
+``store.get_user_by_email``'s refusal runs on every successful signup and is marked,
+correctly. The predicate is stated in ``tests/conftest.py``; this is a pointer to it
+and not a second version of it.
+
+**Retracted 2026-09-08, issue #82.** This docstring read:
+
+    A site no HTTP request can reach, with a reason saying what would have to be true.
+
+    A claim this module records rather than verifies.
+
+Both halves were wrong by then. HTTP requests do reach several of these rows without
+ever being answered from them, and the marker is now checked rather than recorded.
+
+Every one of them is a refusal whose inputs the server produced itself, a refusal only
+``scripts/setup_group.py`` reaches, or a refusal another layer catches and re-raises as
+something else.
 """
 
 
@@ -2196,9 +2224,9 @@ def test_every_site_no_request_reaches_says_what_would_have_to_be_true() -> None
         assert len(site.reason) >= MIN_REASON, (
             f"{site_id(site)} is marked NO_REQUEST_REACHES_IT with a reason of "
             f"{len(site.reason)} characters: {site.reason!r}. Say what would have to "
-            f"be true for a request to reach it, in at least {MIN_REASON} characters. "
-            "This is the one claim here that nothing verifies, so it is the one that "
-            "has to be readable."
+            f"be true for a request to be answered from it, in at least {MIN_REASON} "
+            "characters. tests/conftest.py reds if one ever is, so this reason is what "
+            "a reader compares that failure against."
         )
     for site in DRIVEN:
         assert site.reason == "", (
