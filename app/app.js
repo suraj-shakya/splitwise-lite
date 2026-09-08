@@ -780,11 +780,14 @@
   }
 
   function addRosterArrived() {
-    /* "The people in this group have not arrived yet" stops being true the moment they
-       do, so the refusal that said so comes down with it rather than waiting for the
-       next tap to withdraw it. Typing while the roster loads is the whole point of this
-       screen, so saving during that window is a normal thing to do and a stale refusal
-       left behind it is a false sentence on the fast path.
+    /* "The app has nobody to record this expense against" stops being true the moment
+       a roster arrives with somebody in it, so the refusal that said so comes down with
+       it rather than waiting for the next tap to withdraw it. Typing while the roster
+       loads is the whole point of this screen, so saving during that window is a normal
+       thing to do and a stale refusal left behind it is a false sentence on the fast
+       path. This is the only path that withdraws the refusal, and deliberately: a read
+       that failed and a roster that arrived with nobody in it both leave the sentence
+       true, so neither calls this.
 
        Scoped to the one child this path owns, and deliberately not a blanket clear: a
        message the server sent about a refused save is still true and is not this
@@ -1154,7 +1157,17 @@
         addRoster = payload.members;
         if (addRoster.length === 0) {
           /* Reachable through a half-finished setup_group.py run, which is why the
-             balances screen has this state too. */
+             balances screen has this state too.
+
+             addRosterArrived() is deliberately not called on this path, and the
+             omission is a decision rather than the bug it used to be. Issue #44 was
+             that a roster arriving with nobody in it left a refusal up which said the
+             people had not arrived, beside a note saying they had and there were none
+             of them. The sentence was the wrong half: with nobody in the roster there
+             is still nobody to record against, so the refusal is true and withdrawing
+             it would answer the tap and then silently un-answer it. MUTANT_I in
+             tests/test_shell_behaviour.py is that call put back, held permanently
+             red. */
           addRosterState('empty');
           return;
         }

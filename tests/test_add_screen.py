@@ -449,11 +449,47 @@ def test_the_three_roster_states_read_exactly_as_promised() -> None:
 def test_the_screens_own_two_refusals_read_exactly_as_promised() -> None:
     doc = tree()
     assert doc.one("add-error-amount").text == "Type an amount before saving."
+    # Changed for issue #44, deliberately and in the same commit as the markup. The
+    # sentence this used to hold, `The people in this group have not arrived yet, so
+    # this cannot be saved.`, named one of the three reasons the refusal covers and was
+    # false in the other two. Still `==` against one literal: loosening this to a
+    # substring would let the next rewording through unread.
     assert doc.one("add-error-roster").text == (
-        "The people in this group have not arrived yet, so this cannot be saved."
+        "The app has nobody to record this expense against, so it cannot be saved."
     )
     # The server's own words go here and nothing ships in it.
     assert doc.one("add-error-server").text == ""
+
+
+def test_the_roster_refusal_names_none_of_the_three_reasons_it_covers() -> None:
+    # Issue #44. One sentence answers a tap made while the roster was loading, while
+    # the read had failed, and while the roster turned out to be empty. A refusal that
+    # names a cause is a refusal that can be wrong about one, and the wrong one
+    # shipped: an empty roster was answered with "have not arrived yet", directly under
+    # a note saying they had arrived and there were none of them. The cause is stated
+    # in exactly one element, the roster panel above, which addRosterState already
+    # keeps single-valued.
+    #
+    # Scoped to add-error-roster alone, and never widened to the add section or to the
+    # document. Three of these four substrings are required verbatim by a sibling
+    # sentence: add-roster-busy says "Fetching", add-roster-error says "did not
+    # arrive", and add-empty-roster says "yet". A section-scoped version of this ban
+    # would forbid three strings the screen requires and would have been red the moment
+    # it was written.
+    #
+    # "loading" is deliberately not in this list. It is already banned across the whole
+    # add section by test_the_committed_add_markup_invents_no_data, and one guarantee
+    # is stated in one place.
+    #
+    # What this check can and cannot do. Under a single-file mutation of app/index.html
+    # it can never fire alone, because any edit to this sentence also reds
+    # test_the_screens_own_two_refusals_read_exactly_as_promised above. Its value is the
+    # deliberate two-file edit: a later engineer who reworks the copy and updates that
+    # pin in the same commit meets this test and has to argue with it rather than
+    # sliding a cause back in behind a green suite.
+    text = tree().one("add-error-roster").text.lower()
+    for banned in ("arriv", "yet", "fetch", "empty"):
+        assert banned not in text, banned
 
 
 def test_the_two_save_states_read_exactly_as_promised() -> None:

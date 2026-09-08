@@ -117,6 +117,7 @@ SCENARIOS = [
     "a_roster_without_the_acting_member_defaults_to_the_first_one",
     "switching_modes_twice_still_names_every_member_once",
     "a_save_refused_while_the_roster_loads_stops_saying_so_once_it_arrives",
+    "a_save_refused_while_the_roster_loads_still_reads_true_when_the_roster_is_empty",
     "a_zero_amount_is_refused_in_the_resolvers_own_words_and_keeps_the_draft",
     # A screen that waits for a session, and a draft that survives signing back in
     "a_route_change_behind_the_gate_asks_for_nothing_and_leaves_the_gate_alone",
@@ -341,6 +342,34 @@ MUTANT_H = {
     "replace": "    if (state !== 'fresh') {",
 }
 
+
+# Mutant I: the empty path withdraws the refusal, which is the fix issue #44 analysed
+# and rejected. addRosterArrived() is called before addRosterState('empty'), so a Save
+# tapped while the roster was in the air is answered, and then the empty roster that
+# lands a moment later silently un-answers it. The screen goes quiet in the one state
+# where a screen reader has just been told something: #add-error carries role="alert"
+# and #add-empty-roster is a plain note, so the tap ends up answered by nothing at all.
+#
+# It qualifies under all three of plans/mutations/README.md's tests. It is the only
+# evidence that the new scenario's "still refused" assertion bites, because that
+# assertion passed the moment it was written and a scenario that passes proves nothing
+# on its own. It survives against the code as it was before this task, being the exact
+# repair the issue proposed and then rejected, so it names a defect that could really
+# have shipped rather than one invented to be killed. And it leaves a working app with
+# one behaviour broken: a_group_with_no_members_says_so_and_saves_nothing taps Save
+# after the roster has already landed, so nothing withdraws its refusal and it stays
+# green, which is asserted below beside the named control.
+#
+# The anchor is one line, and that is not incidental: MUTANT_F and MUTANT_H both record
+# that a multi-line anchor rots on a checkout whose line endings differ, and this
+# working tree is CRLF. One line carries the whole mutation because the insertion goes
+# in front of it.
+MUTANT_I = {
+    "file": "app/app.js",
+    "find": "          addRosterState('empty');",
+    "replace": "          addRosterArrived();\n          addRosterState('empty');",
+}
+
 REFUSED = "a_refused_sign_in_tells_the_person_why"
 # Named, and unrelated to either mutation: a mutant has to leave a working app with
 # one specific behaviour broken, not a smoking crater.
@@ -474,7 +503,7 @@ def test_the_harness_reports_exactly_the_declared_scenarios(
     assert [entry["name"] for entry in report["scenarios"]] == SCENARIOS
 
 
-# --- The six mutants -------------------------------------------------------
+# --- The committed mutants, each one permanently red ------------------------
 
 
 def mutated(mutant: dict[str, str]) -> str:
@@ -649,6 +678,37 @@ def test_mutant_h_a_ledger_with_no_expense_rendered_as_one_of_known_age_is_kille
     # And app/api.js is not where a sentence is chosen, so the mutation lands in one
     # file and leaves the client exactly as it ships.
     loaded = loaded_under(MUTANT_H)
+    assert loaded["app/api.js"] == (REPO / "app" / "api.js").read_text(encoding="utf-8")
+
+
+THE_EMPTY_ROSTER_REFUSAL = (
+    "a_save_refused_while_the_roster_loads_still_reads_true_when_the_roster_is_empty"
+)
+THE_SETTLED_EMPTY_ROSTER = "a_group_with_no_members_says_so_and_saves_nothing"
+
+
+def test_mutant_i_an_empty_roster_withdrawing_a_refusal_that_is_still_true_is_killed() -> None:
+    found = killed(MUTANT_I)
+    assert not found[THE_EMPTY_ROSTER_REFUSAL]["passed"]
+    messages = " ".join(found[THE_EMPTY_ROSTER_REFUSAL]["failures"])
+    # The right failure, not a coincidence, and the substring is the failing
+    # assertion's own label taken from the run rather than invented ahead of it: the
+    # alert that answered the tap is down again once the empty roster lands, so all
+    # three error children read false where the middle one must still read true.
+    assert "the three error children once the empty roster landed" in messages, messages
+    assert "[false,false,false]" in messages, messages
+    assert found[UNRELATED]["passed"], found[UNRELATED]["failures"]
+    # A working app with one behaviour broken rather than a crater: a Save tapped after
+    # an empty roster has already landed is still refused, because nothing on that path
+    # withdraws anything. That is what makes this the in-flight defect and not a refusal
+    # that stopped working, and it is why a scenario tapping Save in one settled state
+    # cannot see it.
+    assert found[THE_SETTLED_EMPTY_ROSTER]["passed"], found[THE_SETTLED_EMPTY_ROSTER][
+        "failures"
+    ]
+    # And app/api.js is not where a refusal is raised, so the mutation lands in one file
+    # and leaves the client exactly as it ships.
+    loaded = loaded_under(MUTANT_I)
     assert loaded["app/api.js"] == (REPO / "app" / "api.js").read_text(encoding="utf-8")
 
 
