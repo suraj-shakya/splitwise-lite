@@ -1170,7 +1170,8 @@ def carried_baseline_message(
             "the pytest.raises call, or compare the whole message with == or "
             ".startswith, or say why not with '# unanchored: <why>' on the with "
             f"statement, with a reason of at least {MINIMUM_REASON} characters. "
-            "The baseline may only shrink."
+            "The baseline may only shrink, and nothing enforces that: it is a "
+            "convention this message is asking you to keep."
         )
     if stale:
         parts.append(
@@ -1181,8 +1182,25 @@ def carried_baseline_message(
             "nobody retires. If an audit slice anchored them, take them out of the "
             "entry and lower CARRIED_TOTAL by the same number."
         )
+    # The literal is printed in both directions, because a computed constant's failure
+    # ends with the text to paste back and that is how this repo maintains one. But a
+    # failure's last line is what people act on, and in the new-block direction the
+    # paste-back is the anti-instruction: it carries the block instead of anchoring it.
+    # So it is labelled rather than withheld, which keeps it available for the
+    # retirement direction in a failure that reports both.
+    handed = (
+        "Paste this in place of this module's entry in CARRIED_UNANCHORED_BLOCKS:"
+        if not unlisted
+        else (
+            "Below is that entry as it would now read. It is here for the retirement "
+            "direction, and it is NOT the answer to a new unanchored block: pasting it "
+            "carries the block instead of anchoring it, and grows the baseline, which "
+            "is the one thing the baseline is not for. Anchor the block instead, as "
+            "above."
+        )
+    )
     parts.append(
-        "Paste this in place of this module's entry in CARRIED_UNANCHORED_BLOCKS:\n"
+        f"{handed}\n"
         "\n"
         f"{literal}\n"
         "\n"
@@ -1191,6 +1209,33 @@ def carried_baseline_message(
         f"    CARRIED_TOTAL = {total}"
     )
     return "\n\n".join(parts)
+
+
+def test_the_carried_baseline_message_says_which_direction_it_is_for() -> None:
+    """The paste-back is labelled, so it is not read as the fix for a new block.
+
+    A failure's last line is what people act on, and this check prints the same literal
+    whichever direction it fired in. Without the label the new-block direction ends by
+    handing the reader the text that carries the block rather than anchors it.
+    """
+    literal = '    "tests/test_pretend.py": (...),'
+    new_block = carried_baseline_message(
+        "tests/test_pretend.py", {("test_thing", 1)}, set(), literal, 108
+    )
+    assert "test_thing: 1" in new_block
+    assert "NOT the answer to a new unanchored block" in new_block
+    assert "carries the block instead of anchoring it" in new_block
+    # The honest form of the convention, in the same message that asks for it.
+    assert "nothing enforces that" in new_block
+    # Criterion 18 still holds in both directions: the text ends with the entry and the
+    # CARRIED_TOTAL line, so a computed constant is still maintained by pasting back.
+    assert new_block.rstrip().endswith("CARRIED_TOTAL = 108")
+    retirement = carried_baseline_message(
+        "tests/test_pretend.py", set(), {("test_thing", 1)}, literal, 106
+    )
+    assert "Paste this in place of" in retirement
+    assert "NOT the answer" not in retirement
+    assert retirement.rstrip().endswith("CARRIED_TOTAL = 106")
 
 
 @pytest.mark.parametrize("path", TEST_SOURCES, ids=SOURCE_IDS)
@@ -1990,21 +2035,60 @@ THE_THREE_BULLETS = (
     "- Never mark a test skipped or xfail to make the suite green",
 )
 
-ENFORCING_MECHANISMS = (
+# Entries naming a definition this module really makes. These get a second check,
+# because a substring assertion on markdown cannot see a rename: change the name in the
+# code and in the tuple literal together, and the rules text and the substring check are
+# both untouched and green while the rule names a function that is gone. That is the #70
+# defect inside the mechanism meant to prevent it, and it is measured rather than
+# argued: mutation m4-a-named-check-renamed in plans/mutations/70a-message-block-check.md
+# renames one of these and only the resolution check below reds.
+ENFORCING_SYMBOLS = (
+    "test_every_message_pin_is_anchored_or_says_why",
+    "test_every_message_block_is_anchored_or_carried",
+    "CARRIED_UNANCHORED_BLOCKS",
+    "CARRIED_TOTAL",
+)
+
+# Entries naming a path, resolved against the filesystem for the same reason.
+ENFORCING_PATHS = (
     "tests/test_suite_integrity.py",
     "plans/mutations/",
+)
+
+# Entries resolving to nothing but themselves: a marker, an environment variable, a
+# standard-library function named in prose and a source form. There is no definition and
+# no path to resolve, so a substring in the rules text is the whole of the check for
+# these four. Stated rather than assumed, because the claim this comment used to make,
+# that a rename would go red, was true of none of them.
+ENFORCING_CONVENTIONS = (
     "# unanchored:",
     "PYTHONDONTWRITEBYTECODE",
     "re.search",
     'match=r"^',
-    # Issue #70's half of rule 1. Both names, because the rule makes a claim about each:
-    # that a check enforces the converse guarantee, and that the blocks which were
-    # already loose are carried somewhere with a total a reviewer can see. Renaming
-    # either without moving the rule would leave the rule naming something gone, which
-    # is the shape of defect every issue in this module is about.
-    "test_every_message_block_is_anchored_or_carried",
-    "CARRIED_UNANCHORED_BLOCKS",
 )
+
+ENFORCING_MECHANISMS = ENFORCING_SYMBOLS + ENFORCING_PATHS + ENFORCING_CONVENTIONS
+
+
+def unresolved_mechanisms(
+    symbols: tuple[str, ...], paths: tuple[str, ...], namespace: dict[str, object]
+) -> list[str]:
+    """Named mechanisms that resolve to nothing, so the rule names something gone."""
+    problems: list[str] = []
+    for symbol in symbols:
+        if symbol not in namespace:
+            problems.append(
+                f"{posix(RULES)} names {symbol}, and tests/test_suite_integrity.py "
+                "defines no such name. Either the rule is naming something that was "
+                "renamed or deleted, or this tuple is. A rule naming something gone is "
+                "the shape of defect every issue in this module is about."
+            )
+    for path in paths:
+        if not (REPO / path).exists():
+            problems.append(
+                f"{posix(RULES)} names {path}, which does not exist in this checkout."
+            )
+    return problems
 
 
 def test_the_testing_rules_keep_the_three_they_had() -> None:
@@ -2027,3 +2111,51 @@ def test_the_testing_rules_name_the_mechanisms_that_enforce_them() -> None:
     text = read(RULES)
     for mechanism in ENFORCING_MECHANISMS:
         assert mechanism in text, mechanism
+
+
+def test_every_named_mechanism_resolves_to_something_that_exists() -> None:
+    """A mechanism the rules file names is a definition or a path, not just a string.
+
+    The check above asserts the name appears in the markdown, which a rename does not
+    disturb: rename the function and the tuple entry together and it stays green while
+    the rule names something gone. This one resolves the identifier-shaped entries
+    against this module's namespace and the path-shaped ones against the filesystem, so
+    the rename reds here instead.
+    """
+    assert unresolved_mechanisms(ENFORCING_SYMBOLS, ENFORCING_PATHS, globals()) == []
+
+
+def test_every_named_mechanism_is_classified() -> None:
+    """No entry escapes into the substring-only group by being added unclassified."""
+    grouped = ENFORCING_SYMBOLS + ENFORCING_PATHS + ENFORCING_CONVENTIONS
+    assert sorted(ENFORCING_MECHANISMS) == sorted(grouped)
+    assert len(set(grouped)) == len(grouped), "an entry is in two groups"
+    # The conventions are the entries with nothing to resolve to. Shape is the wrong
+    # test for that: PYTHONDONTWRITEBYTECODE is a valid identifier and is an environment
+    # variable, not a definition. What matters is that a convention resolves to neither
+    # a name this module defines nor a path on disk, because if it ever did it would
+    # belong in a group that gets the resolution check and leaving it here would exempt
+    # it silently.
+    for convention in ENFORCING_CONVENTIONS:
+        assert convention not in globals(), convention
+        assert not (REPO / convention).exists(), convention
+
+
+def test_the_mechanism_resolution_check_still_bites() -> None:
+    """Proof the resolution check refuses a name that resolves to nothing.
+
+    Without this the check would be green over a tuple whose entries all happen to
+    exist, and nothing would show that it had ever looked.
+    """
+    # a. A symbol this module does not define is a finding naming it.
+    gone = unresolved_mechanisms(("test_a_check_that_was_renamed",), (), globals())
+    assert len(gone) == 1
+    assert "test_a_check_that_was_renamed" in gone[0]
+    assert "defines no such name" in gone[0]
+    # b. A path that does not exist is a finding naming it.
+    missing = unresolved_mechanisms((), ("plans/nowhere-at-all/",), globals())
+    assert len(missing) == 1
+    assert "plans/nowhere-at-all/" in missing[0]
+    # c. A real definition and a real path are not findings, which is what keeps (a)
+    #    and (b) from passing because the helper always returns something.
+    assert unresolved_mechanisms(("posix",), ("README.md",), globals()) == []

@@ -64,15 +64,33 @@ exercising what it named.
   rather than a second copy of it: `test_every_message_pin_is_anchored_or_says_why`
   guarantees that any `match=` which exists is anchored, and this one guarantees that a
   `match=` exists wherever a message is read. Counted as blocks rather than as assertions,
-  which is the unit the fix has, that population is **107**, computed by the check and not
-  by anybody's grep.
+  which is the unit the fix has, that population was **107** measured on `109d7e9`
+  (2026-09-08), computed by the check and not by anybody's grep. Every audit slice from
+  70b on lowers it, so read that number off `CARRIED_TOTAL` rather than off this sentence.
 
   The blocks that were already loose when the check landed are carried in
   `CARRIED_UNANCHORED_BLOCKS`, keyed by test module, enclosing definition name and count,
-  never by a line number or an ordinal, and totalled in one declared integer. **The
-  baseline may only shrink.** It is checked in both directions, so a carried entry that is
-  no longer unanchored is a failure naming it and an entry cannot outlive its subject, and
-  the last of issue #70's audit slices deletes it. Carrying a block is not anchoring one:
+  never by a line number or an ordinal, and totalled in one declared integer.
+
+  What the suite actually enforces about that baseline, stated exactly, because this rule
+  sits in the document issue #70 was filed about and a rule reading broader than its
+  mechanism is the whole complaint: set equality per module in **both** directions, so a
+  carried entry that is no longer unanchored is a failure naming it and an entry cannot
+  outlive its subject; `CARRIED_TOTAL` equal to the sum of the counts; and a reason of at
+  least twenty characters naming one of slices 70b to 70h.
+
+  **That the baseline only ever shrinks is a convention, not a check.** Nothing refuses a
+  new entry. Adding a loose block, adding its `(name, count)` pair and bumping
+  `CARRIED_TOTAL` passes all three of those, because a set equality is satisfied by the
+  new pair and a sum equality by the bump. It is a claim about history and the suite reads
+  one tree, so enforcing it would mean reading git from a test, which is not worth it.
+  What holds the baseline down is a reviewer reading a three-place diff that includes a
+  bump to a declared integer. That is weaker than the `# unanchored:` hatch, which demands
+  twenty characters of written reason for every block it exempts, so do not describe the
+  two as equals; it is a visibility cost rather than a written justification, and it is
+  enough while the audit is in flight. The last of issue #70's audit slices deletes the
+  baseline outright, which is the only thing that ends it. Carrying a block is not
+  anchoring one:
   nothing in that baseline can fail for the reason its assertions name until its slice has
   deleted the guard behind it and run.
 - **A test function defined twice in one module deletes the first one.** Python rebinds
