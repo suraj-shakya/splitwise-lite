@@ -578,6 +578,33 @@ changed, `index.html` and `app.js`; `app/styles.css` was not edited and neither 
 
 ### The count, and the arithmetic
 
+**Restated against the current base, 2026-09-08.** The figures in this section were taken
+against master at `a595330`. Master has since moved to `be9c49b` through PR #84, which
+brought 31 tests, all in `tests/test_suite_integrity.py`. Master was **merged** into this
+branch rather than rebased onto it, so published SHAs stay reachable, and
+`git merge-base --is-ancestor origin/master HEAD` now succeeds against `be9c49b`. Every
+figure below is left exactly as it was taken rather than rewritten, and the new pair is
+added beside it:
+
+| | master (`be9c49b`) | branch, merged | delta |
+|---|---|---|---|
+| whole suite (`--collect-only -q`) | 2704 | 2707 | **+3** |
+
+The `+3` is unchanged by the merge, which is the point of restating rather than replacing:
+PR #84 touched **no file this branch touches**, confirmed with `comm -12` over the two
+name-only diffs, which returned nothing. So there is no `app/` overlap and no shell-digest
+collision, and `SHELL_DIGEST` stays `'f8453329c392'`. `be9c49b`'s own figure was taken in a
+throwaway detached worktree at that commit, removed afterwards.
+
+PR #84 also added `test_every_message_block_is_anchored_or_carried`, which walks every
+module under `tests/`. This branch adds **zero** `pytest.raises` blocks — measured, not
+assumed, with `git diff a595330 b615f05 -- tests/ | grep -E "^\+" | grep -c "pytest.raises"`,
+which prints `0` — so it neither reds that check nor adds to the 107-block baseline that may
+only shrink under #70. `tests/test_suite_integrity.py` reports `89 passed` on the merge
+commit, up from 58 by exactly #84's 31.
+
+The original measurement, against `a595330`, kept as taken:
+
 `uv run python -m pytest --collect-only -q`, whole suite, both measured with a command:
 
 | | master (`a595330`) | branch | delta |
