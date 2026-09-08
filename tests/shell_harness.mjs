@@ -3425,6 +3425,71 @@ const SCENARIOS = [
   },
 
   {
+    /* Issue #44's own path, and the one of the four flag pairings that was wrong. A
+       Save tapped while the roster read is in the air is refused, correctly; the
+       roster then lands empty, so addLoadRoster returns before addRosterArrived() and
+       the refusal stays up. That is right, and it is only right because the refusal
+       names no cause: the sentence it used to carry said the people had not arrived,
+       directly beneath a note saying they had arrived and there were none of them.
+       The pair that used to contradict is pinned here as the pair that agrees.
+
+       The three add-screen scenarios that tap Save with an unusable roster each do so
+       in one settled state. None of them lands an empty roster on top of a standing
+       refusal, which is the whole of the defect. */
+    name: 'a_save_refused_while_the_roster_loads_still_reads_true_when_the_roster_is_empty',
+    async run(page) {
+      page.startAt('#/add');
+      page.respond('GET', '/session', ok(A_MEMBER));
+      page.respond('GET', '/members', ok(EMPTY_ROSTER));
+      let duringLoad = null;
+      page.onRequest('GET', '/members', () => {
+        /* The in-flight-submit technique of the scenario above: the field is left
+           usable while the roster loads on purpose, so a tap on Save in that window
+           is a normal thing to do rather than an exotic one. */
+        page.el('add-amount').value = '12.50';
+        const event = {
+          type: 'submit',
+          defaultPrevented: false,
+          preventDefault() {
+            event.defaultPrevented = true;
+          }
+        };
+        (page.el('add-form').listeners.submit || []).forEach((handler) =>
+          handler(event)
+        );
+        duringLoad = addErrorsShown(page);
+      });
+      await page.boot();
+      page.same(duringLoad, [false, true, false], 'while the roster was in flight');
+      page.same(
+        addRosterStates(page),
+        [false, false, true],
+        'the roster states once the empty roster landed'
+      );
+      /* The assertion MUTANT_I kills. Withdrawing the refusal here would answer the
+         tap and then silently un-answer it, which is the fix issue #44 rejects. */
+      page.same(
+        addErrorsShown(page),
+        [false, true, false],
+        'the three error children once the empty roster landed'
+      );
+      page.is(
+        flatText(page.el('add-error-roster')),
+        'The app has nobody to record this expense against, so it cannot be saved.',
+        '#add-error-roster text'
+      );
+      page.is(
+        flatText(page.el('add-empty-roster')),
+        'This group has no members yet, so there is nothing to record.',
+        '#add-empty-roster text'
+      );
+      page.is(page.el('add-amount').value, '12.50', '#add-amount');
+      page.is(addPayerOptions(page).length, 0, '#add-payer options');
+      page.expectRequests(['GET /api/session', 'GET /api/members']);
+    }
+  },
+
+  {
     /* The resolver's other refusal, in front of a person. Everything about this
        sentence was asserted on the wire and in the domain and nothing rendered it,
        so the only check it had left was a click-through nobody had performed.

@@ -339,6 +339,18 @@ against a roster on which that rule answers differently from the other two.
 - `add-error-amount` reads exactly: `Type an amount before saving.`
 - `add-error-roster` reads exactly: `The people in this group have not arrived yet, so this
   cannot be saved.`
+
+  > **Corrected 2026-09-08, by issue #44.** This criterion is retracted. It used to require,
+  > and the line above still shows, that `add-error-roster` read exactly `The people in this
+  > group have not arrived yet, so this cannot be saved.` That sentence names one of the three
+  > reasons the refusal covers and is false in the other two, and issue #44 is the pairing it
+  > was false in: a Save tapped while the roster read was in flight, followed by a roster that
+  > arrived **empty**, left it on screen directly beneath `add-empty-roster` saying the group
+  > has no members. Two true-looking sentences, one of them false, contradicting each other.
+  > It now reads exactly `The app has nobody to record this expense against, so it cannot be
+  > saved.`, which names no cause and so cannot be wrong about one; the cause is stated in
+  > exactly one element, the roster panel above. The old text is left in place rather than
+  > deleted, because a criterion nobody can see retracted is a criterion somebody re-derives.
 - `add-saving` reads exactly: `Saving this expense.`
 - `add-saved`'s line reads `Saved ` then `add-saved-amount` then `add-saved-description`, and
   its anchor reads `See it in the feed`.
@@ -437,6 +449,22 @@ against a roster on which that rule answers differently from the other two.
   `add-error-amount` and returns focus to the field, and a save before the roster has arrived
   or with an empty roster shows `add-error-roster`. Both are checks on whether there is
   anything to send, not judgements of an amount.
+
+  > **Corrected 2026-09-08, by issue #44.** The description of the second refusal is retracted.
+  > It used to read, and the line above still shows, that "a save before the roster has arrived
+  > or with an empty roster shows `add-error-roster`". That is the two-cause reading this issue
+  > removes: it treats the element as carrying an account of *which* state the roster is in,
+  > which is what let its sentence be false in one of them. The behaviour is unchanged and the
+  > condition is untouched: the `if (addRoster === null || addRoster.length === 0)` guard in
+  > `addSubmitted`, in `app/app.js`, still shows the same element for a Save with no usable
+  > roster. It is named rather than cited by line on purpose. A `file:line` is true at exactly
+  > one revision, and this correction's own branch moved that guard from line 1094 to line 1097
+  > by growing a comment three lines above it, so a repaired number would have gone stale on
+  > the next edit the way the first one did within a single pull request.
+  > What changed is what that element claims: it now
+  > states only that the save did not happen, in a sentence true in all three states, and the
+  > cause is stated once by the roster panel. Read the bullet as "a save with no usable roster
+  > shows `add-error-roster`". The old text is left in place rather than deleted.
 - Everything else goes to the server. A split with nobody in it, a zero total, an amount with
   three decimals and a comma used as a decimal point are all sent as typed and refused there,
   because a rule implemented twice is a rule that drifts.
