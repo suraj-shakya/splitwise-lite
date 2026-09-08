@@ -1799,8 +1799,14 @@ def client_for(who: str, app, path: Path):
     return linked_client(app, path, "Sam")
 
 
-def drive(site: Site, app, path: Path):
-    """Make the one request ``site`` declares, and return the response."""
+def drive(site: Site, app, path: Path, before: Any = None):
+    """Make the one request ``site`` declares, and return the response.
+
+    ``before`` runs immediately before that one request and after everything the
+    row's ``who`` and ``setup`` do. A caller watching what a request is answered with
+    clears its record there, so the refusals a row's own setup produces are not
+    attributed to the row.
+    """
     drive_row = site.drive
     assert isinstance(drive_row, Drive)
 
@@ -1828,22 +1834,17 @@ def drive(site: Site, app, path: Path):
         headers["Origin"] = drive_row.origin
 
     target = drive_row.path.format_map(names)
+    request: dict[str, Any] = {"method": drive_row.method, "headers": headers}
     if drive_row.raw is not None:
-        return client.open(
-            target,
-            method=drive_row.method,
-            data=drive_row.raw,
-            content_type=drive_row.content_type or "application/json",
-            headers=headers,
-        )
-    if drive_row.payload is None:
-        return client.open(target, method=drive_row.method, headers=headers)
-    return client.open(
-        target,
-        method=drive_row.method,
-        json=filled(drive_row.payload, names),
-        headers=headers,
-    )
+        request["data"] = drive_row.raw
+        request["content_type"] = drive_row.content_type or "application/json"
+    elif drive_row.payload is not None:
+        request["json"] = filled(drive_row.payload, names)
+    # Everything above is setup, and some of it is refused. The row's own request is
+    # the next line, and it is the only one a caller watching the answers wants.
+    if before is not None:
+        before()
+    return client.open(target, **request)
 
 
 # --- Check A: the enumeration is complete in both directions ----------------
@@ -2260,4 +2261,58 @@ def test_every_error_body_is_composed_inside_the_one_error_handler() -> None:
         "FOUR_HUNDRED_SITES marked NO_REQUEST_REACHES_IT goes back to being a claim "
         "nothing checks, with the suite still green. Compose the body in "
         "_handle_error, or move the observer to whatever the new one place is."
+    )
+
+
+# --- Check C, part two: the observer is proved to work, on every run --------
+
+
+@pytest.mark.parametrize("site", DRIVEN, ids=[site_id(s) for s in DRIVEN])
+def test_each_driven_row_answers_from_the_site_it_declares(
+    site: Site, app, seeded: Path, answered_requests: list[Any]
+) -> None:
+    """The 4xx a driven row gets back was raised at the site that row names.
+
+    This is what makes the observer in tests/conftest.py believable, because it runs
+    on every run rather than only when something is wrong. If the wrapper is not
+    installed, or records nothing, or maps every frame to no row -- which is what a
+    path that stops comparing equal does -- this reds for all of the driven rows
+    instead of passing quietly over an empty set. An observer that records nothing is
+    the likely outcome of a rushed implementation and it looks exactly like success,
+    so it gets a proof rather than a reading.
+
+    It is also a guarantee this module did not have. A driven row asserted its status,
+    its error ``code`` and that no identifier the store holds is in the message, and
+    nothing asserted where the answer came from. Several rows share a ``code``,
+    ``malformed_request`` most of all, so rows that nothing could previously tell
+    apart are now told apart, the two ``authentication_failed`` rows of
+    ``accounts._fail_login`` and ``accounts.log_in`` among them.
+
+    The record is cleared immediately before the row's own request and after
+    everything its ``who`` and ``setup`` do, so the refusals that
+    ``spend_the_login_budget``, ``mark_one_payment`` and ``answer_one_payment`` each
+    produce are not attributed to the row.
+    """
+    response = drive(site, app, seeded, before=answered_requests.clear)
+    assert response.status_code in range(400, 500), (site_id(site), response.get_json())
+    assert answered_requests, (
+        f"{site_id(site)} answered {response.status_code} and the observer recorded "
+        "nothing at all. Every error body this application sends is composed in "
+        "web._handle_error, which tests/conftest.py wraps, so an empty record means "
+        "the wrapper is not installed rather than that nothing was refused. Until "
+        "this holds, every row marked NO_REQUEST_REACHES_IT is an unchecked claim "
+        "again and the per-test guard passes over nothing."
+    )
+    answered = answered_requests[-1]
+    assert answered.status == response.status_code, (site_id(site), answered)
+    found = key_for_raise_site(answered.file, answered.lineno)
+    assert found == site.key, (
+        f"{site_id(site)} answered {response.status_code} from "
+        f"{answered.file}:{answered.lineno}, which is "
+        + ("no 4xx raise site this walk knows" if found is None else repr(found))
+        + f", and not the site the row declares, {site.key!r}.\n\n"
+        "A row names where its refusal is raised. Either the row names the wrong "
+        "site, or the request now reaches a different refusal that happens to carry "
+        "the same status and the same code, which is exactly what this check exists "
+        "to tell apart. Correct the row or correct the drive."
     )
