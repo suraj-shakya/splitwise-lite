@@ -2013,8 +2013,9 @@ NO_BREAKING_CHANGE_YET = (
 #
 # Keyed by id and never by a section heading, a `##` ordinal or a line number. That is
 # measured rather than stylistic: the issue that produced this check swept "all 31
-# records" where there are 32, because `## 4 and 5. The check itself, in both directions`
-# in plans/mutations/61-identifiers-in-4xx-bodies.md carries two JSON blocks, so a
+# records" where the eight record files it swept held 32, because
+# `## 4 and 5. The check itself, in both directions` in
+# plans/mutations/61-identifiers-in-4xx-bodies.md carries two JSON blocks, so a
 # section is not a subject an entry can be bound to. Line numbers churn on every edit
 # above them and an ordinal is bound to its subject only by position, which is how a
 # correct number ended up against the wrong mutation in this repo.
@@ -2454,8 +2455,8 @@ ANCHOR_MATCHING_ZERO = """\
 ```
 """
 
-# The anchor here is the text measured to occur TWICE in that record file, once inside
-# a JSON `find` at line 21 and once at line 35 in the prose quoting the message the
+# The anchor here is the text measured to occur TWICE in that record file: on 2026-09-08
+# at line 36, inside a JSON `find`, and at line 50, in the prose quoting the message that
 # guard actually prints. That is the anchor-into-a-record-file trap, recorded in
 # plans/mutations/87-stale-anchor-check.md: a plain sentence is not a unique anchor in a
 # file that quotes its own message text, and an anchor into one has to carry enough of
