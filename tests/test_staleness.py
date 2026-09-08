@@ -447,9 +447,44 @@ def test_a_now_in_another_zone_is_read_as_the_instant_it_names() -> None:
 # --- No clock, and the ordering rule ----------------------------------------
 
 
-@pytest.mark.parametrize(
-    "forbidden", ["now(", "utcnow(", "today(", "time.time", "monotonic"]
-)
+CLOCK_READS = ("now(", "utcnow(", "today(", "time.time", "monotonic")
+"""The five spellings of a clock read this module refuses, declared **once**.
+
+Once, and referenced by both the ban and its control below, because the first version
+of that control carried its own copy of this list and so asserted five hardcoded
+strings against five other hardcoded strings. It never read ``staleness.py`` and never
+ran the ban, and deleting an entry from the real list left it green while a
+parametrised case silently vanished. That is how this repository once lost four tests
+unnoticed, and one list is what stops it here.
+"""
+
+
+def clock_reads_in(text: str) -> set[str]:
+    """Every forbidden spelling present in ``text``.
+
+    The one checking function. The ban calls it and so does its control, so the control
+    exercises the shipped check rather than a description of it.
+    """
+    return {spelling for spelling in CLOCK_READS if spelling in text}
+
+
+def with_a_smuggled_line(text: str, statement: str) -> str:
+    """``text`` with ``statement`` inserted into a real function body.
+
+    Injected into the shipped source at a real anchor rather than concatenated onto the
+    end, and the result is parsed, so what the control feeds the ban is a module that
+    still compiles and not a string that happens to hold a token. This is the shape
+    ``tests/test_balances.py``'s ``_with_a_smuggled_line`` uses, which injects into the
+    real tree and asserts the real checking function reports it.
+    """
+    anchor = '    moment = _require_instant(now, "ledger_staleness now")\n'
+    assert text.count(anchor) == 1, anchor
+    smuggled = text.replace(anchor, anchor + statement + "\n")
+    ast.parse(smuggled)
+    return smuggled
+
+
+@pytest.mark.parametrize("forbidden", CLOCK_READS)
 def test_the_module_never_reads_the_clock(forbidden: str) -> None:
     # The same shape tests/test_store.py:1503 already uses, and deliberately NARROWER
     # than balances.py's purity proof: that one resolves aliases back to the module
@@ -459,24 +494,88 @@ def test_the_module_never_reads_the_clock(forbidden: str) -> None:
     # job. As implemented the module needs no runtime `datetime` name at all:
     # `(now - created_at).days` names no class, so the one import here is annotation
     # only and carries the same exemption balances.py's does.
-    assert forbidden not in source(), forbidden
+    assert forbidden not in clock_reads_in(source()), forbidden
 
 
-def test_the_clock_ban_would_catch_a_read_smuggled_in() -> None:
-    # The positive control for the parametrised ban above. A green run of a ban means
-    # nothing on its own; what makes it worth having is proof it still matches the
-    # shapes it claims to.
-    for smuggled in (
-        "moment = datetime.now(timezone.utc)",
-        "moment = _Instant.utcnow()",
-        "moment = date.today()",
-        "seconds = time.time()",
-        "ticks = perf.monotonic()",
-    ):
-        assert any(
-            forbidden in smuggled
-            for forbidden in ("now(", "utcnow(", "today(", "time.time", "monotonic")
-        ), smuggled
+# Five real clock reads, each written the way somebody would actually write it. These
+# are provocations rather than a second copy of CLOCK_READS: they are statements, and
+# which spelling catches which is measured below rather than assumed.
+SMUGGLED_READS = (
+    "    moment = datetime.now(timezone.utc)",
+    "    moment = _Instant.utcnow()",
+    "    stamp = date.today()",
+    "    seconds = time.time()",
+    "    ticks = perf.monotonic()",
+)
+
+
+@pytest.mark.parametrize("statement", SMUGGLED_READS, ids=lambda s: s.strip())
+def test_the_clock_ban_catches_a_read_smuggled_into_the_real_module(
+    statement: str,
+) -> None:
+    """The ban is worth only what it catches, so this catches it catching.
+
+    Each case injects a real read into the real ``staleness.py`` and asserts the same
+    function the ban runs reports it. It reads the shipped source, it runs the shipped
+    check, and it shares the shipped list.
+
+    This replaces a control that did none of those things. The first version asserted
+    five hardcoded smuggled strings against a hardcoded copy of the ban list, which is
+    a tautology over two literals: it proved that ``_Instant.utcnow()`` contains
+    ``utcnow(``, which is true by construction and independent of the module under
+    test. QA measured it, and deleting an entry from the real ban left it at
+    ``6 passed, 52 deselected``. It is the same copying error as mutation 5, one test
+    away: a two-part precedent copied in name but not in substance.
+    """
+    shipped = source()
+    # The shipped module is clean, so a hit below is the injection and not the module.
+    assert clock_reads_in(shipped) == set()
+    assert clock_reads_in(with_a_smuggled_line(shipped, statement)) != set(), statement
+
+
+def test_every_spelling_in_the_ban_is_measured_for_what_it_alone_catches() -> None:
+    """Which entries of the ban are load-bearing, measured rather than assumed.
+
+    A ban entry that catches nothing no other entry catches is documentation, not
+    coverage, and the difference decides what deleting it costs. Four of the five here
+    are load-bearing: delete ``today(``, ``time.time`` or ``monotonic`` and the
+    matching case above goes red, because nothing else in the list catches its
+    provocation.
+
+    ``utcnow(`` is the exception and it is **redundant, measured**: every string
+    containing ``utcnow(`` contains ``now(``, so ``now(`` catches
+    ``_Instant.utcnow()`` on its own and deleting ``utcnow(`` costs no coverage at all.
+    That is why the control above cannot be made to fail on that particular deletion
+    without pinning this list against a copy of itself, which is the defect it was
+    written to remove. It stays in the list because criterion 8 names all five and
+    because a reader searching for ``utcnow`` should find it here; this test is what
+    stops it being mistaken for coverage. The same redundancy is in
+    ``tests/test_store.py``'s list, which this one was modelled on.
+    """
+    alone: dict[str, list[str]] = {}
+    for spelling in CLOCK_READS:
+        alone[spelling] = [
+            statement
+            for statement in SMUGGLED_READS
+            if spelling in statement
+            and not any(
+                other in statement for other in CLOCK_READS if other != spelling
+            )
+        ]
+    load_bearing = {spelling for spelling, cases in alone.items() if cases}
+    assert load_bearing == {"now(", "today(", "time.time", "monotonic"}, alone
+    assert "utcnow(" in CLOCK_READS, (
+        "utcnow( has been removed from CLOCK_READS. That is not a silent loss of "
+        "coverage, because it is redundant with now( and this test is what measures "
+        "that. It is still a change to a criterion: criterion 8 of "
+        "plans/tasks/16-incompleteness-signal.md names all five spellings, so taking "
+        "one out is a decision to record and not a tidy. This assertion exists so "
+        "that decision cannot be made by deleting a line."
+    )
+    assert alone["utcnow("] == [], alone["utcnow("]
+    # And the redundancy is exactly the superstring relation claimed above, not some
+    # accident of these five provocations.
+    assert "now(" in "utcnow("
 
 
 def annotation_nodes(tree: ast.Module) -> set[int]:
