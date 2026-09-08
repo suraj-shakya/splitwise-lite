@@ -1798,6 +1798,30 @@ def stray_node_id_message(where: str, heading: str, identifier: str) -> str:
     )
 
 
+def taught_citation_form(identifier: str) -> str:
+    """The replacement text ``stray_node_id_message`` actually prints for ``identifier``.
+
+    Read back out of the message rather than recomputed, and that is the whole point of
+    this helper existing. A followability test that re-derives the formula behind the
+    message pins the formula and not the message: change how the message splits the id
+    and such a test stays green while the printed instruction stops clearing the check.
+    That is a check about a thing that never opens that thing, which is the defect this
+    module exists to refuse, so the instruction is parsed from the text a reader is
+    given.
+    """
+    message = stray_node_id_message("<where>", "<section>", identifier)
+    for line in message.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("becomes"):
+            return stripped[len("becomes") :].strip()
+    raise AssertionError(
+        "stray_node_id_message no longer prints a 'becomes <form>' line, so the "
+        "instruction it gives cannot be read back and checked for followability. "
+        "Either restore that line or delete the followability test with it, but do "
+        "not leave a test asserting about an instruction that is no longer printed."
+    )
+
+
 def test_every_node_id_a_record_names_is_one_it_lists() -> None:
     """A record's prose names no test that its own kills and survives do not."""
     failures: list[str] = []
@@ -1874,10 +1898,21 @@ def test_the_node_id_check_still_bites() -> None:
     # rule this would still be a finding and the taught instruction could not be
     # followed.
     assert prose_node_ids("see `TestThing::test_y` in `tests/test_x.py`") == set()
-    # The instruction the message gives for that shape, followed exactly, clears it.
-    nested = "tests/test_x.py::TestThing::test_y"
-    module, _, bare = nested.partition("::")
-    assert prose_node_ids(f"{bare} in {module}") == set()
+    # The instruction the message actually prints, followed exactly, clears the check,
+    # for every shape of id. The taught form is read out of stray_node_id_message by
+    # taught_citation_form rather than recomputed here: an earlier version of this
+    # assertion re-derived `partition("::")` itself, which pinned the formula and not
+    # the message, so swapping the message to `rpartition` left it green while the
+    # printed instruction stopped working for a class-nested id. That is recorded as
+    # m5-the-taught-form-split-from-the-wrong-end in
+    # plans/mutations/70a-message-block-check.md.
+    for shape in (
+        "tests/test_x.py::test_y",
+        "tests/test_x.py::test_y[a-case]",
+        "tests/test_x.py::TestThing::test_y",
+    ):
+        assert prose_node_ids(f"cited {shape} here") == {shape}, shape
+        assert prose_node_ids(taught_citation_form(shape)) == set(), shape
 
 
 def test_the_stray_node_id_message_says_what_happened() -> None:
