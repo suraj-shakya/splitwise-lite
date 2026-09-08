@@ -1,21 +1,21 @@
 # Mutations behind the block-anchor check (issue #70, task 70a)
 
-Three mutations, all run and all killed, against the check this task adds: that a
+Four mutations, all run and all killed, against the checks this task adds: that a
 `pytest.raises` block which reads the exception's message carries an anchor, and that the
 blocks which were already loose are carried in a baseline the suite checks in both
 directions.
 
-Taken against `0f30663` on 2026-09-08, on branch `task-70`. A record quotes a
+Taken against `ee77fdb` on 2026-09-08, on branch `task-70`. A record quotes a
 measurement, so it carries the tree it was measured on: if an anchor below no longer
 matches exactly once, that is the tree to diff against rather than a defect in the
 record. The suite deliberately does not re-verify these anchors; see `README.md` in this
 directory for that reasoning, and for the format and the recipe.
 
 **What each run was, named as a quantity rather than left to be inferred.** Every run
-below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **82
+below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **86
 tests** at this revision, and the figures quoted are that module's failed and passed
 counts. Nothing was selected with `-k`, so a claim that a mutation is caught by one test
-is a claim about the other eighty-one staying green, not about a filtered subset. The
+is a claim about the other eighty-five staying green, not about a filtered subset. The
 second record also ran the whole of `tests/test_money.py`, **181 tests**. Every run set
 `PYTHONDONTWRITEBYTECODE=1` and reverted with `git checkout -- <file>` before the next
 one.
@@ -65,7 +65,7 @@ and `survives` beside them.
 }
 ```
 
-**What the run printed:** `3 failed, 79 passed`.
+**What the run printed:** `3 failed, 83 passed`.
 
 **Which criterion this is evidence for.** Criterion 22a: a branch of the accepted set is
 deleted and the self-test that covers it reds. The branch is 10b, an `==` against the
@@ -157,7 +157,7 @@ tree rather than read out of the guard's source:
 
     currency code must be three uppercase A-Z letters: 'aud'
 
-**What the run printed:** `1 failed, 81 passed` over
+**What the run printed:** `1 failed, 85 passed` over
 `tests/test_suite_integrity.py`, and `181 passed` over `tests/test_money.py`.
 
 **Which criterion this is evidence for.** Criterion 22b: the **stale** direction of the
@@ -206,7 +206,7 @@ a real file, names the real function, and prints the real replacement.
 }
 ```
 
-**What the run printed:** `1 failed, 81 passed`.
+**What the run printed:** `1 failed, 85 passed`.
 
 **Which criterion this is evidence for.** Criterion 21, that each accepted case in the
 self-tests is one that goes red if the branch accepting it is removed. This is the third
@@ -232,3 +232,49 @@ baseline.
 **Verdict.** Killed, and a finding beside it: the branch is currently synthetic-only, so
 it is the audit slices 70b to 70h, if any of them chooses `.startswith` over `match=`,
 that will give it a live subject.
+
+## Renaming a check the rules file names
+
+```json
+{
+  "id": "m4-a-named-check-renamed",
+  "file": "tests/test_suite_integrity.py",
+  "find": "def test_every_message_block_is_anchored_or_carried(path: Path) -> None:",
+  "replace": "def test_every_message_block_is_anchored_or_carried_after_a_rename(path: Path) -> None:",
+  "kills": [
+    "tests/test_suite_integrity.py::test_every_named_mechanism_resolves_to_something_that_exists"
+  ],
+  "survives": [
+    "tests/test_suite_integrity.py::test_the_testing_rules_name_the_mechanisms_that_enforce_them",
+    "tests/test_suite_integrity.py::test_the_mechanism_resolution_check_still_bites"
+  ],
+  "result": "killed"
+}
+```
+
+**What the run printed:** `1 failed, 85 passed`.
+
+**Which finding this is evidence for.** The reviewer's second blocking finding on PR #84:
+that the comment beside `ENFORCING_MECHANISMS` claimed renaming a named check "would
+leave the rule naming something gone", while the only check reading that tuple was
+`assert mechanism in read(RULES)`, a substring assertion on markdown. This mutation is
+the reviewer's scenario run rather than argued.
+
+**The measurement, which is the point of the record.**
+`tests/test_suite_integrity.py::test_the_testing_rules_name_the_mechanisms_that_enforce_them`
+**stayed green** under this rename. That is the gap, measured: the rule goes on naming a
+function that no longer exists and the substring check cannot tell. It is listed in
+`survives` for that reason and not as a bystander, so the record's own lists carry the
+finding.
+`tests/test_suite_integrity.py::test_every_named_mechanism_resolves_to_something_that_exists`
+is what reddened, which is the gap closed.
+
+**The other named surviving control.**
+`tests/test_suite_integrity.py::test_the_mechanism_resolution_check_still_bites` stayed
+green, which says the resolution helper still refuses a synthetic name that resolves to
+nothing while it is refusing this real one. Without it, a helper that had started
+returning a finding for everything would look identical from this run.
+
+**Verdict.** Killed. The comment that made the claim now points at this mutation, and the
+four entries that resolve to nothing but themselves are named as such rather than left
+under a claim that was true of none of them.
