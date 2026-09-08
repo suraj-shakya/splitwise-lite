@@ -836,7 +836,7 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
     unreachable(
         "balances.py",
         "_require_currency_match",
-        "cannot combine  and :   is in  and the ledger is in ",
+        "cannot combine  and : one  is in  and the ledger is in ",
         "it needs a ledger holding two currencies, and spec.md freezes a group's "
         "currency at creation: store._require_group_currency refuses an event in any "
         "other one, so no request can build that ledger",
@@ -1199,10 +1199,11 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
     unreachable(
         "store.py",
         "_require_storable_cents",
-        " is , above MAX_CENTS (), the largest value the cents column can hold",
-        "money.parse_amount refuses anything above MAX_CENTS at the input edge, so no "
-        "request reaches the column's own bound. This is #39's recorded leftover: a "
-        "400 naming raw cents, unreachable and left recorded rather than reworded",
+        " is above MAX_CENTS, the largest value the cents column can hold",
+        "money.parse_amount refuses anything above MAX_CENTS at the input edge, so a "
+        "request is answered from invalid_amount long before the column's own bound "
+        "is consulted; reaching this needs a caller inside the process building an "
+        "event from cents directly, which is what events.py puts no upper bound on",
     ),
     unreachable(
         "store.py",

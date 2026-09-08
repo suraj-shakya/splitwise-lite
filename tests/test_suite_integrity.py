@@ -957,8 +957,6 @@ CARRIED_UNANCHORED_BLOCKS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
     "tests/test_balances.py": (
         frozenset(
             {
-                ("test_a_foreign_currency_raises_currency_mismatch_for_a_walk_too", 1),
-                ("test_a_foreign_currency_raises_currency_mismatch_naming_both_codes", 1),
                 ("test_a_foreign_group_is_refused_on_the_same_terms_as_the_fold", 1),
                 ("test_a_foreign_group_names_the_event_and_both_groups", 1),
                 ("test_a_member_cannot_owe_themselves", 1),
@@ -1051,11 +1049,8 @@ CARRIED_UNANCHORED_BLOCKS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
                 ("test_a_raw_update_of_an_expense_is_rejected", 1),
                 ("test_a_raw_update_or_delete_of_a_decision_is_rejected", 2),
                 ("test_a_raw_update_or_delete_of_a_settlement_is_rejected", 2),
-                ("test_a_settlement_amount_above_the_bound_is_rejected", 1),
                 ("test_a_settlement_in_the_wrong_currency_raises_currency_mismatch", 1),
-                ("test_a_total_above_the_bound_is_rejected_naming_the_field", 1),
                 ("test_add_user_with_credential_rejects_a_taken_id_or_address", 2),
-                ("test_an_allocation_above_the_bound_is_rejected_naming_the_field", 1),
                 ("test_an_expense_in_the_wrong_currency_raises_currency_mismatch", 1),
                 ("test_delete_sessions_for_an_unknown_user_raises_not_found", 1),
                 ("test_get_member_for_user_for_an_unknown_group_raises_not_found", 1),
@@ -1123,7 +1118,7 @@ CARRIED_UNANCHORED_BLOCKS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
 
 # The sum of every count above, declared once. Produced by the check itself and pasted
 # back; no number here is a hand count.
-CARRIED_TOTAL = 107
+CARRIED_TOTAL = 102
 
 # The reason each entry carries has to name the slice that retires it, so an entry
 # cannot be added with a reason that commits nobody to anything.

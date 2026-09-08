@@ -355,6 +355,10 @@ def test_a_foreign_currency_raises_currency_mismatch_naming_both_codes() -> None
     with pytest.raises(CurrencyMismatch) as raised:
         derive_balances([foreign], group_id=GROUP, currency=AUD)
     message = str(raised.value)
+    assert message == (
+        "cannot combine NZD and AUD: one expense is in NZD and the ledger is in AUD"
+    )
+    assert "e1" not in message
     assert "AUD" in message
     assert "NZD" in message
 
@@ -1745,6 +1749,10 @@ def test_a_foreign_currency_raises_currency_mismatch_for_a_walk_too() -> None:
     ledger = [expense("e1", payer=ALI, total=600, shares={BO: 600}, currency=NZD)]
     with pytest.raises(CurrencyMismatch) as raised:
         sources(ledger)
+    assert str(raised.value) == (
+        "cannot combine NZD and AUD: one expense is in NZD and the ledger is in AUD"
+    )
+    assert "e1" not in str(raised.value)
     assert "NZD" in str(raised.value)
     assert "AUD" in str(raised.value)
 

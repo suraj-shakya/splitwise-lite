@@ -784,10 +784,16 @@ def _require_group(
 def _require_currency_match(
     event: ExpenseEvent | SettlementEvent, currency: Currency, label: str
 ) -> None:
-    """Raise ``CurrencyMismatch`` unless ``event`` is in ``currency``."""
+    """Raise ``CurrencyMismatch`` unless ``event`` is in ``currency``.
+
+    No event id, unlike ``_require_group`` immediately above: this one is mapped to
+    400, and #61's rule is that no 4xx body carries an identifier the store holds.
+    ``_require_group`` raises ``InvalidLedger``, which is in neither of ``web.py``'s
+    error tables and so is answered generically, its own message reaching the log and
+    nobody else, which is why it keeps the id and this does not.
+    """
     if event.currency != currency:
         raise CurrencyMismatch(
-            f"cannot combine {event.currency.code} and {currency.code}: {label} "
-            f"{event.id!r} is in {event.currency.code} and the ledger is in "
-            f"{currency.code}"
+            f"cannot combine {event.currency.code} and {currency.code}: one {label} "
+            f"is in {event.currency.code} and the ledger is in {currency.code}"
         )
