@@ -33,12 +33,13 @@ author who has not read it, which is the failure mode
 
 The third issue, #60, is answered by a format rather than by a check on behaviour:
 ``plans/mutations/`` holds mutation records an anchor and a replacement at a time, and
-four checks here read that directory as data. Issue #87 is the promise the first three
+five checks here read that directory as data. Issue #87 is the promise the first three
 of them did not keep. A record can be re-run only while its ``find`` still occurs
-exactly once in the file it names, which is what both appliers assert and what neither
-of those checks read, so one record's anchor had matched zero times ever since #61
+exactly once in the file it names, which is what both appliers assert and what none of
+those three read, so one record's anchor had matched zero times ever since #61
 edited the guard it quotes and the suite was green over it. The fourth check counts
-them, so a record can stop being appliable only in the open: in a declared baseline
+them and the fifth reads the retirement note in the record whose anchor is declared
+stale, so a record can stop being appliable only in the open: in a declared baseline
 carrying a reason that names the change, and a dated note in the record itself. What
 that buys is narrower than it looks, and the check's own comment says so: a record
 whose anchor matches is proven appliable, never proven correct, because nothing here
@@ -1530,15 +1531,24 @@ def test_the_unanchored_block_message_says_what_happened() -> None:
 
 # --- The mutation records (#60) --------------------------------------------
 #
-# These two checks read the records as data: that a record parses, that it is complete,
-# and that no section is prose only. They deliberately do NOT re-verify a record's
-# anchor against the live source file. Re-verifying would put every past mutation in
-# the path of every future refactor, which is exactly the ossification #60 warns
-# against, and it would turn a re-runnable record back into a maintenance burden. A
+# These checks read the records as data: that a record parses, that it is complete, and
+# that no section is prose only. The distinction that still holds, unchanged: a
 # committed mutant is re-run every suite, and mutated() in tests/test_shell_behaviour.py
-# is what makes its anchor self-checking; a recorded one is re-runnable on demand. That
-# difference is the whole reason both exist, so do not "improve" these checks into the
-# thing the issue argued against.
+# is what makes its anchor self-checking; a recorded one is re-runnable on demand, and
+# since #87 it is checked to still BE re-runnable rather than assumed to be.
+#
+# Corrected 2026-09-08 for issue #87. This comment used to open "These two checks", when
+# there were three below it, and it went on: "They deliberately do NOT re-verify a
+# record's anchor against the live source file. Re-verifying would put every past
+# mutation in the path of every future refactor, which is exactly the ossification #60
+# warns against, and it would turn a re-runnable record back into a maintenance burden
+# ... so do not 'improve' these checks into the thing the issue argued against." The
+# stale-anchor check at the end of this section does exactly that, so the instruction
+# told the next reader not to build what #87 built. It is quoted here rather than
+# deleted, because a reader who believes it has to see it retired. The ossification worry
+# it carried was right and is answered rather than abandoned: a rotted anchor is declared
+# once, with a reason and a dated note, no repair is demanded of anybody, and the
+# baseline is expected to grow. That argument is set out where the new check lives.
 
 JSON_BLOCK = re.compile(r"^```json\n(.*?)^```", re.MULTILINE | re.DOTALL)
 SECTION = re.compile(r"^## ", re.MULTILINE)
@@ -2022,6 +2032,20 @@ NO_BREAKING_CHANGE_YET = (
 # test_every_carried_stale_anchor_carries_a_dated_note_in_its_record demands in the
 # record itself, where a reader of the record sees it rather than only a reader of this
 # file. It may also legitimately become empty, and nothing asserts that it is not.
+#
+# ONE REASON PER RECORD FILE, not one per anchor, and that is the shape criterion 12 of
+# plans/tasks/87-a-mutation-records-anchor-matches-zero-times.md specifies. The shape is
+# #84's and the semantics are not: a retiring slice legitimately covers a whole module,
+# while "the change that rotted this anchor" is anchor-specific by construction. So a
+# second declaration in a file that already carries an entry would inherit the first
+# one's reason, and be explained by a change that had nothing to do with it. Found by the
+# reviewer of this branch by rotting g3-not-a-ledger-event's target, pasting the printed
+# literal unedited, bumping the integer and getting a green run in which #61 explained a
+# rot #61 had no part in. unnamed_records below closes it by requiring the one reason to
+# NAME every record it covers, which is the closure that does not demand a lie: one
+# change may legitimately rot several anchors, so counting #NN references would force a
+# second issue number that does not exist, while naming each record binds each claim to
+# its subject.
 CARRIED_STALE_ANCHORS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
     "plans/mutations/65-message-pins.md": (
         frozenset(
@@ -2029,9 +2053,10 @@ CARRIED_STALE_ANCHORS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
                 ("g2-repeated-member", 0),
             }
         ),
-        "#61 took {list(ordered)} out of split.py's repeated-member refusal, so the "
-        "message this record measured cannot be printed any more and re-deriving find "
-        "would attach a 2026-09-07 measurement to a different guard",
+        "g2-repeated-member rotted when #61 took {list(ordered)} out of split.py's "
+        "repeated-member refusal, so the message this record measured cannot be printed "
+        "any more and re-deriving find would attach a 2026-09-07 measurement to a "
+        "different guard",
     ),
 }
 
@@ -2123,6 +2148,25 @@ def stale_pairs(counts: dict[str, int]) -> set[tuple[str, int]]:
     }
 
 
+def unnamed_records(carried: frozenset[tuple[str, int]], reason: str) -> list[str]:
+    """Carried record ids that this file's one reason string does not name.
+
+    There is one reason per record file, which is the shape criterion 12 of
+    plans/tasks/87-a-mutation-records-anchor-matches-zero-times.md specifies. The shape
+    is #84's and the semantics are not: a retiring slice legitimately covers a whole
+    module, while "the change that rotted this anchor" is anchor-specific by
+    construction. So without this a second declaration inherits the first one's reason
+    and is explained by a change that had nothing to do with it.
+
+    Naming each record is the closure that does not demand a lie. One change may
+    legitimately rot several anchors at once, so requiring a distinct ``#NN`` per pair
+    would force a second issue number that does not exist; requiring the one reason to
+    name each record binds every claim to its subject instead, which is what this repo
+    asks wherever a claim would otherwise be bound to a list by position.
+    """
+    return sorted(identifier for identifier, _ in carried if identifier not in reason)
+
+
 def spelled_stale(pairs: set[tuple[str, int]], targets: dict[str, str]) -> str:
     """One line per stale anchor, ordered, naming its target and its count."""
     lines = []
@@ -2168,7 +2212,15 @@ def spelled_resolved(pairs: set[tuple[str, int]], counts: dict[str, int]) -> str
 def stale_anchor_entry_literal(
     where: str, pairs: set[tuple[str, int]], reason: str
 ) -> str:
-    """The CARRIED_STALE_ANCHORS entry for ``where``, ready to paste back."""
+    """The CARRIED_STALE_ANCHORS entry for ``where``, ready to paste back.
+
+    The reason is one string for the whole entry, so when the entry grows the printed
+    reason is the one the new pair would inherit. Rather than print that silently, the
+    literal carries a comment naming the records it does not cover, at the line the edit
+    has to happen on. Pasting it unedited is then still red, on
+    ``test_every_carried_stale_anchor_names_what_broke_it``, and the reader is told why
+    in the text they just pasted.
+    """
     if not pairs:
         return (
             f'    (delete the "{where}" entry: every anchor in that file matches '
@@ -2178,6 +2230,13 @@ def stale_anchor_entry_literal(
         f'                ("{identifier}", {count}),'
         for identifier, count in sorted(pairs)
     )
+    missing = unnamed_records(frozenset(pairs), reason)
+    marker = (
+        f"        # EXTEND THIS REASON: it does not name {', '.join(missing)}, and one\n"
+        "        # reason covers every record in this entry. Say what rotted each.\n"
+        if missing
+        else ""
+    )
     return (
         f'    "{where}": (\n'
         "        frozenset(\n"
@@ -2185,6 +2244,7 @@ def stale_anchor_entry_literal(
         f"{spelled}\n"
         "            }\n"
         "        ),\n"
+        f"{marker}"
         f'        "{reason}",\n'
         "    ),"
     )
@@ -2249,7 +2309,16 @@ def stale_anchor_message(
             f"that broke it: at least {MINIMUM_REASON} characters and carrying a #NN. "
             "Then put a dated note in the record's own section, which "
             "test_every_carried_stale_anchor_carries_a_dated_note_in_its_record "
-            "requires, so a reader of the record sees it too."
+            "requires, so a reader of the record sees it too.\n"
+            "\n"
+            "THE REASON IS ONE STRING PER RECORD FILE, not one per anchor, so if this "
+            "file already carries an entry, the reason below is the one the new pair "
+            "inherits and it was written about a different change. Extend it: "
+            "test_every_carried_stale_anchor_names_what_broke_it requires the reason to "
+            "name every record id in the entry, so pasting the literal unedited leaves "
+            "the new pair unnamed and stays red. That is measured rather than assumed. "
+            "Before it was added, pasting the printed entry for a second rot went green "
+            "with the first entry's #NN standing as the explanation for it."
         )
     if resolved:
         parts.append(
@@ -2357,8 +2426,8 @@ def section_holding_record(text: str, identifier: str) -> tuple[str, str] | None
     return None
 
 
-def has_dated_note(section: str) -> bool:
-    """Whether some blockquote run in ``section`` carries a date.
+def dated_note(section: str) -> list[str]:
+    """The first blockquote run in ``section`` that carries a date, or nothing.
 
     ``blockquote_run`` and ``DATED_NOTE`` are reused rather than re-derived, so this
     recognises exactly the correction-note shape the #58 scan below already exempts and
@@ -2366,10 +2435,40 @@ def has_dated_note(section: str) -> bool:
     line and are resolved when this body runs, so nothing needs moving.
     """
     lines = section.splitlines()
-    return any(
-        DATED_NOTE.search("\n".join(blockquote_run(lines, index)))
-        for index in range(len(lines))
-    )
+    for index in range(len(lines)):
+        run = blockquote_run(lines, index)
+        if run and DATED_NOTE.search("\n".join(run)):
+            return run
+    return []
+
+
+def dated_note_problems(section: str, identifier: str) -> list[str]:
+    """Everything wrong with ``identifier``'s retirement note in ``section``.
+
+    The note's shape alone is not enough, and that is measured rather than argued. QA of
+    this branch replaced the whole of ``g2-repeated-member``'s note with
+    ``> Note, 2026-09-08. Nothing in particular.`` and the module stayed green, so the
+    five things criterion 24 of this task's spec asks of that note were held by review
+    only, which is the defect class this module exists to refuse.
+
+    A date inside a blockquote run is still what recognises a note, which is criterion
+    20 unchanged. What is added is the pair that can be checked without demanding prose
+    nobody can measure: the note has to name the record it retires, so the claim is bound
+    to its subject rather than to its position in a file, and it has to name a change
+    with a ``#NN``, which is the same floor CARRIED_STALE_ANCHORS' reason carries. The
+    other three things criterion 24 asks for stay review's job, and saying which are
+    enforced and which are not is the point of listing them here.
+    """
+    run = dated_note(section)
+    if not run:
+        return ["it carries no dated blockquote note at all"]
+    text = "\n".join(run)
+    problems: list[str] = []
+    if identifier not in text:
+        problems.append(f"its dated note does not name {identifier}")
+    if not BREAKING_CHANGE.search(text):
+        problems.append("its dated note names no change, so it carries no #NN")
+    return problems
 
 
 def test_every_carried_stale_anchor_carries_a_dated_note_in_its_record() -> None:
@@ -2398,15 +2497,21 @@ def test_every_carried_stale_anchor_carries_a_dated_note_in_its_record() -> None
                 )
                 continue
             heading, section = held
-            if not has_dated_note(section):
+            problems = dated_note_problems(section, identifier)
+            if problems:
+                listed = "\n".join(f"    {problem}" for problem in problems)
                 failures.append(
                     f"{where} section {heading!r} holds {identifier}, whose anchor is "
-                    "declared stale, and carries no dated note. Put the retirement in "
-                    "the record: a dated blockquote naming what changed, what the "
+                    f"declared stale, and its retirement note is not usable:\n{listed}\n"
+                    "\n"
+                    "Put the retirement in the record, as a dated blockquote naming the "
+                    "record, the change that rotted its anchor with a #NN, what the "
                     "target says today, and that repair means re-running the mutation "
                     "and writing a new record rather than editing this one. A "
                     "declaration only a reader of tests/test_suite_integrity.py sees "
-                    "leaves the record reading as re-runnable."
+                    "leaves the record reading as re-runnable. A dated line with nothing "
+                    "in it does the same: that was measured on this branch, so the date "
+                    "is what recognises the note and is not the whole of it."
                 )
     assert not failures, "\n\n".join(failures)
 
@@ -2504,6 +2609,28 @@ ANCHOR_INTO_A_DIRECTORY = """\
 ```
 """
 
+# The third unreadable case, with a live subject rather than review only. Found by QA of
+# this branch: dropping UnicodeDecodeError from anchor_match_count's except clause left
+# this module green, because the missing-file and directory cases both raise OSError and
+# nothing else exercised the other class. app/icons/icon-192.png is 2106 bytes of real
+# committed PNG, generated by scripts/make_icons.py, and this task touches nothing under
+# app/, so it is a stable target that will not become text.
+ANCHOR_INTO_A_FILE_THAT_IS_NOT_TEXT = """\
+## An anchor into a file that is not UTF-8 text
+
+```json
+{
+  "id": "s-not-text",
+  "file": "app/icons/icon-192.png",
+  "find": "raise InvalidSplit",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
 # Missing `result`, so mutation_record_problems rejects it. Its anchor would be a
 # finding if it were swept, which is what makes the skip visible rather than vacuous.
 RECORD_TOO_BROKEN_TO_SWEEP = """\
@@ -2563,6 +2690,14 @@ def test_the_stale_anchor_check_still_bites() -> None:
     #    (d) and raise PermissionError on Windows or IsADirectoryError on Linux here.
     directory = sweep_anchors(ANCHOR_INTO_A_DIRECTORY)
     assert stale_pairs(directory.counts) == {("s-directory", TARGET_UNREADABLE)}
+    #    And the third unreadable case, a target that is real but is not UTF-8 text.
+    #    This one does NOT share (d)'s and (e)'s branch: those raise OSError and this
+    #    raises UnicodeDecodeError, so dropping that class from the except clause reds
+    #    here and nowhere else in the suite. It was added because QA measured exactly
+    #    that gap on this branch, and it is recorded as
+    #    s5-the-undecodable-target-uncaught in plans/mutations/87-stale-anchor-check.md.
+    not_text = sweep_anchors(ANCHOR_INTO_A_FILE_THAT_IS_NOT_TEXT)
+    assert stale_pairs(not_text.counts) == {("s-not-text", TARGET_UNREADABLE)}
     # f. A record mutation_record_problems rejects yields no stale-anchor finding, and
     #    the pairing is proved rather than claimed: the same synthetic yields a problem
     #    from that helper, so one malformed record produces one failure and not two and
@@ -2635,6 +2770,10 @@ def test_the_stale_anchor_message_says_what_happened() -> None:
     assert "write a NEW record with a new id" in message
     assert "reason naming the change that broke it" in message
     assert "correct measurement attached to the wrong subject" in message
+    # That the reason is one string per record file, said where the reader is about to
+    # paste an entry that already carries one written about a different change.
+    assert "ONE STRING PER RECORD FILE" in message
+    assert "name every record id in the entry" in message
     # And the labelled paste-back, which in this direction is the anti-instruction.
     assert "NOT the answer to an undeclared stale anchor" in message
     assert "carries the rot instead of reporting it" in message
@@ -2659,6 +2798,74 @@ def test_the_stale_anchor_message_says_what_happened() -> None:
     assert resolved.rstrip().endswith("CARRIED_STALE_TOTAL = 3")
 
 
+# One section per shape the retirement note has to have, so the note check has positive
+# controls of its own rather than only the live g2-repeated-member subject. The live
+# subject proves the note's ABSENCE reds; these prove its CONTENT does.
+NOTE_THAT_RETIRES = """\
+## A retired record
+
+```json
+{
+  "id": "g9-pretend",
+  "file": "src/splitwise_lite/example.py",
+  "find": "raise X",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+
+> **Retired 2026-09-09 for issue #87.** g9-pretend's anchor no longer matches, because
+> #61 edited the guard it quotes.
+"""
+
+NOTE_WITH_NO_DATE = NOTE_THAT_RETIRES.replace("2026-09-09 ", "")
+NOTE_THAT_NAMES_NO_RECORD = NOTE_THAT_RETIRES.replace("g9-pretend's", "This record's")
+NOTE_THAT_NAMES_NO_CHANGE = NOTE_THAT_RETIRES.replace(
+    "for issue #87", "on review"
+).replace("#61", "a later change")
+# The exact shape QA greened this check with before the content requirements existed.
+NOTE_THAT_SAYS_NOTHING = (
+    NOTE_THAT_RETIRES.split("> **Retired")[0]
+    + "> Note, 2026-09-09. Nothing in particular.\n"
+)
+
+
+def test_the_dated_note_check_reads_the_note_and_not_only_its_shape() -> None:
+    """Proof that the retirement note has to say something, measured by QA first.
+
+    Before the content requirements, replacing g2-repeated-member's whole note with a
+    bare dated line left this module green, so the five things criterion 24 of this
+    task's spec asks of that note were held by review alone. The live subject still
+    covers absence; these five synthetics cover what the note has to carry.
+    """
+    _, section = section_holding_record(NOTE_THAT_RETIRES, "g9-pretend") or ("", "")
+    # a. A note that dates itself, names the record and names the change is accepted.
+    assert dated_note_problems(section, "g9-pretend") == []
+    # b. No date at all is no note, which is criterion 20's original requirement and
+    #    the one the live g2 subject already exercises by deletion.
+    assert dated_note_problems(NOTE_WITH_NO_DATE, "g9-pretend") == [
+        "it carries no dated blockquote note at all"
+    ]
+    # c. A dated note that does not name the record it retires. This is the one that
+    #    matters when a file carries several records: a note bound to its subject only
+    #    by which section it sits in is the shape this repo keeps finding wrong.
+    assert dated_note_problems(NOTE_THAT_NAMES_NO_RECORD, "g9-pretend") == [
+        "its dated note does not name g9-pretend"
+    ]
+    # d. A dated note that names no change carries no #NN, the same floor the entry's
+    #    reason carries.
+    assert dated_note_problems(NOTE_THAT_NAMES_NO_CHANGE, "g9-pretend") == [
+        "its dated note names no change, so it carries no #NN"
+    ]
+    # e. And the bare dated line QA greened the old check with is now two findings.
+    assert dated_note_problems(NOTE_THAT_SAYS_NOTHING, "g9-pretend") == [
+        "its dated note does not name g9-pretend",
+        "its dated note names no change, so it carries no #NN",
+    ]
+
+
 def test_the_carried_stale_total_is_the_number_of_carried_records() -> None:
     """One declared integer, so growing the baseline is a diff a reviewer reads.
 
@@ -2675,13 +2882,30 @@ def test_the_carried_stale_total_is_the_number_of_carried_records() -> None:
 
 
 def test_every_carried_stale_anchor_names_what_broke_it() -> None:
-    """No entry is added with a reason that names no change."""
-    for where, (_, reason) in sorted(CARRIED_STALE_ANCHORS.items()):
+    """No entry is added with a reason that names no change, or no record.
+
+    Three assertions, and the third is the one a growing entry needs. There is one
+    reason slot per record file, so without it the second declaration in a file that
+    already carries an entry is explained by the first entry's change. That is not
+    hypothetical: it was measured on this branch.
+    """
+    for where, (carried, reason) in sorted(CARRIED_STALE_ANCHORS.items()):
         assert len(reason) >= MINIMUM_REASON, f"{where}: {reason!r} is not a reason"
         assert BREAKING_CHANGE.search(reason), (
             f"{where}: {reason!r} names no change. An anchor rots because something "
             "changed, and naming that something is what separates a declaration from "
             "an allowlist entry."
+        )
+        missing = unnamed_records(carried, reason)
+        assert not missing, (
+            f"{where}: this file's entry carries one reason for every record in it, and "
+            f"that reason does not name {', '.join(missing)}. A second declaration in a "
+            "file that already has an entry otherwise inherits the first one's reason "
+            "and is explained by a change that had nothing to do with it, which was "
+            "measured on this branch by pasting the printed literal unedited. Extend "
+            "the reason so it names each record and the change that rotted it. One "
+            "change may legitimately rot several anchors, so nothing here asks for a "
+            "second issue number; it asks for each claim to name its subject."
         )
 
 
