@@ -519,8 +519,22 @@ audited guard at a time.
     > **What is true, and what 70a implements:** a node id in a record's prose is **read as
     > a claim**, so it must appear in that record's `kills` or `survives`; and a **citation
     > is written as a bare test name**, without the module path and the `::`, which is how
-    > the format tells the two apart. Nothing else changes: a node id is still recognised by
-    > containing `::`, `REQUIRED_KEYS` is unchanged and no JSON key is added.
+    > the format tells the two apart. `REQUIRED_KEYS` is unchanged and no JSON key is
+    > added.
+    >
+    > **One further deviation from this criterion, which says a node id "is recognised by
+    > containing `::`".** It is recognised by containing **`.py::`**. The reason is that
+    > the citation form has to be followable for every shape of id, and for a
+    > class-nested id, `tests/test_x.py::TestClass::test_y`, the bare form is
+    > `TestClass::test_y in tests/test_x.py`, which still holds a `::`. Under the
+    > criterion as written that edit leaves the check red, so the instruction the failure
+    > message gives could not be followed, and a guidance string that cannot be followed
+    > is the same family of defect as a check that cannot fail. This loses nothing: a
+    > pytest node id always begins with the test file's path, so `TestClass::test_y` alone
+    > was never a node id, and a class-nested id written as a claim still holds `.py::`
+    > and is still caught. Measured 2026-09-08: **0 class-based test classes** in `tests/`,
+    > so the shape is latent and this is about the instruction being followable when one
+    > appears. Found by the reviewer of PR #84.
     >
     > **How it was found**, because that is the part worth keeping. Merging `a595330` into
     > `task-70` reddened this check against `plans/mutations/16-incompleteness-signal.md`,
@@ -533,6 +547,8 @@ audited guard at a time.
     > moment the check fires, naming the false-`survives` entry as the wrong fix and giving
     > the exact bare-name edit. That message is pinned by
     > `test_the_stray_node_id_message_says_what_happened`.
+
+### 70a: the carried baseline
 
 14. `CARRIED_UNANCHORED_BLOCKS` maps a POSIX test-module path to two things: a frozenset of
     `(enclosing definition name, number of unanchored candidate blocks in it)` pairs, and one

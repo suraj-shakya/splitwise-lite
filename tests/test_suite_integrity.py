@@ -1702,11 +1702,28 @@ def test_a_mutation_record_holds_no_prose_only_section() -> None:
 #
 # REQUIRED_KEYS does not change and no new JSON key is added; this reads the seven that
 # exist.
-NODE_ID_SEPARATOR = "::"
+# A node id is recognised by ``.py::`` and not by ``::`` alone, and the reason is that
+# the taught citation form has to be followable for every shape of id.
+#
+# For a class-nested id, ``tests/test_x.py::TestClass::test_y``, the bare form the
+# failure message asks for is ``TestClass::test_y in tests/test_x.py``, which still holds
+# a ``::``. Under a bare-``::`` rule that edit leaves the check red, so the instruction
+# could not be followed, and a guidance string that cannot be followed is the same family
+# of defect as a check that cannot fail.
+#
+# This is not a hole, and the distinction is worth stating because the previous fix in
+# this family was praised for narrowing nothing. A pytest node id always begins with the
+# test file's path, so ``TestClass::test_y`` on its own is not a node id: nothing can run
+# it. The set of real node ids is unchanged. A class-nested id written as a CLAIM still
+# holds ``.py::`` and is still caught; only the citation form, which was never runnable,
+# stops being mistaken for a claim. Measured 2026-09-08: 0 class-based test classes in
+# tests/, so this shape is latent today and the change is about the instruction being
+# followable when one appears, not about anything currently detected.
+NODE_ID_MARKER = ".py::"
 
 
 def prose_node_ids(prose: str) -> set[str]:
-    """Every pytest node id the prose names, recognised by holding ``::``.
+    """Every pytest node id the prose names, recognised by holding ``.py::``.
 
     Markdown decoration is stripped from both ends, and sentence punctuation from the
     end only, so a parametrised id keeps its trailing ``]``.
@@ -1714,7 +1731,7 @@ def prose_node_ids(prose: str) -> set[str]:
     found: set[str] = set()
     for token in re.split(r"[\s`]+", prose):
         candidate = token.strip("`\"'*()").rstrip(".,;:")
-        if NODE_ID_SEPARATOR in candidate:
+        if NODE_ID_MARKER in candidate:
             found.add(candidate)
     return found
 
@@ -1846,6 +1863,21 @@ def test_the_node_id_check_still_bites() -> None:
     assert "tests/test_example.py::test_one[a-case]" in prose_node_ids(
         RECORD_WITH_ONLY_LISTED_NODE_IDS
     )
+    # A class-nested id used as a CLAIM is still caught: it holds `.py::`. Recognising
+    # ids by `.py::` rather than by `::` alone therefore loses nothing that was ever a
+    # node id, which is what keeps the citation fix below from being a hole.
+    assert prose_node_ids("see `tests/test_x.py::TestThing::test_y` for it") == {
+        "tests/test_x.py::TestThing::test_y"
+    }
+    # And the bare form the failure message tells a citer to write does clear the
+    # check, which is the whole point of recognising ids by `.py::`. Under a bare-`::`
+    # rule this would still be a finding and the taught instruction could not be
+    # followed.
+    assert prose_node_ids("see `TestThing::test_y` in `tests/test_x.py`") == set()
+    # The instruction the message gives for that shape, followed exactly, clears it.
+    nested = "tests/test_x.py::TestThing::test_y"
+    module, _, bare = nested.partition("::")
+    assert prose_node_ids(f"{bare} in {module}") == set()
 
 
 def test_the_stray_node_id_message_says_what_happened() -> None:
