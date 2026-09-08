@@ -24,8 +24,9 @@ The two modules, on the branch with every mutation reverted:
 
 **The standing collateral, stated once because it is true of all three mutations
 below.** `tests/test_shell_behaviour.py` holds two whole-harness exit-code checks,
-`test_the_harness_exits_zero_against_the_shipped_files` (`:486`) and
-`test_the_harness_finds_app_from_its_own_location` (`:1032`). Both run every scenario
+`test_the_harness_exits_zero_against_the_shipped_files` and
+`test_the_harness_finds_app_from_its_own_location`, named rather than cited by line
+because a `file:line` is true at exactly one revision. Both run every scenario
 and assert the process exited 0, so **any** red scenario reds both of them as well. They
 are listed under `kills` where they went red, because a record that quietly omitted two
 of the three failures would not reproduce, but they are collateral rather than evidence:

@@ -455,8 +455,13 @@ against a roster on which that rule answers differently from the other two.
   > or with an empty roster shows `add-error-roster`". That is the two-cause reading this issue
   > removes: it treats the element as carrying an account of *which* state the roster is in,
   > which is what let its sentence be false in one of them. The behaviour is unchanged and the
-  > condition at `app/app.js:1094` is untouched — a Save with `addRoster === null` or with an
-  > empty roster still shows the same element. What changed is what that element claims: it now
+  > condition is untouched: the `if (addRoster === null || addRoster.length === 0)` guard in
+  > `addSubmitted`, in `app/app.js`, still shows the same element for a Save with no usable
+  > roster. It is named rather than cited by line on purpose. A `file:line` is true at exactly
+  > one revision, and this correction's own branch moved that guard from line 1094 to line 1097
+  > by growing a comment three lines above it, so a repaired number would have gone stale on
+  > the next edit the way the first one did within a single pull request.
+  > What changed is what that element claims: it now
   > states only that the save did not happen, in a sentence true in all three states, and the
   > cause is stated once by the roster panel. Read the bullet as "a save with no usable roster
   > shows `add-error-roster`". The old text is left in place rather than deleted.
