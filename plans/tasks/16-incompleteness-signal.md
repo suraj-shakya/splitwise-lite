@@ -864,8 +864,8 @@ in a throwaway detached worktree rather than taken on trust or read out of a sib
 
 | | master (`bea0da7`) | branch | delta |
 |---|---|---|---|
-| whole suite | 2572 | 2668 | **+96** |
-| `tests/test_staleness.py` | absent | 59 | +59 |
+| whole suite | 2572 | 2673 | **+101** |
+| `tests/test_staleness.py` | absent | 64 | +64 |
 | `tests/test_web_api.py` | 478 | 493 | +15 |
 | `tests/test_shell_behaviour.py` | 173 | 186 | +13 |
 | `tests/test_web_shell.py` | 146 | 153 | +7 |
@@ -873,9 +873,15 @@ in a throwaway detached worktree rather than taken on trust or read out of a sib
 | `tests/test_feed_screen.py` | 22 | 22 | 0 |
 | `tests/test_error_messages.py` | 64 | 64 | 0 |
 
-59 + 15 + 13 + 7 + 2 = **96**, and 2572 + 96 = **2668**. The +96 is one more than the +95
-measured before the merge, and the extra one is the positive control added with the repair in
-finding 2 below, not anything the merge brought in.
+64 + 15 + 13 + 7 + 2 = **101**, and 2572 + 101 = **2673**.
+
+`tests/test_staleness.py` has moved twice, and both moves are repairs rather than new
+coverage of the product. It was **58** as first written, **59** with the positive control added
+when the ordering check was repaired, and **64** now: repairing the clock ban's control turned
+one test into five parametrised cases and added the test that measures which spellings in the
+ban are load-bearing. Every earlier figure quoted in this document and in
+`plans/mutations/16-incompleteness-signal.md` is left as it was taken, with the denominator it
+was taken against named beside it.
 
 The two in `tests/test_suite_integrity.py` are criterion 40's: both of its checks are driven by
 `TESTS.rglob("*.py")`, so a new test module adds one case to each with no list to edit. That
@@ -896,11 +902,11 @@ ten-minute agent watchdog under contention:
 * `money, events, split, balances, simplify, smoke`: 733 passed
 * `store, accounts, groups, setup_group_cli, dev_server, end_to_end`: 873 passed
 * `web_api`: 493 passed
-* `web_shell, feed_screen, add_screen, suite_integrity, staleness`: 319 passed
+* `web_shell, feed_screen, add_screen, suite_integrity, staleness`: 324 passed
 * `shell_behaviour`: 186 passed
 * `error_messages`: 64 passed
 
-733 + 873 + 493 + 319 + 186 + 64 = **2668 passed, 0 failed, 0 skipped, 0 xfailed**, which is
+733 + 873 + 493 + 324 + 186 + 64 = **2673 passed, 0 failed, 0 skipped, 0 xfailed**, which is
 the collected total exactly. `tests/test_error_messages.py` arrived with the merge and is a
 sixth chunk; the first sum of the chunks came to 2604 against a collected 2668, and that
 64-test gap is what named it. The arithmetic is the check, which is the whole reason for doing
@@ -943,7 +949,20 @@ prediction would have said:
    search for the same name in the same file reports **True**. So the syntax-tree check kills the
    mutant and the text search a hastier repair would have reached for does not. A positive
    control for that check was added beside it, and it is the 59th test in the module.
-3. **Four of the five mutations survive all 490 tests in `tests/test_web_api.py`.** Only the
+3. **A second control could not fail, and QA found it rather than me.**
+   `test_the_clock_ban_would_catch_a_read_smuggled_in` asserted five hardcoded strings against
+   a hardcoded copy of the ban list. It never read `staleness.py` and never ran the ban, so
+   deleting a spelling from the real list left it green while a parametrised case silently
+   vanished. **It is the same copying error as finding 2, one test away in the same file**,
+   which is worth more than either instance on its own: the defect was not a slip but a way of
+   reading a two-part precedent, keeping the half that reads like the original and dropping the
+   half that bites. It now injects each read into the real source and runs the shipped check
+   over the shipped list. Measured after the repair, deleting any of the five spellings fails
+   the module, where before every deletion was green. One row of that measurement was not what
+   I expected and is recorded as a finding of its own: `"utcnow("` is a strict superstring of
+   `"now("`, so it catches nothing `"now("` does not, and no correct control can fail on its
+   deletion by catching an escaped read. The redundancy is measured and stated instead.
+4. **Four of the five mutations survive all 490 tests in `tests/test_web_api.py`.** Only the
    member-age one is visible through a real request. That is not a gap in the endpoint tests: a
    future timestamp is unreachable through an endpoint that stamps `created_at` from `_now()`,
    and no endpoint test sits on the exact boundary. It does mean the domain module is the sole
