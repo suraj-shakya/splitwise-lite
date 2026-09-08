@@ -413,6 +413,33 @@ quoted exactly, including case, spacing and the absence of a trailing full stop.
    object, field: str) -> int:`. It takes no `currency`. `src/splitwise_lite/store.py`
    imports neither `Money` nor `format_amount`, and Grep `format_amount` over
    `src/splitwise_lite/store.py` returns nothing.
+
+   > **Resolution, 2026-09-08.** This criterion's last clause, "Grep `format_amount`
+   > over `src/splitwise_lite/store.py` returns nothing", contradicts criterion 5 of
+   > this same spec, which prescribes `AmountTooLarge`'s docstring verbatim, requires
+   > that paragraph to name "`format_amount` as the only display edge", and labels the
+   > text it gives with "This text satisfies it". That prescribed text contains
+   > `format_amount`. There is no reading in which both criteria hold. The contradiction
+   > is recorded here rather than in a PR body, on the precedent
+   > `plans/tasks/61-no-4xx-body-carries-an-identifier.md:600`, which put its own
+   > resolution in the spec "because it was re-derived once already, in the PR body for
+   > #81, and a PR body is not what the next reader of this spec finds". It was recorded
+   > in the PR body for this task first, which is exactly the mistake that note warns
+   > about.
+   >
+   > **It is resolved in favour of criterion 5, and this criterion's substance is
+   > unharmed.** The enforceable property is the clause immediately before the grep,
+   > "imports neither `Money` nor `format_amount`", and that is how Out of scope states
+   > the rule: "no `Money` or `format_amount` import in `store.py`". The grep is a
+   > mis-stated proxy for it, because a docstring can name a function the module never
+   > calls. Measured on the shipped tree: `src/splitwise_lite/store.py:76` reads
+   > `from .money import MAX_CENTS, Currency, CurrencyMismatch, DomainError`,
+   > byte-identical to `master`; no call to `format_amount` exists anywhere in the
+   > module; and `grep -n format_amount src/splitwise_lite/store.py` returns **1** hit,
+   > at line `229`, inside criterion 5's own prescribed prose. The comment beside the
+   > raise was worded so as not to add a second occurrence. So read as a ban on the word
+   > the clause is false on arrival; read as the import-and-call ban its neighbour
+   > states, it holds.
 4. The `TypeError` at `store.py:348` to `350` is byte-identical to `master`, keeping
    `{field}`, `{type(value).__name__}` and `{value!r}`. The three call sites at
    `store.py:1598`, `1599` and `1653` are byte-identical, so the three `field` labels and
@@ -442,6 +469,37 @@ quoted exactly, including case, spacing and the absence of a trailing full stop.
        The only caller who can reach this holds the value it passed in.
        """
    ```
+
+   > **Resolution, 2026-09-08.** This criterion's clause "The phrase `naming both` and
+   > the phrase `this says the field and the bound` both appear nowhere in
+   > `src/splitwise_lite/store.py`" is half false in the commit that adds this file, and
+   > the false half could not have been made true. Measured on the shipped tree,
+   > `naming both` appears **3** times in that module, at lines `1232`, `1370` and
+   > `1840`. An `ast` walk puts them in `_require_group_currency`, whose docstring says a
+   > caller gets `CurrencyMismatch` "naming both codes"; `set_member_user`, about
+   > `DuplicateRecord` naming both members; and `get_member_for_user`, about
+   > `RecordNotFound` naming both ids. All three are true statements about other
+   > exceptions and not one of them describes `AmountTooLarge`.
+   >
+   > **It is not merely unsatisfiable, it is compelled, and that is the decisive
+   > point.** The occurrence at `store.py:1232` sits inside `_require_group_currency`,
+   > which **criterion 11 of this spec requires to be byte-identical**, and Out of scope
+   > says "This task edits exactly one of `store.py`'s rows". Satisfying this clause
+   > literally would therefore breach criterion 11. Two criteria of one spec cannot both
+   > hold, and the one naming a line range wins over the one generalising a grep.
+   >
+   > **Where the wrong claim came from, which is worth more than the symptom.** The
+   > occurrence this spec had actually read is the one at what was then `store.py:218`,
+   > quoted at line `63` above as a docstring summary "ending 'naming both'". The
+   > criterion generalised that single read into a file-wide claim nobody ran. That is
+   > this repo's counts-and-names-come-from-measurement scar one level up: a criterion
+   > written in the shape of a grep result, without the grep.
+   >
+   > **The rest of the clause is implemented in full.** The prescribed docstring is
+   > present verbatim, so the phrase is gone from the one place where it described this
+   > message, and `grep -c "this says the field and the bound"
+   > src/splitwise_lite/store.py` returns **0**, which is the other half of the clause
+   > and is satisfied outright.
 6. `src/splitwise_lite/balances.py`'s `_require_currency_match` raises `CurrencyMismatch`
    whose message is exactly
    `f"cannot combine {event.currency.code} and {currency.code}: one {label} is in {event.currency.code} and the ledger is in {currency.code}"`,
@@ -554,6 +612,37 @@ quoted exactly, including case, spacing and the absence of a trailing full stop.
 
     The `==` is the pin; the negative is documentation of the defect that was removed. The
     old `assert str(MAX_CENTS) in str(caught.value)` is gone, because it is now false.
+
+    > **Resolution, 2026-09-08.** This criterion gives the block's message assertions as
+    > exactly two, which drops the pre-existing
+    > `assert "total_cents" in str(caught.value)`, an assertion the new wording leaves
+    > true. Criterion 26 says of the same five blocks that they "each keep every
+    > assertion that is still true". Read literally the two cannot both hold for the
+    > three `tests/test_store.py` blocks.
+    >
+    > **It is resolved in favour of this criterion, which supplies literal code, and
+    > nothing is weaker for it.** The whole-message `==` contains the dropped substring
+    > and so implies it. That was checked against the sentences the helper actually
+    > produces rather than inferred: `total_cents` is a substring of the expense
+    > sentence, `cents` of the allocation sentence and `amount_cents` of the settlement
+    > sentence, so each dropped assertion is entailed by the pin that replaced it.
+    > `.claude/rules/testing.md` settles the general case the same way: "Once one anchor
+    > has established which guard raised, every fragment assertion beside it stops being
+    > a pin and becomes documentation, and none of them has to change." Criterion 32's
+    > own account of these three blocks names only the `str(MAX_CENTS) in` assertion,
+    > which is consistent with this reading.
+    >
+    > **The inconsistency is this spec's, not the diff's, and it is left visible rather
+    > than tidied.** This criterion drops the still-true fragment from the three store
+    > blocks, while criteria 23 and 24 explicitly keep the still-true `"AUD"` and `"NZD"`
+    > fragments in the two balances blocks. Both shapes are anchored by their `==` and
+    > neither is weaker, so the shipped diff follows each criterion as written and the
+    > two read differently. Do not tidy one to match the other on the strength of the
+    > diff alone. One thing to know while reading them: the negative this criterion puts
+    > in place of the dropped positive, `str(MAX_CENTS) not in`, is what
+    > `.claude/rules/testing.md` calls "weaker still rather than safer", because any
+    > message lacking the string satisfies it. With the `==` as the block's anchor both
+    > are documentation and that costs nothing; without one it would matter.
 22. `tests/test_store.py::test_an_allocation_above_the_bound_is_rejected_naming_the_field`
     and `tests/test_store.py::test_a_settlement_amount_above_the_bound_is_rejected` take
     the same shape, keep their names and their `count(...) == 0` assertions, and pin
