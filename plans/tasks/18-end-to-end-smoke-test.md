@@ -272,6 +272,30 @@ These are the three modes `src/splitwise_lite/split.py` implements, named as it 
 `split_equally`, `split_by_weight` and `split_exact`, reached through `web._resolve_split`'s three
 wire modes `equal`, `weight` and `exact`.
 
+> **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **E2 is entered through
+> `exact` mode, and this journey now covers two wire modes rather than three.** The table
+> row above reads:
+>
+>     | E2 | `weight` | Sam | `weights` = {Sam: 1, Ali: 3} | `"80.00"` | Sam `"20.00"`, Ali `"60.00"` |
+>
+> and the sentence under it names three functions and three wire modes. `split_by_weight`
+> and the `weight` wire mode are both gone. E2 now sends
+> `{"mode": "exact", "amounts": {Sam: "20.00", Ali: "60.00"}}` on the same `"80.00"`
+> total, from the same payer, with the same description.
+>
+> **Not one figure in this document changes.** The weight split resolved to exactly Sam
+> `"20.00"` and Ali `"60.00"`, which is what this table's own "resolved allocations"
+> column records and what criterion 13 asserts, so the exact body states the same two
+> allocations the weighted call produced rather than re-deriving them. Every balance,
+> transfer, drill-down and settlement figure downstream is arithmetically untouched, and
+> the note below about no leftover cent ever being assigned holds for the same reason it
+> did before: an exact split has no remainder by construction.
+>
+> **The cost, stated rather than absorbed.** This journey was the one place three wire
+> modes were driven end to end, and it now drives two. That is a real reduction in what
+> the smoke test covers, and it is accepted because the third mode no longer exists to
+> cover. Criterion 12 below is retracted by the same change.
+
 Every division is exact: 3000 / 3 = 1000 with nothing left; 8000 x 1 / 4 = 2000 and 8000 x 3 / 4 =
 6000 with nothing left; an exact split has no remainder by construction. **No leftover cent is ever
 assigned, so `split._allocate`'s rotation is never consulted and no figure below depends on a
@@ -524,6 +548,14 @@ Numbered so a QA agent can tick each yes or no by reading the result or running 
 12. Exactly three expenses are entered, one per wire mode, in the order `equal`, `weight`,
     `exact`, with the payers, amounts, split bodies and descriptions of the table in "The three
     expenses". Each `POST /api/expenses` answers `201`.
+
+    > **Retracted 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. This criterion read
+    > "one per wire mode, in the order `equal`, `weight`, `exact`" and is no longer
+    > satisfiable, because there are two wire modes. Three expenses are still entered, in
+    > the same order, with the same payers, amounts and descriptions; E2 is `exact` rather
+    > than `weight`, so the journey enters `equal`, `exact`, `exact`. Criterion 13's three
+    > allocation literals are unchanged, which is what keeps "covering the split modes" a
+    > checked claim rather than a comment. Criterion text left standing.
 13. For each of the three, the `201` body's `allocations`, mapped from member id to display name,
     equals exactly `{"Sam": "10.00", "Ali": "10.00", "Jo": "10.00"}`, then
     `{"Sam": "20.00", "Ali": "60.00"}`, then `{"Ali": "10.00", "Jo": "30.00"}`. This is what makes
@@ -615,6 +647,30 @@ Numbered so a QA agent can tick each yes or no by reading the result or running 
     | M2 | In `src/splitwise_lite/web.py::_decide_settlement`, replace `decision = _SETTLEMENT_DECISION_WIRE[wire]` with `decision = events.SettlementState.REJECTED`. | **Step 5 or step 6.** Jo would still read `"40.00"` / `"owes"`, `transfers` would still hold two rows, and `rejected` would hold one. |
     | M3 | In `src/splitwise_lite/split.py::split_by_weight`, change `return _allocate(total, ordered, values)` to `return _allocate(total, ordered, [1] * len(values))`, making the weight mode behave as an equal split. | **Step 1, criterion 13.** E2's allocations would be `{"Sam": "40.00", "Ali": "40.00"}` instead of `20.00` and `60.00`. |
     | M4 | In `src/splitwise_lite/balances.py::_add_debt`, change the `else` branch's `signed` from `-cents` to `cents`, so opposing debts add instead of cancelling. | **Step 2.** The Sam and Ali pair would total 7000 rather than 5000, `simplify._require_agreement` would refuse the balances, and the read would be a 500 that `read_balances` catches on the status line. |
+
+> **M3 retired 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **Its anchor no longer
+> exists.** M3 changes `return _allocate(total, ordered, values)`, which is a line inside
+> `split_by_weight`, and that function was deleted with the `weight` wire mode. So the
+> text M3 names occurs zero times in `src/splitwise_lite/split.py`, the mutation cannot be
+> applied at all, and it certainly cannot produce the E2 allocations of `"40.00"` and
+> `"40.00"` it predicts. M1, M2 and M4 are unaffected and every one of their anchors still
+> matches.
+>
+> **It is retired in place and not re-derived**, which is the rule
+> `plans/mutations/README.md` sets out: editing an anchor until it matches today's source
+> leaves a recorded result standing beside a mutation it was never measured against.
+> Repair, for whoever wants it, is a fresh run against today's tree and a **new** mutation
+> with a new id, which would have to attack `split_exact` or `_allocate` instead.
+>
+> **Where this record lives matters, and it is a hole rather than a hazard.**
+> `test_every_recorded_anchor_matches_once_or_is_carried`, landed by issue #87, sweeps
+> `plans/mutations/` and turns a stale anchor into a failing test. M3 is in this file,
+> under `plans/tasks/`, so that sweep never sees it: it reported nothing about M3, and the
+> suite is green over a mutation that cannot be applied. This note is the only thing
+> recording that, which is exactly the state issue #87 exists to end for records in the
+> swept directory. Widening the sweep to mutations recorded in task documents was outside
+> issue #78's scope, and it is named here so somebody can decide it rather than rediscover
+> it.
 
 36. M1 must also turn `test_a_pending_settlement_moves_no_balance_over_generated_ledgers` red, and
     M2 must also turn `test_a_confirmed_settlement_moves_exactly_the_amount_over_generated_ledgers`

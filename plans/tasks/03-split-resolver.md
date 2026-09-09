@@ -29,6 +29,25 @@ different member list. The resolver has no membership roster (task 2 kept one ou
 the domain layer, and tasks 9 and 10 own it), so "all" is a list the caller assembles.
 There is deliberately no fourth function and no mode enum.
 
+> **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **The table above is
+> retracted in one row and left standing in the rest.** It read, and still reads:
+>
+>     | Uneven by weight | `split_by_weight(total_cents, weights)` |
+>
+> That row is gone from the code. `split_by_weight` never answered a rule in
+> `plans/spec.md`'s locked decisions table, which names three: "Equal, equal across a
+> subset, and uneven shares". It entered through `plans/backlog.md` task 3's wording
+> "uneven by weight or exact amount", which widened one of those three with no recorded
+> decision anywhere, and this file turned that widening into a four-row table and
+> nineteen further mentions. No screen ever offered it, the API accepted it, and its only
+> failure mode was a silent one. It was removed with the `weight` wire mode and
+> `_require_weight`.
+>
+> The sentence "There is deliberately no fourth function and no mode enum" is now true of
+> the count as well as of the enum, which it was not when it was written: the table above
+> it already had four rows for three modes. `plans/spec.md`'s modelling notes carry the
+> decision, so a later reader need not come here for it.
+
 ## The remainder rule
 
 Stated once here because it is the point of the task, and both fair-share modes share
@@ -113,6 +132,32 @@ so a one-cent remainder would always land on the same index.
 - Equal weights agree with the equal split exactly: for the same total and members,
   `split_by_weight` with every weight 1 returns what `split_equally` returns, including
   which member absorbs the extra cent.
+
+> **Retracted 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **The criteria above are a
+> record of what `split_by_weight` did and are left word for word. The function they
+> describe no longer exists**, so none of them is a live requirement and no test drives
+> any of them.
+>
+> One consequence of that deletion belongs here rather than in a PR body, because this is
+> the file that owns the remainder rule. `_allocate` survives untouched, byte for byte,
+> and `split_equally` is now its only caller. `split_equally` passes
+> `[1] * len(ordered)`, so every weight is equal, every remainder from
+> `divmod(total * 1, n)` is equal, and the `-remainders[index]` half of `_allocate`'s
+> sort key never discriminates: only the rotation tie-break decides anything. **So the
+> proportional half of the remainder rule lost every caller that exercised it through a
+> public surface**, and that half is what "The remainder rule" above and
+> `plans/spec.md:65-69` single out as the thing the collapse-to-one-shape decision exists
+> to get right.
+>
+> It was not left uncovered. `tests/test_split.py` gained three tests that call
+> `split._allocate` directly with unequal weights and assert the exact cent allocation,
+> including one with three distinct remainders and two leftover cents, so the **ordering**
+> is asserted and not merely the single largest. That is deliberately recorded as the
+> weaker replacement and not an equal one: it pins a private function, so a later change
+> could stop any public caller reaching that branch with nothing going red. Simplifying
+> `_allocate` to match its one remaining caller was ruled out of scope for the same reason
+> the function was left byte-identical: the rule is a locked modelling decision, and two
+> records in `plans/mutations/` anchor into that exact text.
 
 **Exact split**
 

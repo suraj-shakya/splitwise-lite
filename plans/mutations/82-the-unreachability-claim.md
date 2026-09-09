@@ -149,6 +149,43 @@ it.
 }
 ```
 
+> **Four node ids retired 2026-09-09 for issue #78**, per
+> `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **This record's anchor
+> still matches its target exactly once, and nothing above this note is edited.** Four
+> of the 59 node ids in `kills` name cases this checkout no longer collects, because
+> issue #78 removed the `weight` wire mode and the two `split.py` guards it was the only
+> request route to. The other 55, and all four in `survives`, are live, so what this
+> record measured is unaffected: the mutation still reds every remaining case of the
+> provenance test for exactly the reason recorded above, and the figure **59 failed, 74
+> passed** is a measurement taken on the tree this file's introduction names, not a
+> claim about this one.
+>
+> The four, each a case of `test_each_driven_row_answers_from_the_site_it_declares`:
+>
+> * `tests/test_error_messages.py::test_each_driven_row_answers_from_the_site_it_declares[web.py::_require_weight::every_weight_in_a_split_must_be_a_json_integer]`
+>   is gone outright. Its raise site was deleted with the function, so the row went with
+>   it, which `test_every_four_hundred_raise_site_is_declared` enforces in both
+>   directions.
+> * `tests/test_error_messages.py::test_each_driven_row_answers_from_the_site_it_declares[split.py::_allocate::weights_sum_to_zero_so_there_is_no_share_to_divi]`
+>   and
+>   `tests/test_error_messages.py::test_each_driven_row_answers_from_the_site_it_declares[split.py::_ordered_from_mapping::every_must_be_zero_or_positive]`
+>   both still exist as rows and as raise sites. They stopped being **driven**: weight
+>   mode was the only route a request had to either, so each is now `unreachable(...)`
+>   with a reason, and the driven half no longer parametrises over them. That took the
+>   marked count from 47 to 49.
+> * `tests/test_error_messages.py::test_each_driven_row_answers_from_the_site_it_declares[web.py::_resolve_split::mode_must_be_one_of_equal_weight_or_exact_got]`
+>   is the same row under a new name. Its skeleton is part of the declared key and the
+>   sentence lost `'weight'`, so the case id now ends `mode_must_be_one_of_equal_or_exact_got`
+>   instead. It is still driven, through a mode that is neither `equal` nor `exact`.
+>
+> **Why the anchor was left alone.** It is into `tests/conftest.py`, which issue #78
+> touched only to move the figure its docstring quotes from 47 to 49; the wrapper the
+> `find` above quotes is untouched. This is a rot in `kills` rather than in `find`, so
+> `test_every_recorded_anchor_matches_once_or_is_carried` does not see it and
+> `CARRIED_STALE_ANCHORS` would be a false claim; this note is where a reader of the
+> record learns it. Nothing above is re-derived, because a re-derived list would attach
+> a 2026-09-08 measurement to a tree it was not taken on.
+
 ## 3. Reword a marked row's reason, the named surviving control
 
 The control that shows the new check is not simply total. It rewords the reason on the
