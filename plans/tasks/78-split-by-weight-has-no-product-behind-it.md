@@ -639,6 +639,27 @@ was considered and dropped, so the question is not asked a sixth time.
   `plans/mutations/` records in A42, and this file. Nothing else.
 - `split.py:195-233` and `split.py:384` are byte-identical to `543bd0e` at the end. Two
   mutation anchors depend on it.
+
+  > **Resolution, 2026-09-09.** Narrowed with criterion A6, and this bullet is left
+  > standing. Measured at the end, with `str.count` over the file text: `split.py:384` is
+  > byte-identical, count **1**. The first region is **not**: `543bd0e:split.py:195-233`
+  > counts **0**, because `_allocate`'s docstring carried a sentence Branch A made false,
+  > "the two fair-share modes cannot drift apart", and it was corrected. What is
+  > byte-identical is `_allocate`'s **signature**, `543bd0e:split.py:195-197`, count
+  > **1**, and its whole **body**, `543bd0e:split.py:207-233`, count **1**, guard and
+  > sort key and rotation included. Only the docstring block `198-206` moved, and it
+  > counts **0**, which localises the change exactly. The reasoning, including why the
+  > docstring lines are outside anything the anchors need, is in the dated resolution
+  > under **A6** above; this note exists because a reader of Constraints should not have
+  > to find that 200 lines earlier, and because the rule three bullets below this one
+  > says a correction lives in the committed document beside what it retracts.
+  >
+  > **The second sentence was inaccurate before Branch A and is not something it
+  > changed.** Only `g1-weights-sum-to-zero` anchors inside `195-233`.
+  > `restore-the-member-id-and-the-figure` anchors into `_ordered_from_mapping`, which is
+  > the `split.py:384` half of this bullet and criterion A7's subject, not A6's. So one
+  > anchor depends on each region rather than two on the pair. Both still match exactly
+  > once and `test_every_recorded_anchor_matches_once_or_is_carried` is green.
 - Corrections quote what they retract and carry a date, and live in the committed document
   rather than in the PR body.
 - Money stays integer cents. Nothing in this task computes or formats an amount.

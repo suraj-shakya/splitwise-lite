@@ -139,8 +139,14 @@ so a one-cent remainder would always land on the same index.
 > any of them.
 >
 > One consequence of that deletion belongs here rather than in a PR body, because this is
-> the file that owns the remainder rule. `_allocate` survives untouched, byte for byte,
-> and `split_equally` is now its only caller. `split_equally` passes
+> the file that owns the remainder rule. `_allocate`'s signature, its weights-sum-to-zero
+> guard and its largest-remainder arithmetic survive untouched, byte for byte; its
+> docstring prose was corrected, because one sentence of it counted two fair-share modes.
+> Measured against `543bd0e` with `str.count`: signature `195-197` **1**, body `207-233`
+> **1**, old docstring block `198-206` **0**, old whole region `195-233` **0**. Seventeen
+> lines below, this same note used to say "the function was left byte-identical", which
+> was the same overstatement, and correcting only that one is what left this sentence
+> standing for a round. `split_equally` is now `_allocate`'s only caller and passes
 > `[1] * len(ordered)`, so every weight is equal, every remainder from
 > `divmod(total * 1, n)` is equal, and the `-remainders[index]` half of `_allocate`'s
 > sort key never discriminates: only the rotation tie-break decides anything. **So the
@@ -157,9 +163,12 @@ so a one-cent remainder would always land on the same index.
 > could stop any public caller reaching that branch with nothing going red. Simplifying
 > `_allocate` to match its one remaining caller was ruled out of scope for the same reason
 > its guard and arithmetic were left byte-identical: the rule is a locked modelling
-> decision, and one of the two `plans/mutations/` records that anchor into `split.py`
-> anchors into that exact text. Its docstring prose was corrected, which those anchors do
-> not touch; see the dated resolution under criterion A6 of
+> decision, and one of the three `plans/mutations/` records naming `src/splitwise_lite/split.py`
+> as their target anchors into that exact text. Three, not two: `g1-weights-sum-to-zero`
+> anchors inside `_allocate`, `restore-the-member-id-and-the-figure` anchors into
+> `_ordered_from_mapping`, and `g2-repeated-member` has matched zero times since issue #61
+> and predates this task. The first two still match exactly once. The docstring prose that
+> was corrected is touched by none of them; see the dated resolution under criterion A6 of
 > `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`.
 >
 > **One loss the paragraph above understated, added 2026-09-09 on the review of #78.**
