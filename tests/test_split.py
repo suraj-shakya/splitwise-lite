@@ -27,7 +27,6 @@ from splitwise_lite.events import Allocation, MemberId
 from splitwise_lite.money import MAX_CENTS, Currency, DomainError, Money, format_amount
 from splitwise_lite.split import (
     InvalidSplit,
-    split_by_weight,
     split_equally,
     split_exact,
 )
@@ -70,7 +69,6 @@ def test_the_resolver_is_re_exported_from_the_package_root() -> None:
     import splitwise_lite
 
     assert splitwise_lite.split_equally is split_equally
-    assert splitwise_lite.split_by_weight is split_by_weight
     assert splitwise_lite.split_exact is split_exact
     assert splitwise_lite.InvalidSplit is InvalidSplit
 
@@ -79,10 +77,9 @@ def test_the_resolver_is_re_exported_from_the_package_root() -> None:
     "resolve",
     [
         lambda: split_equally(1000, THREE, currency=AUD),
-        lambda: split_by_weight(1000, {ALI: 1, BO: 2, CY: 1}, currency=AUD),
         lambda: split_exact(1000, {ALI: 250, BO: 500, CY: 250}, currency=AUD),
     ],
-    ids=["equally", "by_weight", "exact"],
+    ids=["equally", "exact"],
 )
 def test_every_mode_returns_a_tuple_of_allocations(resolve) -> None:
     result = resolve()
@@ -94,10 +91,9 @@ def test_every_mode_returns_a_tuple_of_allocations(resolve) -> None:
     "resolve",
     [
         lambda: split_equally(1000, [CY, ALI, BO], currency=AUD),
-        lambda: split_by_weight(1000, {CY: 1, ALI: 1, BO: 2}, currency=AUD),
         lambda: split_exact(1000, {CY: 250, ALI: 250, BO: 500}, currency=AUD),
     ],
-    ids=["equally", "by_weight", "exact"],
+    ids=["equally", "exact"],
 )
 def test_every_mode_returns_allocations_in_ascending_member_id_order(resolve) -> None:
     result = resolve()
@@ -108,10 +104,9 @@ def test_every_mode_returns_allocations_in_ascending_member_id_order(resolve) ->
     "resolve",
     [
         lambda: split_equally(1000, THREE, currency=AUD),
-        lambda: split_by_weight(1000, {ALI: 1, BO: 2, CY: 1}, currency=AUD),
         lambda: split_exact(1000, {ALI: 250, BO: 500, CY: 250}, currency=AUD),
     ],
-    ids=["equally", "by_weight", "exact"],
+    ids=["equally", "exact"],
 )
 def test_every_mode_sums_exactly_to_the_total(resolve) -> None:
     assert sum(allocation.cents for allocation in resolve()) == 1000
@@ -214,89 +209,47 @@ def test_the_single_extra_cent_is_not_always_the_same_member() -> None:
     assert set(recipients) == {ALI, BO, CY}
 
 
-# --- Weighted split ---------------------------------------------------------
+# --- The allocator, driven directly -----------------------------------------
+#
+# Issue #78 removed split_by_weight, which leaves split_equally as _allocate's only
+# caller, passing [1] * len(ordered). Every weight being equal, divmod gives every
+# member an identical remainder, so the -remainders[index] half of _allocate's sort key
+# never discriminates and only the rotation tie-break decides anything. The
+# proportional half of the remainder rule is what plans/spec.md:65-69 locks, so it is
+# driven here rather than left with no test at all.
+#
+# This is weaker than the public-surface coverage it replaces, and the PR for #78 says
+# so: it pins a private function, so a future caller could stop reaching this branch
+# with nothing going red. It is the honest replacement, not an equal one.
 
 
-@pytest.mark.parametrize(
-    ("total", "weights", "expected"),
-    [
-        (1000, {ALI: 1, BO: 2, CY: 1}, {ALI: 250, BO: 500, CY: 250}),
-        (10, {ALI: 1, BO: 2}, {ALI: 3, BO: 7}),
-        (999, {ALI: 1, BO: 2}, {ALI: 333, BO: 666}),
-        (1000, {ALI: 0, BO: 1}, {ALI: 0, BO: 1000}),
-        (100, {ALI: 3, BO: 2}, {ALI: 60, BO: 40}),
-        (1000, {ALI: 1}, {ALI: 1000}),
-    ],
-)
-def test_split_by_weight_allocates_in_proportion(
-    total: int, weights: dict[str, int], expected: dict[str, int]
-) -> None:
-    assert cents_of(split_by_weight(total, weights, currency=AUD)) == expected
+def test_the_allocator_gives_the_leftover_to_the_largest_remainder() -> None:
+    # Exact quotas of 3.33 and 6.67. The leftover cent goes to the larger remainder and
+    # not to the member who sorts first, which is the case the rotation tie-break can
+    # never produce, because that only runs when the remainders are equal.
+    assert cents_of(split_module._allocate(10, (ALI, BO), [1, 2])) == {ALI: 3, BO: 7}
 
 
-def test_split_by_weight_gives_the_leftover_to_the_largest_remainder() -> None:
-    # The exact quotas are 3.33 and 6.67, so the leftover cent goes to bo, not to the
-    # member who happens to sort first.
-    assert cents_of(split_by_weight(10, {ALI: 1, BO: 2}, currency=AUD)) == {
-        ALI: 3,
-        BO: 7,
+def test_the_allocator_ranks_three_unequal_remainders_by_size() -> None:
+    # Weights 1, 2 and 4 over 10 cents: floor shares 1, 2 and 5 with remainders 3, 6
+    # and 5, so two leftover cents go to bo and cy in that order and none to ali.
+    #
+    # Two cents rather than one, and three distinct remainders, so the ordering itself
+    # is asserted and not just the single largest. Dropping -remainders from the sort
+    # key gives {ali: 2, bo: 3, cy: 5} here, because the rotation offset is
+    # (10 // 3) % 3 == 0; sorting the remainders ascending gives {ali: 2, bo: 2, cy: 6}.
+    # Both differ from this, so the assertion bites in both directions.
+    assert cents_of(split_module._allocate(10, (ALI, BO, CY), [1, 2, 4])) == {
+        ALI: 1,
+        BO: 3,
+        CY: 6,
     }
 
 
-def test_double_the_weight_is_double_the_cents() -> None:
-    result = cents_of(split_by_weight(3000, {ALI: 1, BO: 2}, currency=AUD))
-    assert result[BO] == result[ALI] * 2
-
-
-def test_split_by_weight_accepts_a_zero_weight() -> None:
-    assert cents_of(split_by_weight(500, {ALI: 0, BO: 1, CY: 1}, currency=AUD)) == {
-        ALI: 0,
-        BO: 250,
-        CY: 250,
-    }
-
-
-def test_split_by_weight_rejects_a_negative_weight() -> None:
-    # The refusal names the field and not the member: a 4xx body carries no member
-    # id, and this guard is one of the twelve sites issue #61 reworded.
-    with pytest.raises(InvalidSplit, match=r"^every weight must be zero or positive$") as raised:
-        split_by_weight(1000, {ALI: -1, BO: 2}, currency=AUD)
-    assert ALI not in str(raised.value)
-
-
-def test_split_by_weight_rejects_weights_that_all_sum_to_zero() -> None:
-    with pytest.raises(InvalidSplit, match=r"^weights sum to zero, so there is no share"):
-        split_by_weight(1000, {ALI: 0, BO: 0}, currency=AUD)
-
-
-@pytest.mark.parametrize("weight", [2.0, 1.5, True, Decimal("2"), "2", None])
-def test_split_by_weight_rejects_a_weight_that_is_not_an_int(weight: object) -> None:
-    with pytest.raises(TypeError):
-        split_by_weight(1000, {ALI: 1, BO: weight}, currency=AUD)
-
-
-def test_split_by_weight_rejects_an_empty_mapping() -> None:
-    with pytest.raises(InvalidSplit):
-        split_by_weight(1000, {}, currency=AUD)
-
-
-@pytest.mark.parametrize("weights", [[1, 2], (1, 2), "ali", None, 1])
-def test_split_by_weight_rejects_weights_that_are_not_a_mapping(
-    weights: object,
-) -> None:
-    with pytest.raises(TypeError):
-        split_by_weight(1000, weights, currency=AUD)
-
-
-@pytest.mark.parametrize("count", range(1, 6))
-def test_equal_weights_agree_with_the_equal_split(count: int) -> None:
-    """One remainder engine, so the two fair-share modes cannot drift apart."""
-    member_ids = members(count)
-    weights = {member_id: 1 for member_id in member_ids}
-    for total in range(1, 200):
-        assert split_by_weight(total, weights, currency=AUD) == split_equally(
-            total, member_ids, currency=AUD
-        )
+def test_the_allocator_still_sums_to_the_total_under_unequal_weights() -> None:
+    for total in range(1, 300):
+        allocations = split_module._allocate(total, (ALI, BO, CY), [1, 2, 4])
+        assert sum(allocation.cents for allocation in allocations) == total
 
 
 # --- Exact split ------------------------------------------------------------
@@ -364,10 +317,6 @@ def test_split_exact_rejects_amounts_that_are_not_a_mapping(amounts: object) -> 
 
 MODES = [
     pytest.param(lambda total: split_equally(total, THREE, currency=AUD), id="equally"),
-    pytest.param(
-        lambda total: split_by_weight(total, {ALI: 1, BO: 2}, currency=AUD),
-        id="by_weight",
-    ),
     pytest.param(
         lambda total: split_exact(total, {ALI: 1, BO: 2}, currency=AUD), id="exact"
     ),
@@ -437,12 +386,11 @@ def test_split_equally_rejects_member_ids_that_are_not_a_list_of_ids(
 @pytest.mark.parametrize(
     "resolve",
     [
-        lambda key: split_by_weight(1000, {key: 1}, currency=AUD),
         lambda key: split_exact(1000, {key: 1000}, currency=AUD),
     ],
-    ids=["by_weight", "exact"],
+    ids=["exact"],
 )
-def test_the_mapping_modes_reject_an_empty_member_id(resolve) -> None:
+def test_split_exact_rejects_an_empty_member_id(resolve) -> None:
     with pytest.raises(InvalidSplit):
         resolve("")
 
@@ -450,13 +398,12 @@ def test_the_mapping_modes_reject_an_empty_member_id(resolve) -> None:
 @pytest.mark.parametrize(
     "resolve",
     [
-        lambda key: split_by_weight(1000, {key: 1}, currency=AUD),
         lambda key: split_exact(1000, {key: 1000}, currency=AUD),
     ],
-    ids=["by_weight", "exact"],
+    ids=["exact"],
 )
 @pytest.mark.parametrize("key", [1, None, b"ali"])
-def test_the_mapping_modes_reject_a_member_id_that_is_not_a_str(
+def test_split_exact_rejects_a_member_id_that_is_not_a_str(
     resolve, key: object
 ) -> None:
     with pytest.raises(TypeError):
@@ -467,7 +414,6 @@ def test_the_mapping_modes_reject_a_member_id_that_is_not_a_str(
 
 WITHOUT_CURRENCY = [
     pytest.param(lambda: split_equally(1000, THREE), id="equally"),
-    pytest.param(lambda: split_by_weight(1000, {ALI: 1, BO: 2}), id="by_weight"),
     pytest.param(lambda: split_exact(1000, {ALI: 400, BO: 600}), id="exact"),
 ]
 
@@ -475,12 +421,6 @@ WITH_A_CURRENCY = [
     pytest.param(
         lambda total, currency: split_equally(total, THREE, currency=currency),
         id="equally",
-    ),
-    pytest.param(
-        lambda total, currency: split_by_weight(
-            total, {ALI: 1, BO: 2}, currency=currency
-        ),
-        id="by_weight",
     ),
     pytest.param(
         lambda total, currency: split_exact(total, {ALI: 1, BO: 2}, currency=currency),
@@ -672,32 +612,6 @@ def test_equal_split_holds_across_random_large_totals() -> None:
         assert sum(allocated) == total
         assert len(result) == count
         assert max(allocated) - min(allocated) <= 1
-
-
-def test_weighted_split_holds_across_random_weights() -> None:
-    generator = random.Random(SEED)
-    for _ in range(2000):
-        count = generator.randint(1, 10)
-        member_ids = members(count)
-        weights = {
-            member_id: generator.choice([0, 1, 1, 2, 3, 7, 1000])
-            for member_id in member_ids
-        }
-        if sum(weights.values()) == 0:
-            weights[member_ids[0]] = 1
-        total = generator.randint(1, 10_000_000)
-        result = split_by_weight(total, weights, currency=AUD)
-        assert sum(allocation.cents for allocation in result) == total
-        assert len(result) == count
-        # Every share sits within one cent of its exact quota, asserted in integers:
-        # abs(cents * weight_total - total * weight) < weight_total.
-        weight_total = sum(weights.values())
-        for allocation in result:
-            quota_error = abs(
-                allocation.cents * weight_total
-                - total * weights[allocation.member_id]
-            )
-            assert quota_error < weight_total
 
 
 def test_exact_split_holds_across_random_partitions() -> None:

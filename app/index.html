@@ -173,9 +173,12 @@
       <!-- Three options in one wrapping row rather than three stacked rows, so Save
            stays within one short scroll at 320px with the keyboard up. Equal across
            everyone ships chosen, so the common case needs nothing loaded, resolved or
-           tapped. There is no weight mode: it stays reachable through the API and
-           unexposed here, because a weight typo produces a wrong but valid split
-           where a wrong exact share is refused with both figures named. -->
+           tapped. These three are the whole of it: there is no weight mode anywhere
+           any more, because a weight typo produces a wrong but valid split where a
+           wrong exact share is refused with both figures named. That reason is why it
+           was never offered here, and on issue #78 it became the reason the resolver
+           and the wire shape went too, so the API no longer accepts one. See
+           plans/spec.md's modelling notes. -->
       <fieldset class="add-modes">
         <legend class="add-legend">Split</legend>
         <label class="add-mode"><input id="add-mode-equal" type="radio"

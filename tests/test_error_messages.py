@@ -22,7 +22,9 @@ sites are there": two, three, six and twelve. The reasoning lived in a comment i
 here, because the thing it would have to distinguish is a payload key **name** from a
 member id **value**, and in the source both are a bare name interpolated into an
 f-string: ``{key!r}`` is a literal at every call site of ``_require_str`` and was a
-member id in ``_require_weight``. That is a fact about runtime values, not about
+member id in ``_require_weight``, a function issue #78 deleted on 2026-09-09 along with
+the wire mode behind it; ``_require_exact_amount`` is the surviving half and drops its
+key for the same reason. That is a fact about runtime values, not about
 syntax, so a denylist of variable names has false positives on the first kind and false
 negatives on the second. So:
 
@@ -1030,21 +1032,16 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
             },
         ),
     ),
-    Site(
+    unreachable(
+        # Marked on 2026-09-09 by issue #78, which removed the weight wire mode. It was
+        # driven through {"mode": "weight", "weights": {Sam: 0, Ali: 0}}, the only
+        # request that could ever make the weights sum to zero.
         "split.py",
         "_allocate",
         "weights sum to zero, so there is no share to divide the total into",
-        Drive(
-            "POST",
-            EXPENSES,
-            "invalid_split",
-            {
-                "description": "Milk",
-                "amount": "10.00",
-                "payer_id": "{Sam}",
-                "split": {"mode": "weight", "weights": {"{Sam}": 0, "{Ali}": 0}},
-            },
-        ),
+        "split_equally is _allocate's only caller and passes [1] * len(ordered) over a "
+        "list _ordered_from_iterable has already refused to leave empty, so the weight "
+        "total is at least 1; reaching zero needs a second caller inside the process",
     ),
     Site(
         "split.py",
@@ -1127,25 +1124,17 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
             },
         ),
     ),
-    Site(
-        # Spec row 2, driven through weight mode. Exact mode cannot reach it:
-        # money.parse_amount refuses every signed string before split_exact sees one.
-        # The wire accepts weights even though no screen sends them, which is what
-        # makes this row driven rather than declared unreachable.
+    unreachable(
+        # Spec row 2. Marked on 2026-09-09 by issue #78: it was driven through weight
+        # mode, which was the only route an HTTP request had to a negative value here,
+        # and that mode is gone. The reason exact mode cannot take its place is the
+        # same one that made this row need weight mode in the first place.
         "split.py",
         "_ordered_from_mapping",
         "every  must be zero or positive",
-        Drive(
-            "POST",
-            EXPENSES,
-            "invalid_split",
-            {
-                "description": "Milk",
-                "amount": "10.00",
-                "payer_id": "{Sam}",
-                "split": {"mode": "weight", "weights": {"{Sam}": -1, "{Ali}": 2}},
-            },
-        ),
+        "split_exact is the only caller left and web._require_exact_amount puts every "
+        "share through money.parse_amount first, whose docstring lists signs among "
+        "what it rejects, so a negative needs a caller inside the process",
     ),
     # --- store.py ----------------------------------------------------------
     unreachable("store.py", "_require_id", " must be a non-empty id", STORED_VALUE),
@@ -1572,7 +1561,7 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
     Site(
         "web.py",
         "_resolve_split",
-        " mode must be one of 'equal', 'weight' or 'exact', got ",
+        " mode must be one of 'equal' or 'exact', got ",
         Drive(
             "POST",
             EXPENSES,
@@ -1619,25 +1608,9 @@ FOUR_HUNDRED_SITES: Final[tuple[Site, ...]] = (
         ),
     ),
     Site(
-        # Spec row 5: its key was a member id of the current roster, so unlike rows 3,
-        # 4, 7 and 10 it did not need the roster to have moved.
-        "web.py",
-        "_require_weight",
-        "every weight in a split must be a JSON integer",
-        Drive(
-            "POST",
-            EXPENSES,
-            "malformed_request",
-            {
-                "description": "Milk",
-                "amount": "10.00",
-                "payer_id": "{Sam}",
-                "split": {"mode": "weight", "weights": {"{Sam}": 1.5}},
-            },
-        ),
-    ),
-    Site(
-        # Spec row 6, the other half of the same finding.
+        # Spec row 6, the other half of the same finding. Row 5 was the other half,
+        # web.py::_require_weight, and issue #78 deleted it with its raise site on
+        # 2026-09-09, so this is the only one of the pair left.
         "web.py",
         "_require_exact_amount",
         "every exact amount in a split must be an amount as a JSON string, such as "
@@ -1816,8 +1789,8 @@ def site_id(site: Site) -> str:
 def filled(value: Any, names: dict[str, str]) -> Any:
     """``value`` with every ``{Name}`` placeholder replaced by the id it stands for.
 
-    Recursive over dicts and lists, and over dict keys as well as values, because a
-    weight or an exact amount is keyed by member id. Non-strings pass through
+    Recursive over dicts and lists, and over dict keys as well as values, because an
+    exact amount is keyed by member id. Non-strings pass through
     untouched, so a row can send the JSON number a guard is about.
     """
     if isinstance(value, str):

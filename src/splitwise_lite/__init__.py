@@ -124,7 +124,6 @@ from .simplify import (
 )
 from .split import (
     InvalidSplit,
-    split_by_weight,
     split_equally,
     split_exact,
 )
@@ -274,7 +273,6 @@ __all__ = [
     "settlement_states",
     "sign_up",
     "simplify_debts",
-    "split_by_weight",
     "split_equally",
     "split_exact",
     "verify_password",

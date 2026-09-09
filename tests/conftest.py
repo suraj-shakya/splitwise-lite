@@ -3,11 +3,12 @@
 GitHub issue #82, sharpened in plans/tasks/82-the-unreachability-claim.md.
 
 ``tests/test_error_messages.py`` declares every refusal ``src/splitwise_lite/`` raises
-with a 4xx status. Of its rows, 47 carry the marker ``NO_REQUEST_REACHES_IT``
-(``grep -c '^    unreachable(' tests/test_error_messages.py``, run 2026-09-08; it was
-50 before three of those marks turned out to be false and their rows were driven),
-which is a claim about reachability, and it was the one claim in that module nothing
-verified. The falsifying event is a new route reaching an existing raise: the set of
+with a 4xx status. Of its rows, 49 carry the marker ``NO_REQUEST_REACHES_IT``
+(``grep -c '^    unreachable(' tests/test_error_messages.py``, run 2026-09-09; it was
+50, then 47 when three of those marks turned out to be false and their rows were
+driven, and 49 again when issue #78 removed the weight wire mode and the two
+``split.py`` guards it was the only route to stopped being reachable), which is a claim
+about reachability, and it was the one claim in that module nothing verified. The falsifying event is a new route reaching an existing raise: the set of
 raise sites does not change, no message skeleton changes, the enumeration equality
 still holds, and a message interpolating a stored value has silently become something a
 client can be shown.

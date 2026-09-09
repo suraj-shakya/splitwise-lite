@@ -390,8 +390,9 @@
       return call('GET', '/expenses');
     },
 
-    /* One expense. amount is a string, and split is one of the three shapes the
-       resolver takes: equal, weight or exact. */
+    /* One expense. amount is a string, and split is one of the two shapes the
+       resolver takes: equal or exact. Equal carries the spec's first two rules, over
+       whichever member list the screen assembles. */
     addExpense: function (expense) {
       return call('POST', '/expenses', expense);
     },

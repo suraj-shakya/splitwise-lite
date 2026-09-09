@@ -2807,35 +2807,6 @@ def test_an_equal_split_stores_the_event_field_by_field(
     assert sum(allocation.cents for allocation in expense.allocations) == 1000
 
 
-def test_a_weighted_split_stores_the_event_field_by_field(
-    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from splitwise_lite.groups import resolve_sole_group
-
-    signed = linked_client(app, seeded)
-    members = by_name(signed)
-    monkeypatch.setattr(web, "_now", lambda: at(9))
-    response = add_expense(
-        signed,
-        payer_id=members["Sam"],
-        amount="10.00",
-        split={
-            "mode": "weight",
-            "weights": {members["Sam"]: 1, members["Ali"]: 4},
-        },
-    )
-    assert response.status_code == 201
-
-    with open_store(seeded) as store:
-        expense = store.list_expenses(resolve_sole_group(store).id)[0]
-    assert expense.total_cents == 1000
-    assert expense.created_at == at(9)
-    shares = {
-        allocation.member_id: allocation.cents for allocation in expense.allocations
-    }
-    assert shares == {members["Sam"]: 200, members["Ali"]: 800}
-
-
 def test_an_exact_split_parses_its_amounts_from_strings(
     app, seeded: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2949,17 +2920,17 @@ def test_a_payer_who_is_not_a_member_is_refused_without_naming_them(
     assert expense_count(seeded) == 0
 
 
-@pytest.mark.parametrize("mode", ["equal", "weight", "exact"])
+@pytest.mark.parametrize("mode", ["equal", "exact"])
 def test_a_split_naming_someone_outside_the_group_is_refused_without_naming_them(
     app, seeded: Path, mode: str
 ) -> None:
-    # All three modes, because the roster check is one branch of one helper that all
-    # three reach, and the sentence it composes names the field for every one of them.
+    # Both modes, because the roster check is one branch of one helper that both reach,
+    # and the sentence it composes names the field for each of them. It was three modes
+    # until issue #78 removed the weight arm.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     splits = {
         "equal": {"mode": "equal", "member_ids": [members["Sam"], "a-stranger"]},
-        "weight": {"mode": "weight", "weights": {members["Sam"]: 1, "a-stranger": 1}},
         "exact": {
             "mode": "exact",
             "amounts": {members["Sam"]: "5.00", "a-stranger": "5.00"},
@@ -3000,7 +2971,6 @@ def test_a_split_naming_a_member_twice_is_refused_by_the_resolver(
     "split, fragment",
     [
         ({"mode": "equal", "member_ids": []}, "at least one member"),
-        ({"mode": "weight", "weights": {}}, "at least one member"),
         ({"mode": "exact", "amounts": {}}, "at least one member"),
     ],
 )
@@ -3016,24 +2986,6 @@ def test_an_empty_split_is_refused_by_the_resolver(
     body = response.get_json()
     assert body["error"]["code"] == "invalid_split"
     assert fragment in body["error"]["message"]
-    assert expense_count(seeded) == 0
-
-
-def test_weights_summing_to_zero_are_refused_by_the_resolver(
-    app, seeded: Path
-) -> None:
-    signed = linked_client(app, seeded)
-    members = by_name(signed)
-    response = add_expense(
-        signed,
-        payer_id=members["Sam"],
-        amount="10.00",
-        split={"mode": "weight", "weights": {members["Sam"]: 0, members["Ali"]: 0}},
-    )
-    assert response.status_code == 400
-    body = response.get_json()
-    assert body["error"]["code"] == "invalid_split"
-    assert "sum to zero" in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
@@ -3268,7 +3220,7 @@ def test_the_shell_harness_settlement_fixture_is_the_sentence_the_api_sends(
 
 
 @pytest.mark.parametrize("mode", ["percentage", "", "EQUAL", 7])
-def test_an_unknown_split_mode_names_the_three_that_exist(
+def test_an_unknown_split_mode_names_the_two_that_exist(
     app, seeded: Path, mode
 ) -> None:
     signed = linked_client(app, seeded)
@@ -3283,7 +3235,7 @@ def test_an_unknown_split_mode_names_the_three_that_exist(
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
     if isinstance(mode, str):
-        for named in ("'equal'", "'weight'", "'exact'"):
+        for named in ("'equal'", "'exact'"):
             assert named in body["error"]["message"]
     assert expense_count(seeded) == 0
 
@@ -3388,8 +3340,6 @@ def test_a_weight_mode_with_no_weights_key_gets_the_same_refusal(
     [
         {"mode": "equal"},
         {"mode": "equal", "member_ids": "not-a-list"},
-        {"mode": "weight", "weights": "not-an-object"},
-        {"mode": "weight", "weights": {"whoever": "two"}},
         {"mode": "exact", "amounts": {"whoever": 8.0}},
         {"mode": "equal", "member_ids": [], "extra": 1},
         {},

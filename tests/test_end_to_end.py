@@ -173,7 +173,13 @@ def test_the_whole_product_walks_from_seeding_to_a_cleared_balance(
         sam,
         payer_id=ids["Sam"],
         amount="80.00",
-        split={"mode": "weight", "weights": {ids["Sam"]: 1, ids["Ali"]: 3}},
+        # Weight mode until issue #78 removed it: {Sam: 1, Ali: 3} over 80.00
+        # allocated exactly these two figures, so the journey's arithmetic is carried
+        # over rather than re-derived and every figure below is unchanged.
+        split={
+            "mode": "exact",
+            "amounts": {ids["Sam"]: "20.00", ids["Ali"]: "60.00"},
+        },
         description="Power bill",
     )
     assert response.status_code == 201, response.get_json()
