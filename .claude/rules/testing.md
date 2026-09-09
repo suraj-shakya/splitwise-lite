@@ -12,10 +12,10 @@ paths:
 - Test settle-up with exact integer assertions, never approximate
 - Never mark a test skipped or xfail to make the suite green
 
-## Seven rules, each with the defect that produced it
+## Eight rules, each with the defect that produced it
 
 A rule without its scar is one nobody believes, so each of these carries the failure it
-was learned from. All seven are about one thing: a check that reported success without
+was learned from. All eight are about one thing: a check that reported success without
 exercising what it named.
 
 - **Message pins are anchored.** `pytest.raises(match=)` is an `re.search`, not a full
@@ -192,3 +192,25 @@ exercising what it named.
   justification, and it is enough. The positive control for the corrected sweep is
   `document.body.style.overflowWrap = 'normal'` in the console: re-run the sweep and it
   must find something.
+- **A guard written to close a review finding is usually written against the one
+  population that already satisfies it, so it cannot fail.** Its assertion is real, it
+  is correct, and it is unable to fail: the single live subject answers the same thing a
+  helper that has stopped computing would answer, so the check reports success without
+  exercising what it names. **The diagnostic is a run and it takes a minute: replace the
+  helper's body with its passing value, `return []` or `return ""` or `return 0`, re-run,
+  and if nothing reds the guard is documentation.** The repair is the shape the rest of
+  this file asks for, a pure function over its arguments driven with synthetics rather
+  than with the module's own baseline; `reason_problems` and
+  `test_the_reason_check_still_bites` in `tests/test_suite_integrity.py` are the worked
+  example. Scar: four such sites were found in one module on one pull request, #93 for
+  issue #87, two by QA before it merged and two in re-review, the last of them issue
+  #97, whose subject was an assertion satisfied by `not []` over a baseline of one
+  record whose reason opened with that record's id.
+
+  **This is a review step and not a check, and the distinction is the whole of what the
+  rule is worth.** Nothing in the suite can detect a vacuous assertion: no check can
+  tell an assertion that passes because it is right from one that passes because its
+  population is the single case that satisfies it, and nothing added for #97 detects the
+  next such site. So this rule buys the minute somebody spends running the diagnostic
+  before approving, and it buys nothing else. Reading it as covered by a green suite is
+  the same misreading as reading an unanchored pin as a pin.

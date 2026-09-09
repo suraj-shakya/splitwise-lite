@@ -43,7 +43,11 @@ stale, so a record can stop being appliable only in the open: in a declared base
 carrying a reason that names the change, and a dated note in the record itself. What
 that buys is narrower than it looks, and the check's own comment says so: a record
 whose anchor matches is proven appliable, never proven correct, because nothing here
-re-runs a mutation or verifies a ``result``.
+re-runs a mutation or verifies a ``result``. The requirement that the one reason a
+record file carries names every record in its entry has a positive control of its own,
+``test_the_reason_check_still_bites``, which drives it over synthetic entries rather
+than over the single live entry that already satisfies it; issue #97 is that it had
+none.
 
 Standard library and pytest only, and nothing from ``splitwise_lite``, so these checks
 still run on a checkout where the package will not import.
@@ -2163,8 +2167,26 @@ def unnamed_records(carried: frozenset[tuple[str, int]], reason: str) -> list[st
     would force a second issue number that does not exist; requiring the one reason to
     name each record binds every claim to its subject instead, which is what this repo
     asks wherever a claim would otherwise be bound to a list by position.
+
+    Naming is a DELIMITED, exact, case-sensitive match and not a substring test. An id
+    counts as named only where it occurs with no ``-`` and no word character
+    immediately before or after it, so a reason naming ``g2-repeated-member`` does not
+    name a carried ``g2-repeated`` and a reason that capitalises an id at the start of a
+    sentence is a finding whose fix is to write the id as it is. A substring standing in
+    for a naming is the exact defect this helper was added to fix, one level down: an id
+    that happens to be spelled inside a longer word explains nothing about the record it
+    is supposed to be about. Measured on 2026-09-09 over all 53 recorded ids in
+    plans/mutations/ as this branch ships them: no id is a substring of another id in
+    the same record file, so this closes a latent hole rather than a live failure, and
+    mutation ``r4-delimited-naming-weakened-to-a-substring`` in
+    plans/mutations/97-the-reason-naming-check.md is what makes it a decision rather
+    than a preference.
     """
-    return sorted(identifier for identifier, _ in carried if identifier not in reason)
+    return sorted(
+        identifier
+        for identifier, _ in carried
+        if not re.search(rf"(?<![-\w]){re.escape(identifier)}(?![-\w])", reason)
+    )
 
 
 def spelled_stale(pairs: set[tuple[str, int]], targets: dict[str, str]) -> str:
@@ -2250,6 +2272,31 @@ def stale_anchor_entry_literal(
     )
 
 
+# THIS FUNCTION HAS NO CONTROL, and that is a decision with a run behind it rather than
+# an oversight. Replacing its body with `return 0` reds nothing substantive: that is
+# mutation r6-the-total-builder-gutted in
+# plans/mutations/97-the-reason-naming-check.md, and what the run printed is recorded
+# there rather than what it was expected to print. This marking follows case (e) of
+# test_the_stale_anchor_check_still_bites below, which is this module's established form
+# for something that holds by construction: say what is not covered, and say what guards
+# it instead.
+#
+# What guards it is a mechanism and not a hope. This value is read on one path only, into
+# the paste-back at the end of a failure, so it is never consulted in a green run. Its
+# destination is CARRIED_STALE_TOTAL, which
+# test_the_carried_stale_total_is_the_number_of_carried_records owns over a live subject
+# and which s2-the-declaration-deleted is the recorded proof that check bites. So a wrong
+# number printed here cannot be pasted into a green tree; it costs the reader one round
+# trip through a failing test instead.
+#
+# Both alternatives were considered and both are worse, which is why this is documented
+# rather than closed. Restructuring the function to take its population as an argument
+# buys a control over arithmetic nobody in this repo has got wrong. Comparing what it
+# returns with CARRIED_STALE_TOTAL is worse still, because the two count different
+# things: this counts stale anchors found across the directory and that counts records
+# declared, so they coincide only while every stale anchor found is declared, and on the
+# day the baseline empties the comparison is `0 == 0`. That is a check that would rot
+# into exactly the defect this comment is about.
 def computed_stale_total() -> int:
     """What CARRIED_STALE_TOTAL would read if every stale anchor found were carried."""
     return sum(
@@ -2796,6 +2843,93 @@ def test_the_stale_anchor_message_says_what_happened() -> None:
     assert "Paste this in place of" in resolved
     assert "NOT the answer" not in resolved
     assert resolved.rstrip().endswith("CARRIED_STALE_TOTAL = 3")
+    # The two arms of spelled_stale nothing above reaches. Both were promises with
+    # nothing holding them until issue #97 counted them: the case above passes count 0
+    # only and a full targets mapping, so neither of these ever rendered in a test.
+    unreadable = stale_anchor_message(
+        "plans/mutations/65-pretend.md",
+        {("s-unreadable", TARGET_UNREADABLE), ("s-untargeted", 0)},
+        set(),
+        {"s-unreadable": "app/icons/icon-192.png"},
+        {"s-unreadable": TARGET_UNREADABLE, "s-untargeted": 0},
+        '    "plans/mutations/65-pretend.md": (...),',
+        2,
+    )
+    # A target that could not be read at all says so, rather than reporting the
+    # sentinel as a count: "occurs -1 times" is what that arm exists to prevent, and
+    # r5-the-unreadable-target-line-deleted is the mutation that shows it does.
+    assert "s-unreadable: app/icons/icon-192.png could not be read at all" in unreadable
+    assert "occurs -1 times" not in unreadable
+    # And the targets fallback, which exists so that a check already failing does not
+    # raise KeyError out of the test instead of reporting its finding. Deleting it in
+    # favour of targets[identifier] would turn this failure into an exception, so it
+    # stays and this is the one assertion that reaches it.
+    assert (
+        "s-untargeted: its find occurs 0 times in the file its record names"
+        in unreadable
+    )
+
+
+def test_the_stale_anchor_paste_back_says_which_reason_to_extend() -> None:
+    """The printed entry is pasteable Python, and its marker names what to extend.
+
+    ``stale_anchor_entry_literal`` had no control at all: its only caller is
+    ``stale_anchor_failure``, which is only read in a failing run, so nothing exercised
+    the pair listing, the marker or the delete-this-entry arm. The honest control for a
+    produced artefact is not "the text contains the text I wrote beside it": it is that
+    a reader can paste what they were handed, so (a) and (b) below PARSE the result
+    rather than only searching it, and that the marker appears when and only when a
+    carried id is unnamed.
+    """
+    where = SYNTHETIC_RECORD_FILE
+    pairs = {("s-alpha", 0), ("s-beta", 2)}
+    # a. A reason naming none of the pairs: every pair is listed, in sorted order, and
+    #    the marker says which reason to extend.
+    unnamed = stale_anchor_entry_literal(
+        where, pairs, "#97 gave this producer a control, and named no record"
+    )
+    assert '("s-alpha", 0),' in unnamed
+    assert '("s-beta", 2),' in unnamed
+    assert unnamed.index('("s-alpha", 0),') < unnamed.index('("s-beta", 2),')
+    assert where in unnamed
+    # Pasteable rather than merely containing the right words: wrapped in a dict
+    # literal, what a reader is handed is Python that names the pairs it was given.
+    ast.parse("{\n" + unnamed + "\n}")
+    marker = [line for line in unnamed.splitlines() if "EXTEND THIS REASON" in line]
+    assert len(marker) == 1
+    assert "s-alpha" in marker[0]
+    assert "s-beta" in marker[0]
+    # b. A reason naming both pairs: the same pair lines and NO marker, so a marker
+    #    that always listed every pair would not satisfy this test.
+    named = stale_anchor_entry_literal(
+        where, pairs, "#97 rotted s-alpha and s-beta together, and says so here"
+    )
+    assert '("s-alpha", 0),' in named
+    assert '("s-beta", 2),' in named
+    assert "EXTEND THIS REASON" not in named
+    ast.parse("{\n" + named + "\n}")
+    # And the marker names only what the reason leaves out. A reason naming one of the
+    # two prints one id and not the other, which is what stops the marker being a
+    # restatement of the pair list.
+    half = stale_anchor_entry_literal(
+        where, pairs, "#97 rotted s-alpha, and this reason names only that one"
+    )
+    extend = [line for line in half.splitlines() if "EXTEND THIS REASON" in line]
+    assert len(extend) == 1
+    assert "s-beta" in extend[0]
+    assert "s-alpha" not in extend[0]
+    # c. No pairs at all is the delete-this-entry sentence naming the record file. It is
+    #    prose rather than a dict entry, so it is asserted as prose: wrapping it in a
+    #    dict literal would not parse, and parsing is not the promise being made to a
+    #    reader who is being told to delete something. r3-the-delete-this-entry-arm-
+    #    never-taken is the mutation that shows this arm is reached.
+    gone = stale_anchor_entry_literal(
+        where, set(), "#97 left nothing stale in this file to declare"
+    )
+    assert f'delete the "{where}" entry' in gone
+    assert "every anchor in that file matches exactly once now" in gone
+    assert "frozenset" not in gone
+    assert "EXTEND THIS REASON" not in gone
 
 
 # One section per shape the retirement note has to have, so the note check has positive
@@ -2881,23 +3015,40 @@ def test_the_carried_stale_total_is_the_number_of_carried_records() -> None:
     )
 
 
-def test_every_carried_stale_anchor_names_what_broke_it() -> None:
-    """No entry is added with a reason that names no change, or no record.
+def reason_problems(
+    where: str, carried: frozenset[tuple[str, int]], reason: str
+) -> list[str]:
+    """Everything wrong with one record file's entry, so a failure lists them at once.
 
-    Three assertions, and the third is the one a growing entry needs. There is one
-    reason slot per record file, so without it the second declaration in a file that
-    already carries an entry is explained by the first entry's change. That is not
-    hypothetical: it was measured on this branch.
+    A pure function over its arguments, mirroring ``dated_note_problems`` above.
+    CARRIED_STALE_ANCHORS is not consulted here, which is the whole point: the live
+    check below keeps its name and calls this over the module's baseline, and
+    ``test_the_reason_check_still_bites`` calls it over synthetic entries, so the
+    requirement has a positive control instead of one population that satisfies it.
+
+    That shape is not taste, it is the shape issue #97 asks for. The check below used
+    to perform its own three assertions inline, and the third read ``unnamed_records``
+    over a baseline whose one entry names its one record, so replacing that helper's
+    body with ``return []`` left this module green: the assertion was real, correct and
+    unable to fail. The same finding was closed for the retirement note on PR #93 by
+    making ``dated_note_problems`` a pure function over a section string and handing it
+    five synthetics, and this follows it.
+
+    Findings come back in a fixed order, the length floor then the change then the
+    unnamed records, so a failure list does not churn between runs.
     """
-    for where, (carried, reason) in sorted(CARRIED_STALE_ANCHORS.items()):
-        assert len(reason) >= MINIMUM_REASON, f"{where}: {reason!r} is not a reason"
-        assert BREAKING_CHANGE.search(reason), (
+    problems: list[str] = []
+    if len(reason) < MINIMUM_REASON:
+        problems.append(f"{where}: {reason!r} is not a reason")
+    if not BREAKING_CHANGE.search(reason):
+        problems.append(
             f"{where}: {reason!r} names no change. An anchor rots because something "
             "changed, and naming that something is what separates a declaration from "
             "an allowlist entry."
         )
-        missing = unnamed_records(carried, reason)
-        assert not missing, (
+    missing = unnamed_records(carried, reason)
+    if missing:
+        problems.append(
             f"{where}: this file's entry carries one reason for every record in it, and "
             f"that reason does not name {', '.join(missing)}. A second declaration in a "
             "file that already has an entry otherwise inherits the first one's reason "
@@ -2907,6 +3058,111 @@ def test_every_carried_stale_anchor_names_what_broke_it() -> None:
             "change may legitimately rot several anchors, so nothing here asks for a "
             "second issue number; it asks for each claim to name its subject."
         )
+    return problems
+
+
+def test_every_carried_stale_anchor_names_what_broke_it() -> None:
+    """No entry is added with a reason that names no change, or no record.
+
+    Three findings, and the third is the one a growing entry needs. There is one
+    reason slot per record file, so without it the second declaration in a file that
+    already carries an entry is explained by the first entry's change. That is not
+    hypothetical: it was measured on this branch.
+
+    Every finding over every entry is collected before the one assertion, so one bad
+    entry no longer hides another. The name is kept because two records name it:
+    ``s7-the-reason-stops-naming-its-record`` lists it under ``kills`` and
+    ``s2-the-declaration-deleted`` lists it under ``survives``.
+    """
+    problems: list[str] = []
+    for where, (carried, reason) in sorted(CARRIED_STALE_ANCHORS.items()):
+        problems.extend(reason_problems(where, carried, reason))
+    assert not problems, "\n\n".join(problems)
+
+
+def test_the_reason_check_still_bites() -> None:
+    """Proof the reason check answers over a population it is handed, not just the one.
+
+    Issue #97 is that the requirement above had no control. The live entry carries one
+    record whose reason opens with that record's id, so ``unnamed_records`` answers
+    ``[]`` over it, which is also what a helper that has stopped computing anything
+    answers; the check reported success either way. Mutation
+    ``r1-the-reason-naming-helper-gutted`` in
+    plans/mutations/97-the-reason-naming-check.md is that gut, and it records the live
+    check surviving it while every case below dies.
+
+    Synthetic entries only. Nothing here reads CARRIED_STALE_ANCHORS, in the shape
+    ``dated_note_problems`` above uses for the same reason, and the ids are invented
+    ``s-`` names in the manner of ANCHOR_MATCHING_ONCE so that no case here spells an
+    anchor another record points into this module.
+    """
+    where = SYNTHETIC_RECORD_FILE
+    one = frozenset({("s-alpha", 0)})
+    two = frozenset({("s-alpha", 0), ("s-beta", 0)})
+    # a. Adequate length, a #NN, and the entry's one record named: no findings. This is
+    #    what stops (b) to (g) passing because the helper always answers something.
+    assert (
+        reason_problems(
+            where, one, "s-alpha rotted when #97 restructured the reason check"
+        )
+        == []
+    )
+    # b. The positive control for the length floor, which is what stops a declaration
+    #    being cheaper than opening the record.
+    short = reason_problems(where, one, "#97 s-alpha")
+    assert len(short) == 1
+    assert "is not a reason" in short[0]
+    # c. The positive control for BREAKING_CHANGE: long enough and carrying no digit at
+    #    all, which is the state pasting NO_BREAKING_CHANGE_YET unedited leaves behind.
+    changeless = reason_problems(
+        where, one, "s-alpha was retired in review and nobody said what changed"
+    )
+    assert len(changeless) == 1
+    assert "names no change" in changeless[0]
+    # d. The positive control for the requirement this whole issue is about: a
+    #    two-record entry whose reason names one of them is a finding naming the OTHER
+    #    one and only the other one.
+    partial = reason_problems(
+        where, two, "s-alpha rotted when #97 restructured the reason check"
+    )
+    assert len(partial) == 1
+    assert "does not name s-beta." in partial[0]
+    assert "s-alpha" not in partial[0]
+    # e. Naming both is no finding, so (d) fails for the id it leaves out rather than
+    #    because a two-record entry is refused outright.
+    assert (
+        reason_problems(
+            where, two, "#97 restructured the check that reads s-alpha and s-beta"
+        )
+        == []
+    )
+    # f. The positive control for the delimited match: one id is a substring of the
+    #    other and the reason names only the longer, so the shorter is still unnamed.
+    #    Mutation r4-delimited-naming-weakened-to-a-substring puts the plain `in` test
+    #    back and this is the assertion that reds.
+    nested = frozenset({("s-alpha-two", 0), ("s-alpha", 0)})
+    substring = reason_problems(
+        where, nested, "s-alpha-two rotted when #97 restructured the reason check"
+    )
+    assert len(substring) == 1
+    assert "does not name s-alpha." in substring[0]
+    # g. An empty frozenset with a usable reason is no finding, because that is the
+    #    state s2-the-declaration-deleted leaves behind and that record lists the live
+    #    check above under survives.
+    assert (
+        reason_problems(
+            where, frozenset(), "#87 declared this file and its pair was since deleted"
+        )
+        == []
+    )
+    # h. Findings come back in a fixed order, length then change then unnamed records,
+    #    so a failure list does not churn between runs, and all three arrive at once so
+    #    one problem with an entry does not hide another.
+    everything = reason_problems(where, two, "nothing")
+    assert len(everything) == 3
+    assert "is not a reason" in everything[0]
+    assert "names no change" in everything[1]
+    assert "does not name s-alpha, s-beta." in everything[2]
 
 
 def test_the_placeholder_reason_does_not_satisfy_the_reason_check() -> None:
@@ -2916,10 +3172,23 @@ def test_the_placeholder_reason_does_not_satisfy_the_reason_check() -> None:
     characters and matches its own RETIRING_SLICE on `70b`, so pasting that one
     unedited clears both of #70's reason checks. Here the cheapest green must not be a
     declaration nobody wrote a reason for.
+
+    The first three assertions are claims about a constant defined in this module, and
+    asserting properties of one of those is not a control: the only thing it detects is
+    somebody editing the constant. So the fourth runs the constant through the check
+    that consumes it, which is what makes this test hold the docstring's claim rather
+    than a smaller one. Issue #97's finding was that the consumer could stop caring
+    about either half of the reason requirement with these three still green.
     """
     assert len(NO_BREAKING_CHANGE_YET) >= MINIMUM_REASON
     assert BREAKING_CHANGE.search(NO_BREAKING_CHANGE_YET) is None
     assert not any(character.isdigit() for character in NO_BREAKING_CHANGE_YET)
+    refused = reason_problems(
+        SYNTHETIC_RECORD_FILE, frozenset({("s-alpha", 0)}), NO_BREAKING_CHANGE_YET
+    )
+    assert len(refused) == 2
+    assert "names no change" in refused[0]
+    assert "does not name s-alpha." in refused[1]
 
 
 # --- The measurement that could not fail, refused in the documents (#58) ---
@@ -3159,6 +3428,8 @@ ENFORCING_SYMBOLS = (
     "test_every_recorded_anchor_matches_once_or_is_carried",
     "CARRIED_STALE_ANCHORS",
     "CARRIED_STALE_TOTAL",
+    "reason_problems",
+    "test_the_reason_check_still_bites",
 )
 
 # Entries naming a path, resolved against the filesystem for the same reason.
