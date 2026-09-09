@@ -79,6 +79,59 @@
     return showing === 'app';
   }
 
+  /* Whether the client raised this error, or something in this file did. Declared
+     here for the same reason as the helper above: it is a question a screen has to ask
+     before it can tell an answer it may report from a mistake it must not, and no one
+     screen owns it. The gate below is its only caller today.
+
+     One test, made against the client's own exported constructor, and never a
+     comparison of `kind` against a list of the kinds copied into this file. The client
+     classifies every error it raises and its classifier ends in a default arm, so
+     every error it produces already carries one of them; a list here would exist only
+     to be kept in step with the list there, and this file has already paid for that
+     shape once. addCurtained below used to reconstruct the client's classification
+     from statuses, and its own comment records what came of it: two spellings of one
+     decision drift the moment either is edited.
+
+     What this deliberately does not ask is *which* kind an error is. That question is
+     `kind`'s, it is asked where the answer changes what a screen draws, and it stays
+     there. This asks only whether the client produced the object at all, which is what
+     one line below answers and the whole of what a caller needs in order to know
+     whether an error is somebody's to report or nobody's.
+
+     A note about that wording, so the next editor of this comment is not misled about
+     what holds it. The operator is named in the line below and nowhere in this prose,
+     and that is task 88's criterion 2 asking for one occurrence of the word across
+     app/, checked by a grep at review time. **No test in this repository counts it**,
+     and none should be added to make the sentence true: nothing in the Python suite
+     mentions the word, and the four uses in the harness are its own code. So a second
+     legitimate use of the operator here would break nothing and name nobody, and a
+     reviewer's eye is the only thing keeping this decision in one place. Treat it as
+     what this predicate is for rather than as a line the tests are holding.
+
+     False rather than a throw when the client has not loaded. `api` is null until the
+     second script's onload has run, and a predicate that throws while deciding what to
+     do with an error would be a second copy of the defect it exists to remove.
+
+     One honest note about that guard, in the same spirit as the one above it. It is
+     not reachable through the only caller this file has today: the gate's handler is
+     wired in wire(), which that same onload calls, so `api` is set before anything can
+     ask. Deleting it turns no scenario red. It is kept because it is the condition that
+     makes this safe to call from anywhere, which is the whole point of putting a
+     predicate in the preamble, and the next caller may not be wired that late. Treat
+     it as the statement rather than as the line a test is holding.
+
+     One consequence, stated because it is a decision and not an oversight: an error
+     the client raised whose `kind` came out empty is recognised here. That state takes
+     a broken classifier to reach, and a broken classifier has to stay a screen with no
+     message on it rather than turning into a crash report. */
+  function apiRaised(error) {
+    if (!api) {
+      return false;
+    }
+    return error instanceof api.ApiError;
+  }
+
   function known(hash) {
     return Object.prototype.hasOwnProperty.call(ROUTES, hash);
   }
@@ -1448,7 +1501,19 @@
         return refresh();
       })
       .catch(function (error) {
-        if (!error || (error.kind !== 'signed-out' && error.kind !== 'refused')) {
+        /* Anything api.js did not raise leaves again as its first act, before any kind
+           is read. A mistake in this file, thrown out of setMode or out of any of the
+           three screens showApp enters, carries no kind at all, so both tests below
+           used to be true of it and this handler returned early and discarded it: the
+           control came back, no curtain moved, and a sign-in that had failed looked
+           exactly like one that had worked. It leaves carrying its own stack, which is
+           what the feed's render path already does with the same class of error, and
+           nothing is composed about it here. This app has no paragraph that says it is
+           broken, and writing one is a product decision rather than part of this. */
+        if (!apiRaised(error)) {
+          throw error;
+        }
+        if (error.kind !== 'signed-out' && error.kind !== 'refused') {
           /* Every other kind has already pulled a curtain over the whole frame, and
              the gate deliberately is not up, so writing on it here would drag it back
              over that notice. Which kind it is, is api.js's decision: this screen
@@ -1469,7 +1534,13 @@
         gateError.hidden = false;
         show('gate');
       })
-      .then(function () {
+      /* finally and not then, so the control comes back on every path out of this
+         chain and not only on the ones that settle fulfilled. A rejected promise skips
+         a fulfilled handler, so with then the re-raise above would leave this gate
+         disabled for good and the person with nothing but a reload: worse than the
+         defect it fixes. It also covers a throw inside the catch's own body, writing
+         on #gate-error among other things, which then never did. */
+      .finally(function () {
         gateSubmit.disabled = false;
       });
   }
