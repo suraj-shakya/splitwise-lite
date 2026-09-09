@@ -436,6 +436,25 @@ on one page.
 * `{"mode": "weight", "weights": {"<member id>": 2, ...}}`, integer weights.
 * `{"mode": "exact", "amounts": {"<member id>": "8.00", ...}}`, amounts as strings.
 
+> **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **`split` is one of two
+> shapes, not three.** The line above reads "`split` is one of three shapes, matching
+> `split.py` exactly", and the second bullet reads:
+>
+>     * `{"mode": "weight", "weights": {"<member id>": 2, ...}}`, integer weights.
+>
+> That shape is no longer accepted. A body sending it now answers **400
+> `malformed_request`** with the message
+> `a split mode must be one of 'equal' or 'exact', got 'weight'`, through the same
+> `create_expense` row: no route was added, removed or edited, so the session check, the
+> member-link check and the CSRF gate all still run first, and nothing is written. A stray
+> `weights` key does not change that refusal, because `_require_keys` is only reached
+> inside a matched arm, and neither does omitting one.
+>
+> Two shapes still carry the spec's three rules, because `equal` covers both equal across
+> all and equal across a subset. Nothing needs saying to any caller: `app/api.js` is the
+> only client, enforced by `test_only_the_api_client_calls_the_back_end`, and there is no
+> `CHANGELOG.md`, no `docs/`, no schema document and no version segment on `/api`.
+
 201 with `{"expense": {...}}` in the same shape as a feed entry. The currency is the
 group's and cannot be named in the body. `created_by` is the acting member and cannot be
 named in the body. `id` comes from `new_id()` and `created_at` from the server clock, and
@@ -837,6 +856,16 @@ before an engineer starts.
   amounts that do not sum to the total are each 400 `invalid_split` carrying the resolver's
   message, including the "you are out by" figure the resolver produces for the last one.
 - A `split.mode` that is not one of the three is 400 `malformed_request` naming the three.
+
+> **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. Three of the criteria above
+> are retracted in part and left standing as written. "`weight` mode and `exact` mode each
+> have the same test" now covers `exact` alone. "weights summing to zero" is no longer one
+> of the 400 `invalid_split` cases a request can produce: the guard still exists in
+> `split._allocate` and is declared `unreachable(...)` in `tests/test_error_messages.py`,
+> because `split_equally` is its only caller and passes `[1] * len(ordered)` over a list
+> `_ordered_from_iterable` has already refused to leave empty. And "not one of the three
+> ... naming the three" is now two and two. Every other clause of those three criteria is
+> unchanged, the unchanged-expense-count one included.
 - A failed `POST /api/expenses` writes nothing. A test asserts the expense count is unchanged
   after each rejection above.
 - `GET /api/balances` returns one `net` entry per member of the group in roster order, using

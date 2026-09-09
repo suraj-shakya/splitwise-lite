@@ -2807,35 +2807,6 @@ def test_an_equal_split_stores_the_event_field_by_field(
     assert sum(allocation.cents for allocation in expense.allocations) == 1000
 
 
-def test_a_weighted_split_stores_the_event_field_by_field(
-    app, seeded: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from splitwise_lite.groups import resolve_sole_group
-
-    signed = linked_client(app, seeded)
-    members = by_name(signed)
-    monkeypatch.setattr(web, "_now", lambda: at(9))
-    response = add_expense(
-        signed,
-        payer_id=members["Sam"],
-        amount="10.00",
-        split={
-            "mode": "weight",
-            "weights": {members["Sam"]: 1, members["Ali"]: 4},
-        },
-    )
-    assert response.status_code == 201
-
-    with open_store(seeded) as store:
-        expense = store.list_expenses(resolve_sole_group(store).id)[0]
-    assert expense.total_cents == 1000
-    assert expense.created_at == at(9)
-    shares = {
-        allocation.member_id: allocation.cents for allocation in expense.allocations
-    }
-    assert shares == {members["Sam"]: 200, members["Ali"]: 800}
-
-
 def test_an_exact_split_parses_its_amounts_from_strings(
     app, seeded: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2949,17 +2920,17 @@ def test_a_payer_who_is_not_a_member_is_refused_without_naming_them(
     assert expense_count(seeded) == 0
 
 
-@pytest.mark.parametrize("mode", ["equal", "weight", "exact"])
+@pytest.mark.parametrize("mode", ["equal", "exact"])
 def test_a_split_naming_someone_outside_the_group_is_refused_without_naming_them(
     app, seeded: Path, mode: str
 ) -> None:
-    # All three modes, because the roster check is one branch of one helper that all
-    # three reach, and the sentence it composes names the field for every one of them.
+    # Both modes, because the roster check is one branch of one helper that both reach,
+    # and the sentence it composes names the field for each of them. It was three modes
+    # until issue #78 removed the weight arm.
     signed = linked_client(app, seeded)
     members = by_name(signed)
     splits = {
         "equal": {"mode": "equal", "member_ids": [members["Sam"], "a-stranger"]},
-        "weight": {"mode": "weight", "weights": {members["Sam"]: 1, "a-stranger": 1}},
         "exact": {
             "mode": "exact",
             "amounts": {members["Sam"]: "5.00", "a-stranger": "5.00"},
@@ -3000,7 +2971,6 @@ def test_a_split_naming_a_member_twice_is_refused_by_the_resolver(
     "split, fragment",
     [
         ({"mode": "equal", "member_ids": []}, "at least one member"),
-        ({"mode": "weight", "weights": {}}, "at least one member"),
         ({"mode": "exact", "amounts": {}}, "at least one member"),
     ],
 )
@@ -3016,24 +2986,6 @@ def test_an_empty_split_is_refused_by_the_resolver(
     body = response.get_json()
     assert body["error"]["code"] == "invalid_split"
     assert fragment in body["error"]["message"]
-    assert expense_count(seeded) == 0
-
-
-def test_weights_summing_to_zero_are_refused_by_the_resolver(
-    app, seeded: Path
-) -> None:
-    signed = linked_client(app, seeded)
-    members = by_name(signed)
-    response = add_expense(
-        signed,
-        payer_id=members["Sam"],
-        amount="10.00",
-        split={"mode": "weight", "weights": {members["Sam"]: 0, members["Ali"]: 0}},
-    )
-    assert response.status_code == 400
-    body = response.get_json()
-    assert body["error"]["code"] == "invalid_split"
-    assert "sum to zero" in body["error"]["message"]
     assert expense_count(seeded) == 0
 
 
@@ -3268,7 +3220,7 @@ def test_the_shell_harness_settlement_fixture_is_the_sentence_the_api_sends(
 
 
 @pytest.mark.parametrize("mode", ["percentage", "", "EQUAL", 7])
-def test_an_unknown_split_mode_names_the_three_that_exist(
+def test_an_unknown_split_mode_names_the_two_that_exist(
     app, seeded: Path, mode
 ) -> None:
     signed = linked_client(app, seeded)
@@ -3283,8 +3235,103 @@ def test_an_unknown_split_mode_names_the_three_that_exist(
     body = response.get_json()
     assert body["error"]["code"] == "malformed_request"
     if isinstance(mode, str):
-        for named in ("'equal'", "'weight'", "'exact'"):
+        for named in ("'equal'", "'exact'"):
             assert named in body["error"]["message"]
+    assert expense_count(seeded) == 0
+
+
+THE_WEIGHT_REFUSAL = {
+    "error": {
+        "code": "malformed_request",
+        "message": "a split mode must be one of 'equal' or 'exact', got 'weight'",
+    }
+}
+"""The whole body a ``mode: 'weight'`` request is answered with after issue #78.
+
+Written as the whole body rather than as a fragment on purpose. A substring check
+would be satisfied by a message that also offered a third mode, which is exactly the
+regression these two tests exist to catch, and .claude/rules/testing.md's first scar is
+that a loose pin passes in the case it was written for.
+"""
+
+
+def test_a_weight_split_is_refused_with_the_whole_message(
+    app, seeded: Path
+) -> None:
+    """The mode issue #78 removed is refused by the row that used to accept it.
+
+    That row is
+    ``_ApiRoute("/api/expenses", "create_expense", _create_expense, ("POST",),
+    _Access.MEMBER)``: no route was added or removed, so the session check, the
+    member-link check and the CSRF gate all still run before this refusal.
+    """
+    row = next(
+        route
+        for route in web._API_ROUTES
+        if route.endpoint == "create_expense"
+    )
+    assert (row.rule, row.methods, row.access) == (
+        "/api/expenses",
+        ("POST",),
+        web._Access.MEMBER,
+    )
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight", "weights": {members["Sam"]: 1}},
+    )
+    assert response.status_code == 400
+    assert response.mimetype == "application/json"
+    assert response.get_json() == THE_WEIGHT_REFUSAL
+    assert expense_count(seeded) == 0
+
+
+def test_the_weight_refusal_is_about_the_mode_and_not_the_stray_key(
+    app, seeded: Path
+) -> None:
+    """The awkward case: ``weights`` is now an unrecognised key and changes nothing.
+
+    ``_require_keys`` is only reached inside a matched arm, so an unmatched mode is
+    refused before the shape of the rest of the body is looked at. The word ``weight``
+    survives in the body exactly once, as the echo of what the caller sent after
+    ``got ``, and never as one of the modes on offer.
+    """
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight", "weights": {members["Sam"]: 1, members["Ali"]: 3}},
+    )
+    assert response.status_code == 400
+    message = response.get_json()["error"]["message"]
+    assert message == THE_WEIGHT_REFUSAL["error"]["message"]
+    assert message.count("weight") == 1
+    assert message.split("got ")[1] == "'weight'"
+    assert "'weight'" not in message.split(", got ")[0]
+    assert expense_count(seeded) == 0
+
+
+def test_a_weight_mode_with_no_weights_key_gets_the_same_refusal(
+    app, seeded: Path
+) -> None:
+    """The mode is checked before the shape, so dropping ``weights`` changes nothing."""
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight"},
+    )
+    assert response.status_code == 400
+    assert response.mimetype == "application/json"
+    assert response.get_json() == THE_WEIGHT_REFUSAL
     assert expense_count(seeded) == 0
 
 
@@ -3293,8 +3340,6 @@ def test_an_unknown_split_mode_names_the_three_that_exist(
     [
         {"mode": "equal"},
         {"mode": "equal", "member_ids": "not-a-list"},
-        {"mode": "weight", "weights": "not-an-object"},
-        {"mode": "weight", "weights": {"whoever": "two"}},
         {"mode": "exact", "amounts": {"whoever": 8.0}},
         {"mode": "equal", "member_ids": [], "extra": 1},
         {},

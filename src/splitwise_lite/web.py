@@ -1529,12 +1529,14 @@ def _resolve_split(
     roster: set[str],
     currency: money.Currency,
 ) -> tuple[events.Allocation, ...]:
-    """Turn one of the three split shapes into explicit allocations.
+    """Turn one of the two split shapes into explicit allocations.
 
-    The three shapes match ``split.py`` exactly: ``equal`` over a member list, which
-    covers equal across all and equal across a subset, ``weight`` over integer weights,
-    and ``exact`` over amounts that arrive as strings and are parsed with
-    ``parse_amount`` before reaching ``split_exact``.
+    The two shapes match ``split.py`` exactly: ``equal`` over a member list, which
+    covers equal across all and equal across a subset, and ``exact`` over amounts that
+    arrive as strings and are parsed with ``parse_amount`` before reaching
+    ``split_exact``. Two shapes carry the spec's three rules because the first covers
+    two of them. A third, ``weight``, was accepted here until issue #78 removed it; it
+    answered no rule in ``plans/spec.md``'s locked table and no screen ever sent it.
 
     Every member id is checked against the roster first, so an unknown id is a
     ``malformed_request`` naming the field rather than a foreign key violation later.
@@ -1548,17 +1550,6 @@ def _resolve_split(
         raw = _require_list(body, "member_ids", what)
         member_ids = [_require_member_id(value, roster) for value in raw]
         return split.split_equally(total_cents, member_ids, currency=currency)
-    if mode == "weight":
-        _require_keys(body, ("mode", "weights"), what)
-        weights = _require_object(body, "weights", what)
-        return split.split_by_weight(
-            total_cents,
-            {
-                _require_member_id(key, roster): _require_weight(value)
-                for key, value in weights.items()
-            },
-            currency=currency,
-        )
     if mode == "exact":
         _require_keys(body, ("mode", "amounts"), what)
         amounts = _require_object(body, "amounts", what)
@@ -1573,7 +1564,7 @@ def _resolve_split(
             currency=currency,
         )
     raise MalformedRequest(
-        f"{what} mode must be one of 'equal', 'weight' or 'exact', got {mode!r}"
+        f"{what} mode must be one of 'equal' or 'exact', got {mode!r}"
     )
 
 
@@ -1593,26 +1584,15 @@ def _require_member_id(value: object, roster: set[str]) -> events.MemberId:
     return events.MemberId(value)
 
 
-def _require_weight(value: object) -> int:
-    """A weight, which is an integer and never a bool or a float.
-
-    Integers on purpose: a share of one and a half is expressed as weights 3 and 2, so
-    no fraction ever enters the money path.
-
-    It takes no key. The key was a member id of the current roster and it went straight
-    into a mapped 400 body, so dropping the parameter rather than only the
-    interpolation is what makes the leak impossible to reintroduce without adding an
-    argument, which is a change a reviewer sees.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise MalformedRequest("every weight in a split must be a JSON integer")
-    return value
-
-
 def _require_exact_amount(value: object, currency: money.Currency) -> int:
     """One exact share, parsed from a string through the one input edge.
 
-    It takes no key either, for the reason ``_require_weight`` does not.
+    It takes no key. The key here is a member id of the current roster, and it went
+    straight into a mapped 400 body until issue #61; dropping the parameter rather than
+    only the interpolation is what makes that leak impossible to reintroduce without
+    adding an argument, which is a change a reviewer sees. This is the only surviving
+    copy of that note: the sibling helper that carried it was deleted by issue #78, so
+    it is not duplication and is not to be tidied away as such.
     """
     if not isinstance(value, str):
         raise MalformedRequest(

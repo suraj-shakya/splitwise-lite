@@ -98,6 +98,35 @@ carries both figures so a wrong entry can be corrected, where a weight typo sile
 produces a wrong but valid split. `split_by_weight` stays in the domain layer and stays
 reachable through the API; exposing it is a later task's decision if anyone asks for it.
 
+> **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **The argument above was
+> accepted and then applied one layer further down than this file could reach.** Two
+> sentences are retracted. The paragraph opening this section says "The API takes three
+> shapes: `equal` over a member list, `weight` over integer weights, and `exact` over
+> amount strings", and the paragraph above ends "`split_by_weight` stays in the domain
+> layer and stays reachable through the API; exposing it is a later task's decision if
+> anyone asks for it". The API now takes two shapes, and nothing is reachable through it:
+> `split_by_weight`, the `weight` wire arm and `_require_weight` are all deleted, and a
+> body sending `{"mode": "weight", ...}` answers 400 `malformed_request`.
+>
+> **The reason given here is why, and it is the one sentence in this passage that is not
+> retracted.** "A weight typo silently produces a wrong but valid split" where
+> `split_exact`'s refusal names both figures is an argument against the capability and not
+> merely against a control on this screen, and `plans/spec.md:29-33` names the product's
+> largest risk as a ledger that "looks authoritative while being wrong". A reason that
+> says nobody should be given a control was not a reason to leave the control wired to the
+> API and unlabelled. It was quoted, unchanged, into `app/index.html` and
+> `plans/spec.md`'s modelling notes, so deleting the subject did not delete the argument.
+>
+> **The two `weight` bans over `app/app.js` in this file still hold and now mean something
+> different**: the criterion under "Saving: the request" that "The screen never exposes
+> `weight`. The string `weight` appears nowhere in `app/app.js`", and the ban listed again
+> under the test section. Both stay green untouched, because both only ever asserted an
+> absence. What changed is what the absence guards: it now guards against re-introducing a
+> mode the API refuses, rather than against exposing one it accepts.
+> `tests/test_add_screen.py::test_the_screen_never_exposes_a_weight_split` carries that
+> correction in a comment beside the assertion, because nothing in the suite reds on a
+> green test with a false comment.
+
 Choosing `Some people` reveals one row per member, everyone ticked, so the usual case of
 "everyone except one" is a single untick. Choosing `Uneven amounts` reveals one amount field
 per member, all empty. A member whose field is left empty is left out of the request
@@ -761,6 +790,14 @@ Record each as passed, failed or unverified.
 - **Weight splits and percentage splits.** `split_by_weight` stays in the domain layer,
   unexposed. No percentage anywhere: the API has no percentage mode and inventing one in
   JavaScript is split maths in the browser.
+
+  > **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. "`split_by_weight` stays
+  > in the domain layer, unexposed" is retracted: it does not stay in the domain layer,
+  > and issue #78 deleted it. Weight splits are out of scope for this screen for a
+  > stronger reason than when this was written, which is that there is no longer a
+  > resolver or a wire shape behind one. The percentage half is unchanged and was
+  > deliberately not reopened: `plans/spec.md`'s locked table names three rules and #78
+  > added none.
 - **Any running total, remaining figure, per-person preview or "what this does to the
   balances" line.** All four are money arithmetic in JavaScript, which task 8 bans and this
   file bans again.

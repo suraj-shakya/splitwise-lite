@@ -16,8 +16,10 @@ nothing: the app shows the "nobody has linked you" notice and no ledger.
   amount, description and who shared it. A row expands in place to each person's share,
   the total, who recorded it and when. Read only.
 - **Adding an expense**: an amount, an optional description, a payer from the roster and
-  one of the spec's three split modes, equally, some people or uneven amounts. The
-  resolver's weight mode is reachable through the API and no screen offers it.
+  one of the spec's three split modes, equally, some people or uneven amounts. Those three
+  are the whole of what the resolver and the API offer. A fourth, by weight, was reachable
+  through the API and offered by no screen until issue #78 removed it; `plans/spec.md`'s
+  modelling notes record why, and a request sending it now gets a 400.
 - **Balances**: each member's net position and the shortest list of payments that
   clears the group, worked out on every read and never stored. The net figures are read
   only; the payments are not, see below.

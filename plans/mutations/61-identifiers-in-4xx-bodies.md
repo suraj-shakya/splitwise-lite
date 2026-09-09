@@ -92,6 +92,35 @@ half of this task.
 }
 ```
 
+> **Node ids partly retired 2026-09-09 for issue #78**, per
+> `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **This record's anchor
+> still matches its target exactly once, and nothing above this note is edited.** Three
+> of the six node ids it lists name tests this checkout no longer collects, and the
+> other three are live:
+>
+> * `tests/test_split.py::test_split_by_weight_rejects_a_negative_weight`, in `kills`,
+>   and `tests/test_split.py::test_split_by_weight_rejects_weights_that_all_sum_to_zero`,
+>   in `survives`, were deleted with `split_by_weight` itself.
+> * `tests/test_error_messages.py::test_no_four_hundred_body_names_an_identifier[split.py::_ordered_from_mapping::every_must_be_zero_or_positive]`,
+>   in `kills`, is gone for a different reason and a more interesting one: the row still
+>   exists, but weight mode was the only route by which a request could hand that guard
+>   a negative, so the row is now declared `unreachable(...)` instead of driven, and the
+>   driven half of that test no longer parametrises over it.
+> * Still live: `tests/test_error_messages.py::test_every_four_hundred_raise_site_is_declared`
+>   and `tests/test_split.py::test_split_exact_rejects_a_negative_amount` in `kills`,
+>   and `tests/test_split.py::test_split_equally_rejects_a_repeated_member` in
+>   `survives`. The first two are the pair that still kill this mutant, so the record's
+>   `result` of `killed` is not left resting on deleted tests.
+>
+> **Why the anchor was kept byte for byte.** Criterion A7 of the #78 spec required the
+> single line quoted in `find` above to be unchanged, and named this record as the
+> reason. The `field` parameter survives with it, even though `split_exact` is now its
+> only caller, so what this record restores is still exactly what #61 removed. #78
+> verified `source.count(find) == 1` with the recipe in `README.md` in this directory
+> before and after its diff. This is a rot in `kills` and `survives` rather than in
+> `find`, so `test_every_recorded_anchor_matches_once_or_is_carried` cannot see it and
+> `CARRIED_STALE_ANCHORS` is not the place for it; this note is.
+
 ## 3. The group and the user, in `groups.py`
 
 The site the spec numbers 12, and the only one of the twelve whose sentence reaches no

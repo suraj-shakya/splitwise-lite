@@ -5,18 +5,33 @@ The spec collapses all three split rules into one shape: an expense stores a lis
 Equal, subset and uneven splits are all resolved to explicit cents here, at entry time,
 so the ledger carries no rule types and there is one rounding problem instead of three.
 
-The three modes the backlog names map onto three functions:
+The three split rules ``plans/spec.md`` locks map onto two functions:
 
 * equal across everyone, and equal across a subset, are both ``split_equally`` over the
   member list the caller assembles
-* uneven by weight is ``split_by_weight``
-* uneven by exact amount is ``split_exact``
+* uneven shares are ``split_exact``
 
 **The remainder rule.** A total rarely divides evenly, so somebody has to absorb the
-leftover cents. Both fair-share modes go through one allocator, ``_allocate``, which
-uses the largest-remainder method on integer arithmetic: each member's floor share is
-``(total * weight) // weight_total`` with remainder ``(total * weight) % weight_total``,
-and the leftover cents go one each to the largest remainders.
+leftover cents. The one fair-share mode goes through one allocator, ``_allocate``,
+which uses the largest-remainder method on integer arithmetic: each member's floor
+share is ``(total * weight) // weight_total`` with remainder
+``(total * weight) % weight_total``, and the leftover cents go one each to the largest
+remainders.
+
+``_allocate`` still takes a weight per member, and its signature, its guard and its
+arithmetic are deliberately left byte for byte as issue #78 found them: the rule it
+implements is a locked modelling decision in ``plans/spec.md``, not an implementation
+detail of the mode that used to exercise it. Its docstring prose was corrected, because
+one sentence of it counted two fair-share modes; the dated resolution under criterion A6
+of ``plans/tasks/78-split-by-weight-has-no-product-behind-it.md`` records why that was
+in scope and the arithmetic was not, and which two mutation records anchor into which
+lines.
+
+One consequence to state rather than tidy away: ``_allocate``'s weights-sum-to-zero
+guard can no longer fire, because ``split_equally`` is its only caller and passes
+``[1] * n`` over a list ``_ordered_from_iterable`` has already refused to leave empty,
+so the weight total is at least 1. ``tests/test_error_messages.py`` carries it as an
+unreachable row with the same reason.
 
 Under an equal split every remainder is identical, so the tie-break decides. It is a
 rotation: members are placed in ascending ``member_id`` order and the walk starts at
@@ -57,7 +72,6 @@ from .money import MAX_CENTS, Currency, DomainError, Money, format_amount
 
 __all__ = [
     "InvalidSplit",
-    "split_by_weight",
     "split_equally",
     "split_exact",
 ]
@@ -113,40 +127,6 @@ def split_equally(
     return _allocate(total, ordered, [1] * len(ordered))
 
 
-def split_by_weight(
-    total_cents: int, weights: Mapping[MemberId, int], *, currency: Currency
-) -> tuple[Allocation, ...]:
-    """Split ``total_cents`` across members in proportion to integer ``weights``.
-
-    Two people on a 1 and 2 weighting split $10 into $3.33 and $6.67, which resolves to
-    3 and 7 cents of leftover-adjusted shares. Weights are integers on purpose: a share
-    of one and a half is expressed as weights 3 and 2, so no fraction ever enters the
-    money path.
-
-    Invariants:
-
-    * the allocations sum to ``total_cents`` exactly
-    * every share is within one cent of its exact quota, by the largest-remainder rule
-    * a weight of zero is allocated zero cents and keeps that member on the expense
-    * the result is ordered by ``member_id``
-
-    ``currency`` renders the refusals about the total and nothing else; weights are not
-    money and are never formatted.
-
-    Raises:
-        TypeError: if ``currency`` is not a ``Currency``, if ``total_cents`` is not an
-            ``int``, if ``weights`` is not a mapping, if a member id is not a ``str``,
-            or if a weight is not an ``int``.
-        InvalidSplit: if ``total_cents`` is not strictly positive or is above
-            ``MAX_CENTS``, if ``weights`` is empty, if a member id is empty, if a weight
-            is negative, or if the weights sum to zero.
-    """
-    _require_currency(currency)
-    total = _require_total(total_cents, currency)
-    ordered, values = _ordered_from_mapping(weights, "weight")
-    return _allocate(total, ordered, values)
-
-
 def split_exact(
     total_cents: int, amounts: Mapping[MemberId, int], *, currency: Currency
 ) -> tuple[Allocation, ...]:
@@ -197,8 +177,13 @@ def _allocate(
 ) -> tuple[Allocation, ...]:
     """Allocate ``total_cents`` by weight, largest remainder first, rotating ties.
 
-    The one place the remainder rule is written. ``split_equally`` reaches it with every
-    weight set to 1, so the two fair-share modes cannot drift apart.
+    The one place the remainder rule is written. ``split_equally`` has been its only
+    caller since issue #78 removed the weighted mode, and reaches it with every weight
+    set to 1. It still takes a weight per member, and the arithmetic below is unchanged,
+    because the rule is a locked modelling decision in ``plans/spec.md`` rather than an
+    implementation detail of the caller that used to exercise it. One consequence of
+    having a single caller: the guard below can no longer fire, and the module docstring
+    says why.
 
     ``weights`` is positional-aligned with ``ordered_member_ids``, and both have already
     been validated. The leftover is always smaller than the number of members, because
@@ -376,11 +361,12 @@ def _ordered_from_mapping(
             )
         if value < 0:
             # ``InvalidSplit`` is a mapped 400, so the message names the field and
-            # nothing else. The integer is dropped rather than formatted because this
-            # function serves two callers: it is a weight for ``split_by_weight`` and
-            # cents for ``split_exact``, and rendering one branch as money would need
-            # a ``currency`` here that ``_ordered_from_mapping`` deliberately does not
-            # take.
+            # nothing else. Issue #78 left this function one caller, so ``field`` is
+            # always "amount" and the value is always cents for ``split_exact``. The
+            # parameter and the dropped integer both survive that: rendering cents as
+            # money would need a ``currency`` here that ``_ordered_from_mapping``
+            # deliberately does not take, and the interpolation is the leak issue #61
+            # removed, so restoring either is a change a reviewer sees.
             raise InvalidSplit(f"every {field} must be zero or positive")
         validated[member_id] = value
 

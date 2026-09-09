@@ -59,6 +59,36 @@ the format and the recipe.
 
 **Verdict.** Rung 1. With the refusal gone the call reaches `divmod(..., 0)` and dies, so the guard is real and fires first; the pin was merely loose, and `"zero"` would also have matched the word in any other sentence this call could produce.
 
+> **Node ids retired 2026-09-09 for issue #78**, per
+> `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **This record's anchor
+> still matches its target exactly once, and nothing above this note is edited.** What
+> has gone is both tests it names. Issue #78 removed `split_by_weight`, the `weight`
+> wire mode and `_require_weight` in `web.py`, and with them every test in
+> `tests/test_split.py` that called the weighted resolver. So
+> `tests/test_split.py::test_split_by_weight_rejects_weights_that_all_sum_to_zero`, the
+> single node id in `kills`, and
+> `tests/test_split.py::test_split_by_weight_rejects_a_negative_weight`, the single one
+> in `survives`, both name tests this checkout no longer collects. Applying this record
+> today still works, because the anchor matches; running it collects nothing.
+>
+> **The anchor is intact deliberately, and this record is why.** Criterion A6 of the #78
+> spec required `split.py:195-233` to stay byte for byte as it stood at `543bd0e`, and
+> the reason it gives is this record: the three-line refusal quoted in `find` above is
+> inside `_allocate`. #78 verified it with `source.count(find) == 1`, the assertion in
+> the recipe in `README.md` in this directory, both before and after its diff. So this
+> is a rot of the second kind, in `kills` and `survives` rather than in `find`, which
+> `test_every_recorded_anchor_matches_once_or_is_carried` does not and cannot see; hence
+> this note, and hence no entry in `CARRIED_STALE_ANCHORS`, which is for an anchor that
+> stopped matching and would be a false claim here.
+>
+> **The guard itself still exists and is now unreachable by request.**
+> `tests/test_error_messages.py` carries it as an `unreachable(...)` row whose reason is
+> that `split_equally` is `_allocate`'s only caller and passes `[1] * len(ordered)` over
+> a list already refused empty, so the weight total is at least 1. **Repair, for whoever
+> wants it:** the mutation is still applicable, so what it lacks is a caller that
+> reaches the guard. That is a fresh measurement and a **new** record with a new id, not
+> an edit to this one.
+
 ## The repeated-member refusal in split.py
 
 ```json

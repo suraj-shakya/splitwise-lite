@@ -526,8 +526,10 @@ def test_no_copy_on_this_screen_says_anything_about_balances() -> None:
 
 
 def test_the_screen_never_exposes_a_weight_split() -> None:
-    # `split_by_weight` stays in the domain layer and stays reachable through the
-    # API. A weight needs explaining before anyone can use one, and a weight typo
+    # Issue #78 removed `split_by_weight` and the `weight` wire mode, so this ban now
+    # guards against re-introducing a mode the API no longer accepts, rather than
+    # against exposing one it does. The reason it was never offered here is the reason
+    # it went: a weight needs explaining before anyone can use one, and a weight typo
     # silently produces a wrong but valid split where a wrong exact share is refused
     # with both figures named.
     assert "weight" not in app_js()

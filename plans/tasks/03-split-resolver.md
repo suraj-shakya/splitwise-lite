@@ -29,6 +29,25 @@ different member list. The resolver has no membership roster (task 2 kept one ou
 the domain layer, and tasks 9 and 10 own it), so "all" is a list the caller assembles.
 There is deliberately no fourth function and no mode enum.
 
+> **Corrected 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **The table above is
+> retracted in one row and left standing in the rest.** It read, and still reads:
+>
+>     | Uneven by weight | `split_by_weight(total_cents, weights)` |
+>
+> That row is gone from the code. `split_by_weight` never answered a rule in
+> `plans/spec.md`'s locked decisions table, which names three: "Equal, equal across a
+> subset, and uneven shares". It entered through `plans/backlog.md` task 3's wording
+> "uneven by weight or exact amount", which widened one of those three with no recorded
+> decision anywhere, and this file turned that widening into a four-row table and
+> nineteen further mentions. No screen ever offered it, the API accepted it, and its only
+> failure mode was a silent one. It was removed with the `weight` wire mode and
+> `_require_weight`.
+>
+> The sentence "There is deliberately no fourth function and no mode enum" is now true of
+> the count as well as of the enum, which it was not when it was written: the table above
+> it already had four rows for three modes. `plans/spec.md`'s modelling notes carry the
+> decision, so a later reader need not come here for it.
+
 ## The remainder rule
 
 Stated once here because it is the point of the task, and both fair-share modes share
@@ -113,6 +132,65 @@ so a one-cent remainder would always land on the same index.
 - Equal weights agree with the equal split exactly: for the same total and members,
   `split_by_weight` with every weight 1 returns what `split_equally` returns, including
   which member absorbs the extra cent.
+
+> **Retracted 2026-09-09 for issue #78**, per `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`. **The criteria above are a
+> record of what `split_by_weight` did and are left word for word. The function they
+> describe no longer exists**, so none of them is a live requirement and no test drives
+> any of them.
+>
+> One consequence of that deletion belongs here rather than in a PR body, because this is
+> the file that owns the remainder rule. `_allocate`'s signature, its weights-sum-to-zero
+> guard and its largest-remainder arithmetic survive untouched, byte for byte; its
+> docstring prose was corrected, because one sentence of it counted two fair-share modes.
+> Measured against `543bd0e` with `str.count`: signature `195-197` **1**, body `207-233`
+> **1**, old docstring block `198-206` **0**, old whole region `195-233` **0**. Seventeen
+> lines below, this same note used to say "the function was left byte-identical", which
+> was the same overstatement, and correcting only that one is what left this sentence
+> standing for a round. `split_equally` is now `_allocate`'s only caller and passes
+> `[1] * len(ordered)`, so every weight is equal, every remainder from
+> `divmod(total * 1, n)` is equal, and the `-remainders[index]` half of `_allocate`'s
+> sort key never discriminates: only the rotation tie-break decides anything. **So the
+> proportional half of the remainder rule lost every caller that exercised it through a
+> public surface**, and that half is what "The remainder rule" above and
+> `plans/spec.md:65-69` single out as the thing the collapse-to-one-shape decision exists
+> to get right.
+>
+> It was not left uncovered. `tests/test_split.py` gained three tests that call
+> `split._allocate` directly with unequal weights and assert the exact cent allocation,
+> including one with three distinct remainders and two leftover cents, so the **ordering**
+> is asserted and not merely the single largest. That is deliberately recorded as the
+> weaker replacement and not an equal one: it pins a private function, so a later change
+> could stop any public caller reaching that branch with nothing going red. Simplifying
+> `_allocate` to match its one remaining caller was ruled out of scope for the same reason
+> its guard and arithmetic were left byte-identical: the rule is a locked modelling
+> decision, and one of the three `plans/mutations/` records naming `src/splitwise_lite/split.py`
+> as their target anchors into that exact text. Three, not two: `g1-weights-sum-to-zero`
+> anchors inside `_allocate`, `restore-the-member-id-and-the-figure` anchors into
+> `_ordered_from_mapping`, and `g2-repeated-member` has matched zero times since issue #61
+> and predates this task. The first two still match exactly once. The docstring prose that
+> was corrected is touched by none of them; see the dated resolution under criterion A6 of
+> `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`.
+>
+> **One loss the paragraph above understated, added 2026-09-09 on the review of #78.**
+> Calling the replacement "weaker" was not specific enough about what went.
+> `test_split_by_weight_rejects_a_negative_weight` and the rest of the deleted eleven
+> were fixed cases, but `test_weighted_split_holds_across_random_weights` was a
+> **property**: 2000 randomly generated weight vectors, up to ten members, weights drawn
+> from `{0, 1, 2, 3, 7, 1000}`, asserting for every allocation the integer quota bound
+> `abs(cents * weight_total - total * weight) < weight_total`, which is "every share
+> within one cent of its exact quota" stated in integers. Its replacement is three fixed
+> cases plus a sum loop over one weight vector. **That property is gone, not weakened**,
+> and no test in the suite asserts the quota bound under unequal weights any more. The
+> sum invariant and the equal-split properties are untouched: `split_equally` still has
+> its exhaustive small-domain enumeration and its 2000-case random large-total run.
+>
+> Also measured on that review, and worth having beside the claim it corrects: of the
+> three replacement tests, only `test_the_allocator_ranks_three_unequal_remainders_by_size`
+> reds when `-remainders[index]` is deleted from `_allocate`'s sort key. The other two
+> stay green, because on their input the rotation tie-break happens to reach the same
+> answer. So the discriminating coverage is one test over one input, which is a further
+> reason the replacement is the weaker one and is recorded here rather than only in a PR
+> body.
 
 **Exact split**
 
