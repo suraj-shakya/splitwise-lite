@@ -330,7 +330,8 @@ bites.
 `tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites` at the assertion
 that sweeps a record pointing at `app/icons/icon-192.png`, a committed 2106-byte PNG:
 
-    UnicodeDecodeError: 'utf-8' codec can't decode byte 0x89 in position 0
+    UnicodeDecodeError: 'utf-8' codec can't decode byte 0x89 in position 0: invalid
+    start byte
 
 That is the exception escaping the test rather than becoming a finding, which is exactly
 what criterion 7 forbids. The second failure is standing collateral: this record's `find`

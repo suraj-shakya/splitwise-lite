@@ -514,6 +514,30 @@ whose anchor matches is proven **appliable**, not proven **correct**.
     move, and `CARRIED_UNANCHORED_BLOCKS` gains no entry. Any new `pytest.raises` block in
     the new code that reads the exception's message is anchored one of the four accepted
     ways. #70's baseline shrinks only, and this task must not be what grows it.
+
+    > **Resolution, 2026-09-09.** Both numbers in this criterion's first clause are now
+    > false about the tree, through no act of this task. `master` moved twice while this
+    > branch was open: PR #92 merged as `543bd0e` and anchored slice 70b, which lowered
+    > `CARRIED_TOTAL` from **107** to **102** and moved its line, and PR #91 merged as
+    > `5bfc117`. Measured on this branch after merging both, at `a0e48eb`: the constant
+    > reads `CARRIED_TOTAL = 102` at `tests/test_suite_integrity.py:1122`, and the line
+    > differs from the 1113 it holds on `master` because this branch's own subsection sits
+    > below it and its docstring correction sits above.
+    >
+    > **The criterion's substance is unaffected and is met.** What it asks is that this
+    > branch leave that constant and that baseline alone, and it does:
+    > `git diff` of the merge commit against its first parent shows the only change to
+    > `tests/test_suite_integrity.py` is `543bd0e`'s own, line for line, and this branch's
+    > own commits touch neither `CARRIED_TOTAL` nor `CARRIED_UNANCHORED_BLOCKS`. The value
+    > is not restored to 107, which would be reverting somebody else's audit slice.
+    >
+    > Recorded here rather than in the pull request body, and the criterion is left
+    > standing rather than edited, for the reason
+    > `plans/tasks/61-no-4xx-body-carries-an-identifier.md` gives under its own criterion
+    > 17: a pull request body is not what the next reader of this spec finds. It is also
+    > the same defect this task is about, one level up. A number attached to a subject it
+    > was measured against on a different day goes stale silently, and the answer this
+    > repo has is to date the correction rather than to quietly restate the number.
 42. No module-level name in `tests/test_suite_integrity.py` is defined twice, which
     `test_no_test_module_defines_a_name_twice` enforces with no allowlist.
 43. This task's own edits must not rot an anchor. Measured, the risk on the known
