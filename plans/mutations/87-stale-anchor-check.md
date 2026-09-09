@@ -1,46 +1,71 @@
 # Mutations behind the stale-anchor check (issue #87)
 
-Four mutations, all run and all killed, against the check this task adds: that a
+Seven mutations, all run and all killed, against the checks this task adds: that a
 complete record's `find` occurs exactly once in the file its own `file` key names, or
 that record is declared in `CARRIED_STALE_ANCHORS` with a reason naming the change that
-broke it.
+broke it, and that the declaration carries a dated note in the record itself.
 
-Taken against `2fbfc68` on 2026-09-08, on branch `task-87`. A record quotes a
-measurement, so it carries the tree it was measured on: if an anchor below no longer
-matches exactly once, that is the tree to diff against rather than a defect in the
-record. Every anchor below is now swept by the suite; see `README.md` in this directory
-for what that check does and does not promise, and for the format and the recipe.
+Taken against `a0e48eb` on 2026-09-09, on branch `task-87`, which is this branch merged
+up to master `5bfc117`. A record quotes a measurement, so it carries the tree it was
+measured on: if an anchor below no longer matches exactly once, that is the tree to diff
+against rather than a defect in the record. Every anchor below is itself swept by the
+check this file is about; see `README.md` in this directory for what that check does and
+does not promise, for the standing collateral it adds to every run here, and for the
+format and the recipe.
 
 **What each run was, named as a quantity rather than left to be inferred.** Every run
-below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **99
+below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **100
 tests** at this revision, and the figures quoted are that module's failed and passed
 counts. Nothing was selected with `-k`, so a claim that a mutation is caught by one test
-is a claim about the other ninety-eight staying green rather than about a filtered
+is a claim about the other ninety-nine staying green rather than about a filtered
 subset. Every `survives` entry below was observed green in that named run.
 
-**Which population the sweep covered during these runs, since this file changes it.**
-The four runs were taken before this file was committed, so the check swept the **32**
-records the directory then held, in eight record files. This file adds four, so a re-run
-against the tip of this branch sweeps **36** in nine. Neither figure changes any result
-below: no anchor in either population matches twice, and the two record-file mutations
-red on `plans/mutations/65-message-pins.md` either way.
+**Which population the sweep covered.** At `a0e48eb` the check examines **44** records in
+**11** record files, including the seven in this one, and finds exactly one stale anchor,
+`g2-repeated-member`. That was measured with the shipped helpers rather than counted.
+
+> **Corrected 2026-09-09 for the review of this pull request.** This paragraph used to
+> say that the runs were taken at `2fbfc68` over 32 records, and then: "Neither figure
+> changes any result below: no anchor in either population matches twice, and the two
+> record-file mutations red on `plans/mutations/65-message-pins.md` either way." The
+> clause after the colon was true; **the sentence before it was false for `s4`**. Both
+> the reviewer and QA of this pull request measured it independently: at `2fbfc68`, `s4`
+> gave `1 failed, 98 passed` exactly as recorded, and at the branch tip it gave
+> `2 failed, 97 passed`, the second failure being the sweep, which that record listed
+> under `survives`. The cause is the standing collateral described below, and it is why
+> every run in this file has now been re-taken at `a0e48eb` with this file in the swept
+> population. The old figures are not restated as current anywhere.
+
+**Standing collateral, and it applies to every mutation in this file.** Each `find` here
+is a piece of the file its own mutation edits, so applying any of them rots that record's
+own anchor, and the sweep then reds naming the record just applied. That is collateral
+rather than evidence: it says nothing about the guard under test and it appears whatever
+the mutation does. Following the two whole-harness checks that
+`44-the-empty-roster-message.md` lists for the same reason, it is named in `kills` where
+it fires rather than omitted, because a record that quietly dropped one of its failures
+would not reproduce. Where the sweep is in `kills` for a substantive reason, the section
+says which of the two it is.
 
 Every mutation was applied with the recipe in `README.md`, whose exactly-once assertion
 was **not** skipped and which refused nothing, with `PYTHONDONTWRITEBYTECODE=1` set on
-every run, and each was reverted with `git checkout -- <file>` before the next one. Two
-of the four mutate `tests/test_suite_integrity.py` itself and two mutate a record file,
-so the bytecode rule is load-bearing rather than ceremonial here: `s2` and `s4` are
-edits to one Python file minutes apart, and without that variable a cached `.pyc`
-invalidated on `(mtime, size)` can make the second run report the first one's result,
-which is what happened on PR #62 and looked exactly like a genuine finding.
+every run, and each was reverted with `git checkout -- <file>` before the next one. Four
+of the seven mutate `tests/test_suite_integrity.py` itself and three mutate a record
+file, so the bytecode rule is load-bearing rather than ceremonial here: `s2`, `s4`, `s5`
+and `s7` are edits to one Python file minutes apart, and without that variable a cached
+`.pyc` invalidated on `(mtime, size)` can make a later run report an earlier one's
+result, which is what happened on PR #62 and looked exactly like a genuine finding.
 
 **The anchor-into-a-record-file trap, because it will cost somebody an hour otherwise.**
-Half of these mutations target a record file, and a record file quotes its own message
+Three of these mutations target a record file, and a record file quotes its own message
 text in prose, so a plain sentence is **not** a unique anchor in one. Measured in
-`plans/mutations/65-message-pins.md` on 2026-09-08: the text
+`plans/mutations/65-message-pins.md` at `a0e48eb`: the text
 `weights sum to zero, so there is no share to divide the total into` occurs **twice**,
-at line 36 inside the JSON `find` of `g1-weights-sum-to-zero` and at line 50 in the
-"message the guard actually prints" quote below it. The recipe would refuse that anchor,
+once inside the JSON `find` of `g1-weights-sum-to-zero` and once below it in the
+"message the guard actually prints" quote. Sites here are named by their anchor text
+rather than by a line number, following the introduction of
+`88-the-sign-in-gate-discards-a-programming-error.md`, whose own line numbers went stale
+three times on one branch; at `a0e48eb` those two occurrences are at lines 36 and 50, and
+that is the only place a number for them appears. The recipe would refuse that anchor,
 correctly, and a looser applier would mutate the prose as well as the record. So an
 anchor into a record file carries enough of the JSON escaping, a `\"` or a `\n`, to sit
 only inside the block: `s1` below anchors on `{event.id!r}\"` and `s3` on a whole
@@ -76,7 +101,7 @@ to stay green, and an entry nobody ran is an observation nobody made.
 }
 ```
 
-**What the run printed:** `1 failed, 98 passed`.
+**What the run printed:** `1 failed, 99 passed`.
 
 **Which criterion this is evidence for.** Criterion 37a. It edits the `find` of
 `g7-repeated-id`, a record that matched its target exactly once, so that it matches zero
@@ -91,7 +116,10 @@ with:
 
 The mutated record's JSON stays valid, so the failure is this check's and nobody
 else's, and the paste-back at the end of that message printed the file's entry with
-both `g2-repeated-member` and `g7-repeated-id` in it and `CARRIED_STALE_TOTAL = 2`.
+both `g2-repeated-member` and `g7-repeated-id` in it and a bumped `CARRIED_STALE_TOTAL`.
+That one failing test carries a second finding as well, naming `s1-a-healthy-anchor-broken`
+itself, which is the standing collateral described above: this record's `find` is a piece
+of the file this mutation edits. One failing test, two findings.
 
 **The three survivors are the point of this record.** Before this task, the three checks
 over `plans/mutations/` were the whole of what read that directory, and all three stay
@@ -125,7 +153,7 @@ directory exists to replace.
 }
 ```
 
-**What the run printed:** `2 failed, 97 passed`.
+**What the run printed:** `2 failed, 98 passed`.
 
 **Which criterion this is evidence for.** Criterion 37b. The one pair in the baseline is
 deleted while the rot it declares is still there, which is the undeclared direction over
@@ -153,7 +181,9 @@ file's key with an empty `frozenset` and its reason intact, which is why
 both stay green: they iterate the carried records, and under this mutant there are none.
 `tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites` stays green too,
 because it drives the sweep against synthetic baselines it passes in itself and never
-reads the module's own.
+reads the module's own. The sweep's failure carries a second finding naming
+`s2-the-declaration-deleted`, the standing collateral: this record's `find` is the pair
+line it deletes.
 
 ## The stale direction, with the anchor repaired underneath the declaration
 
@@ -175,7 +205,7 @@ reads the module's own.
 }
 ```
 
-**What the run printed:** `1 failed, 98 passed`.
+**What the run printed:** `1 failed, 99 passed`.
 
 **Which criterion this is evidence for.** Criterion 37c, and it is the analogue of
 criterion 22b of `plans/tasks/70-substring-assertions-on-exception-messages.md`. It does
@@ -214,18 +244,19 @@ record carries a dated note, not whether the note is still true.
   "find": "for identifier, count in counts.items() if count != 1",
   "replace": "for identifier, count in counts.items() if count < 1",
   "kills": [
-    "tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites"
+    "tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites",
+    "tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried"
   ],
   "survives": [
-    "tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried",
     "tests/test_suite_integrity.py::test_the_stale_anchor_message_says_what_happened",
-    "tests/test_suite_integrity.py::test_the_carried_stale_total_is_the_number_of_carried_records"
+    "tests/test_suite_integrity.py::test_the_carried_stale_total_is_the_number_of_carried_records",
+    "tests/test_suite_integrity.py::test_every_carried_stale_anchor_carries_a_dated_note_in_its_record"
   ],
   "result": "killed"
 }
 ```
 
-**What the run printed:** `1 failed, 98 passed`.
+**What the run printed:** `2 failed, 98 passed`.
 
 **Which criterion this is evidence for.** The fourth mutation criterion 37 invites: the
 exactly-once decision is a claim until something reds when it is weakened. This weakens
@@ -239,12 +270,154 @@ the assertion labelled in the source as the positive control for the two-or-more
     assert stale_pairs(twice.counts) == {("s-twice", 2)}
     AssertionError: assert set() == {('s-twice', 2)}
 
-**The survivor that carries the argument is
-`tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried`.**
-It stays green under this mutant, over all 32 records the directory held at that
-revision, because no anchor in this repo matches twice today. So the sweep over the real population cannot be
-the positive control for that branch and the synthetic case is the only thing standing
-between "exactly once" and "at least once". That is the measured reason case (c) exists
-and the reason its target is the sentence measured to occur twice in a record file rather
-than a made-up string: a self-test section that cannot fail is the defect this module
+**The second failure is standing collateral and not the check catching the weakening.**
+`tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried`
+reds because this record's own `find` is the line this mutation replaces, so applying it
+leaves `s4-exactly-once-weakened-to-at-least-once` with an anchor that matches zero
+times. Zero is still a finding under `< 1`, so the sweep reds for its own anchor and not
+for anything the weakening let through. Do not read it as evidence.
+
+> **Corrected 2026-09-09 for the review of this pull request.** This record used to list
+> that sweep under `survives`, and to argue from its staying green. It did stay green at
+> `2fbfc68`, where the run was taken and where this file was not yet in the swept
+> population; both the reviewer and QA re-ran it at the branch tip and got
+> `2 failed, 97 passed`. The measurement was sound and the claim about the other tree was
+> not. It is moved to `kills` in the idiom `44-the-empty-roster-message.md` uses for
+> collateral, and the argument it used to carry is restated below as a measurement of the
+> population rather than as a survivor.
+
+**What actually carries the exactly-once argument is the population, measured directly.**
+At `a0e48eb` every one of the 44 recorded anchors counts exactly 1 in its target except
+`g2-repeated-member`, which counts 0. **No anchor in this repo matches twice.** So the
+sweep over the real population could not be the positive control for the two-or-more
+branch whatever it did, and the synthetic case (c) is the only thing standing between
+"exactly once" and "at least once". That is the measured reason case (c) exists, and the
+reason its target is a sentence measured to occur twice in a real committed file rather
+than an invented string: a self-test section that cannot fail is the defect this module
 exists to refuse.
+
+## The undecodable target, uncaught
+
+```json
+{
+  "id": "s5-the-undecodable-target-uncaught",
+  "file": "tests/test_suite_integrity.py",
+  "find": "    except (OSError, UnicodeDecodeError):",
+  "replace": "    except OSError:",
+  "kills": [
+    "tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites",
+    "tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried"
+  ],
+  "survives": [
+    "tests/test_suite_integrity.py::test_the_stale_anchor_message_says_what_happened",
+    "tests/test_suite_integrity.py::test_the_carried_stale_total_is_the_number_of_carried_records",
+    "tests/test_suite_integrity.py::test_every_carried_stale_anchor_carries_a_dated_note_in_its_record"
+  ],
+  "result": "killed"
+}
+```
+
+**What the run printed:** `2 failed, 98 passed`.
+
+**Which finding this is evidence for.** QA of this pull request dropped
+`UnicodeDecodeError` from that `except` clause and the module stayed at `99 passed`, so
+criterion 7's third unreadable-target case, a target that exists and is not UTF-8, had
+nothing holding it: the missing-file and directory cases both raise `OSError` and shared
+the other half of the clause. A control was added, and this is the mutation that shows it
+bites.
+
+**What reddened, and what it named.**
+`tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites` at the assertion
+that sweeps a record pointing at `app/icons/icon-192.png`, a committed 2106-byte PNG:
+
+    UnicodeDecodeError: 'utf-8' codec can't decode byte 0x89 in position 0
+
+That is the exception escaping the test rather than becoming a finding, which is exactly
+what criterion 7 forbids. The second failure is standing collateral: this record's `find`
+is the clause it edits.
+
+## The retirement note stops naming its record
+
+```json
+{
+  "id": "s6-the-note-stops-naming-its-record",
+  "file": "plans/mutations/65-message-pins.md",
+  "find": "So the pair `(\"g2-repeated-member\", 0)` is declared in",
+  "replace": "So that pair is declared in",
+  "kills": [
+    "tests/test_suite_integrity.py::test_every_carried_stale_anchor_carries_a_dated_note_in_its_record",
+    "tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried"
+  ],
+  "survives": [
+    "tests/test_suite_integrity.py::test_every_carried_stale_anchor_names_what_broke_it",
+    "tests/test_suite_integrity.py::test_the_carried_stale_total_is_the_number_of_carried_records",
+    "tests/test_suite_integrity.py::test_the_dated_note_check_reads_the_note_and_not_only_its_shape"
+  ],
+  "result": "killed"
+}
+```
+
+**What the run printed:** `2 failed, 98 passed`.
+
+**Which finding this is evidence for.** QA of this pull request replaced the whole of
+`g2-repeated-member`'s retirement note with `> Note, 2026-09-08. Nothing in particular.`
+and the module stayed at `99 passed`, because a date inside a blockquote was all the
+check asked for. The five things criterion 24 requires of that note were held by review
+alone. The note now has to name the record it retires and a change with a `#NN`, and this
+mutation removes the record's name from it while leaving everything else in place.
+
+**What reddened, and what it named.**
+`tests/test_suite_integrity.py::test_every_carried_stale_anchor_carries_a_dated_note_in_its_record`:
+
+    plans/mutations/65-message-pins.md section '## The repeated-member refusal in
+    split.py' holds g2-repeated-member, whose anchor is declared stale, and its
+    retirement note is not usable:
+        its dated note does not name g2-repeated-member
+
+**The one that matters here is the survivor.**
+`tests/test_suite_integrity.py::test_the_dated_note_check_reads_the_note_and_not_only_its_shape`
+stays green, which is the point: the synthetic controls and the live subject fail
+independently, so neither is standing in for the other. The second failure is standing
+collateral, this record's `find` being a sentence inside the note it edits.
+
+## The one reason stops naming its record
+
+```json
+{
+  "id": "s7-the-reason-stops-naming-its-record",
+  "file": "tests/test_suite_integrity.py",
+  "find": "\"g2-repeated-member rotted when #61 took {list(ordered)} out of split.py's \"",
+  "replace": "\"#61 took {list(ordered)} out of split.py's \"",
+  "kills": [
+    "tests/test_suite_integrity.py::test_every_carried_stale_anchor_names_what_broke_it",
+    "tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried"
+  ],
+  "survives": [
+    "tests/test_suite_integrity.py::test_every_carried_stale_anchor_carries_a_dated_note_in_its_record",
+    "tests/test_suite_integrity.py::test_the_carried_stale_total_is_the_number_of_carried_records",
+    "tests/test_suite_integrity.py::test_the_stale_anchor_check_still_bites"
+  ],
+  "result": "killed"
+}
+```
+
+**What the run printed:** `2 failed, 98 passed`.
+
+**Which finding this is evidence for.** The reviewer of this pull request rotted
+`g3-not-a-ledger-event`'s target by hand, pasted the printed literal unedited into the
+existing entry, bumped the integer and added a bare dated line, and got `99 passed`, with
+#61's reason left standing as the explanation for a rot #61 had nothing to do with. There
+is one reason string per record file, so the check now requires it to name every record
+id in its entry. This mutation takes the record's name back out of it while leaving the
+`#NN` and the length intact, which is precisely the state a blind paste would leave.
+
+**What reddened, and what it named.**
+`tests/test_suite_integrity.py::test_every_carried_stale_anchor_names_what_broke_it`:
+
+    plans/mutations/65-message-pins.md: this file's entry carries one reason for every
+    record in it, and that reason does not name g2-repeated-member.
+
+The two older assertions in that test stay satisfied under the mutant, the reason still
+being over twenty characters and still carrying `#61`, so this is the new requirement
+failing alone rather than one of the old two catching it. The second failure is standing
+collateral, this record's `find` being the reason line it edits.

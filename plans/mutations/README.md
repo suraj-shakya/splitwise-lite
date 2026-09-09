@@ -80,6 +80,31 @@ half asserts the same thing at run time: `tests/shell_harness.mjs` throws a harn
 error, exit status 2, when a substitution matched anything other than exactly once. Both
 appliers want the same precondition, which is why one check covers both.
 
+### Standing collateral, since that check landed
+
+**Applying a record whose target is a file in this directory, or is
+`tests/test_suite_integrity.py`, now reds `test_every_recorded_anchor_matches_once_or_is_carried`
+as well as whatever the mutation was aimed at.** A record's `find` is a piece of the file
+the mutation edits, so applying it rots that record's own anchor, and since issue #87 the
+sweep reads this directory and that module. The extra failure names the record you just
+applied.
+
+It is collateral rather than evidence. It says nothing about the guard under test, it
+appears for every such mutation whatever the mutation does, and it disappears on
+`git checkout -- <file>` with everything else. List it in `kills` anyway, in the idiom
+`44-the-empty-roster-message.md` uses for the two whole-harness checks that red on any
+red scenario: a record that quietly omitted one of its failures would not reproduce, and
+reproducing is the whole point.
+
+**It reaches records taken before the check existed**, which is why it is written here and
+not only in the record that introduced it. Measured on 2026-09-09 at `a0e48eb`: applying
+`m4-a-named-check-renamed` from `70a-message-block-check.md` gives `2 failed, 98 passed`
+where that record says `1 failed, 88 passed`. The second failure is the sweep, with
+`m4-a-named-check-renamed: its find occurs 0 times in tests/test_suite_integrity.py`.
+`70a` states nothing false, because it predates the check and names the tree it was taken
+on; read a record's `kills` against the tree it names, and expect this one extra failure
+on today's.
+
 ## Always set PYTHONDONTWRITEBYTECODE=1
 
 Every Python mutation run sets `PYTHONDONTWRITEBYTECODE=1`, or deletes `__pycache__`
@@ -115,7 +140,7 @@ tells you to re-express the mutant rather than weaken it.
 
 ## What the suite checks about these anchors, and what it does not
 
-`tests/test_suite_integrity.py` checks four things about this directory. Each states one
+`tests/test_suite_integrity.py` checks five things about this directory. Each states one
 guarantee and none of them restates another's, so read the boundaries rather than the
 sum:
 
@@ -133,9 +158,21 @@ sum:
   `CARRIED_STALE_ANCHORS`, keyed by record file and record id and never by a section
   heading, an ordinal or a line number, totalled in the declared integer
   `CARRIED_STALE_TOTAL`, and checked as a set equality in both directions so a
-  declaration cannot outlive its subject. Every reason names the change that broke the
-  anchor with a `#NN`, and every declared record also carries a dated note in its own
-  section, so a reader of the record learns it there instead of from a test module.
+  declaration cannot outlive its subject.
+- **A declared record carries a dated retirement note in its own section, and that note
+  names the record and the change that rotted its anchor**:
+  `test_every_carried_stale_anchor_carries_a_dated_note_in_its_record`. So a reader of
+  the record learns it there instead of from a test module. A date alone is not enough,
+  and that is measured: a bare dated line satisfied an earlier version of this check.
+
+**One reason per record file, not one per anchor.** An entry holds one reason string for
+every record in it, so a second declaration in a file that already carries an entry would
+otherwise be explained by the first one's change. That is measured rather than feared: it
+was reached in review of #87 by pasting the printed literal unedited. So the reason has
+to **name every record id in the entry** as well as carry a `#NN`, and the paste-back
+prints a comment on the reason line naming the records it does not yet cover. One change
+may legitimately rot several anchors, so nothing here asks for a second issue number; it
+asks for each claim to name its subject.
 
 **What none of them does.** No recorded mutation is re-run, and no `result` is verified.
 A record whose anchor matches is proven **appliable**, meaning the recipe above will
@@ -149,9 +186,14 @@ than abandoned.** A rename in `src/` may rot a dozen historical anchors, and not
 them has to be edited, re-derived or deleted. The answer is a declaration: one entry per
 record file, plus a dated note in the record. So the baseline is expected to grow
 whenever a correct change breaks an anchor, and what the check refuses is an
-**undeclared** stale anchor rather than a stale one. A record going stale is still
-expected rather than a defect; what has changed is that it is now recorded when it
-happens rather than discovered years later by somebody trying to re-run it. What holds
+**undeclared** stale anchor rather than a stale one.
+
+Say the consequence exactly, because this document used to say the opposite. A record
+going stale is still **expected**, and it is no longer **free**: from the moment its
+anchor stops matching, the suite is red until somebody declares it. The cost is one
+entry, one integer bump and a dated note, and no repair; but a stale record is now a
+failing test rather than a thing discovered years later by whoever tried to re-run it.
+What holds
 that list honest is not another check: it is a reviewer reading a diff that includes a
 bump to a declared integer, and the dated note the declaration costs in the record
 itself.
@@ -175,7 +217,10 @@ fresh run and a **new** record with a new id.
 > answer to it, because a rotted anchor is declared once with a reason and never
 > repaired under duress. The section also closed: "A committed mutant is re-run; a
 > recorded one is re-runnable. That difference is the whole reason both exist, and it is
-> why a record going stale is expected rather than a failure." That distinction stands
-> word for word. What issue #87 found is that nothing was checking the re-runnable half,
-> so a record could quietly stop being re-runnable and the suite stayed green over it
-> for as long as nobody tried.
+> why a record going stale is expected rather than a failure." The first two sentences
+> of that stand word for word. **The third is retired**, and it is the sentence this PR
+> reverses: a record going stale is still expected, but it is now a failing test until it
+> is declared, so "expected rather than a failure" is exactly what it stopped being.
+> What issue #87 found is that nothing was checking the re-runnable half, so a record
+> could quietly stop being re-runnable and the suite stayed green over it for as long as
+> nobody tried.

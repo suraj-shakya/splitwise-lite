@@ -138,11 +138,15 @@ exercising what it named.
   holds: no recorded mutation is re-run and no `result` is verified. The anchors that do
   not match are declared in `CARRIED_STALE_ANCHORS`, keyed by record file and record id
   and never by a section heading, an ordinal or a line number, totalled in the declared
-  integer `CARRIED_STALE_TOTAL`, checked as a set equality in **both** directions, with
-  a reason per entry of at least twenty characters naming the change that broke the
-  anchor and carrying a `#NN`. Each carried record also gets a dated note in its own
-  section, so a reader of the record sees the retirement and not only a reader of the
-  test module.
+  integer `CARRIED_STALE_TOTAL`, and checked as a set equality in **both** directions.
+  There is **one reason string per record file**, not one per anchor, so it has to be at
+  least twenty characters, carry a `#NN`, and **name every record id in that entry**;
+  without the last of those a second declaration inherits the first one's reason and is
+  explained by a change that had nothing to do with it, which is what happened when the
+  printed literal was pasted unedited in review. Each carried record also gets a dated
+  note in its own section, naming the record and the change, so a reader of the record
+  sees the retirement and not only a reader of the test module. A date alone is not
+  enough there either: a bare dated line satisfied an earlier version of that check.
 
   **That list is expected to grow, and saying so exactly matters in this file.** A
   correct change to `src/` legitimately rots an anchor, and #61 was right to make one,
