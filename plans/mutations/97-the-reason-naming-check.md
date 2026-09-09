@@ -8,7 +8,7 @@ killed by a named control. The sixth is not, and it is here for that reason: it 
 measurement behind the decision to leave `computed_stale_total` uncontrolled and marked
 as documentation rather than restructured.
 
-Taken against `PENDING` on 2026-09-09, on branch `task-97`, at master `0f6e8df`, with
+Taken against `af52a1e` on 2026-09-09, on branch `task-97`, at master `0f6e8df`, with
 this file's own six records committed, so every run below covers the population that
 ships. Nothing changed in the tree after the runs except the figures below being written
 into this file. A record quotes a measurement, so it carries the tree it was measured on:
@@ -75,7 +75,7 @@ which is the convention `87-stale-anchor-check.md` states and
 }
 ```
 
-**What the run printed:** `PENDING`.
+**What the run printed:** `4 failed, 98 passed`.
 
 **Which criterion this is evidence for.** Criterion 22a. It is the diagnostic issue #97
 names, applied to the helper the issue is about: `unnamed_records` replaced with its
@@ -136,7 +136,7 @@ itself.
 }
 ```
 
-**What the run printed:** `PENDING`.
+**What the run printed:** `2 failed, 100 passed`.
 
 **Which criterion this is evidence for.** Criterion 22b. It leaves `unnamed_records`
 alone and cuts the paste-back off from it, which is the state a reader hits when the
@@ -181,7 +181,7 @@ the standing collateral.
 }
 ```
 
-**What the run printed:** `PENDING`.
+**What the run printed:** `2 failed, 100 passed`.
 
 **Which criterion this is evidence for.** Criterion 22c. The condition is made
 unsatisfiable rather than deleted, so the arm stays in the source and stops being taken,
@@ -227,7 +227,7 @@ the standing collateral.
 }
 ```
 
-**What the run printed:** `PENDING`.
+**What the run printed:** `2 failed, 100 passed`.
 
 **Which criterion this is evidence for.** Criterion 22d, which is what makes criterion 7
 a decision rather than a preference. It puts back the plain `in` test the helper shipped
@@ -248,8 +248,18 @@ fix, one level down, but it is a latent hole rather than a live failure: measure
 the 53 recorded ids, no id is a substring of another id in the same record file, so the
 live entry and the paste-back both answer the same thing under this mutant. The one case
 that separates the two operations is the synthetic, which is why it exists.
+
 `tests/test_suite_integrity.py::test_every_recorded_anchor_matches_once_or_is_carried` is
-the standing collateral.
+the standing collateral, and here it names **two** records rather than one, which is
+worth stating because the introduction above says "the record just applied". This
+record's `find` is a substring of `r1-the-reason-naming-helper-gutted`'s: both quote the
+same return statement, r1 the whole of it and this one its last line. So applying this
+one rots both anchors and the sweep reported:
+
+    r1-the-reason-naming-helper-gutted: its find occurs 0 times in tests/test_suite_integrity.py
+    r4-delimited-naming-weakened-to-a-substring: its find occurs 0 times in tests/test_suite_integrity.py
+
+One failing test, two findings, and neither is evidence about the guard under test.
 
 ## The unreadable-target line deleted
 
@@ -272,7 +282,7 @@ the standing collateral.
 }
 ```
 
-**What the run printed:** `PENDING`.
+**What the run printed:** `2 failed, 100 passed`.
 
 **Which criterion this is evidence for.** Criterion 22e, for criterion 11a. Before it,
 that arm was a promise with nothing holding it: the message test passed a count of `0`
@@ -315,7 +325,7 @@ reaching a reader as prose is this test's subject alone.
 }
 ```
 
-**What the run printed:** `PENDING`.
+**What the run printed:** `1 failed, 101 passed`.
 
 **Which criterion this is evidence for.** Criterion 22f, and it is the measurement behind
 criterion 13. `computed_stale_total` is replaced with its passing value and **no
@@ -324,6 +334,13 @@ substantive control reds.** The one failure is the standing collateral, this rec
 `killed-for-the-wrong-reason` rather than `killed`: a mutant that reds a test for a reason
 unrelated to the mutation is not a pass, and calling it one is the defect this repo keeps
 finding.
+
+**And the wrong number was printed, in that very failure, with nothing objecting.** Under
+this mutant two anchors do not match exactly once, this record's own and
+`g2-repeated-member`'s, so the paste-back at the end of the collateral failure should
+have read `CARRIED_STALE_TOTAL = 2`. It read `CARRIED_STALE_TOTAL = 0`. That is the
+defect this mutation is the measurement of, observed rather than described: the producer
+answered nothing and the only thing that noticed was a reader.
 
 **What the survivors say, enumerated, because a decision to leave something uncontrolled
 is only auditable if the measurement is written down.** The value is read on one path,
