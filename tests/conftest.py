@@ -8,7 +8,9 @@ with a 4xx status. Of its rows, 49 carry the marker ``NO_REQUEST_REACHES_IT``
 50, then 47 when three of those marks turned out to be false and their rows were
 driven, and 49 again when issue #78 removed the weight wire mode and the two
 ``split.py`` guards it was the only route to stopped being reachable), which is a claim
-about reachability, and it was the one claim in that module nothing verified. The falsifying event is a new route reaching an existing raise: the set of
+about reachability, and it was the one claim in that module nothing verified.
+
+The falsifying event is a new route reaching an existing raise: the set of
 raise sites does not change, no message skeleton changes, the enumeration equality
 still holds, and a message interpolating a stored value has silently become something a
 client can be shown.
