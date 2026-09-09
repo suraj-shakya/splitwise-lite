@@ -102,8 +102,11 @@ rather than from a pointer they may not follow. No JSON block changes and no che
    A reader of either file must not be told "every anchor below" when there is one.
 
 3. `70a-message-block-check.md`'s replacement carries **one extra clause**, because four
-   of its five records target `tests/test_suite_integrity.py`, measured at lines 81, 250,
-   296 and 342, and applying one of those now reds the sweep as well as whatever the
+   of its five records target `tests/test_suite_integrity.py`, named by record id because
+   that is the anchor: `m1-equality-branch-deleted`, `m3-startswith-branch-deleted`,
+   `m4-a-named-check-renamed` and `m5-the-taught-form-split-from-the-wrong-end`, with
+   `m2-a-carried-block-anchored` the fifth and the one that targets `tests/test_money.py`
+   instead. Applying one of those four now reds the sweep as well as whatever the
    mutation was aimed at. That is the standing collateral `plans/mutations/README.md`
    documents under its `### Standing collateral, since that check landed` heading, and
    that section already names `m4-a-named-check-renamed` **in this very file** as its
@@ -126,18 +129,44 @@ rather than from a pointer they may not follow. No JSON block changes and no che
    > text rather than by line number**: the citation above names the
    > `### Standing collateral, since that check landed` heading and the
    > `m4-a-named-check-renamed` record, and an insertion above either of those moves
-   > neither. Criterion 20 is corrected the same way. Every other line number in this spec
-   > stays as measured and is pinned to master `0f6e8df` by the Constraints bullet, which
-   > is the other half of the same rule; the ones this task's own diff moved, and which are
-   > therefore to be read against that commit rather than against this branch, are the
-   > first-`##` line numbers in the population section, `70a-`'s `:32` to `:33` and `:47`
-   > to `:50`, this file's remaining citations into `plans/mutations/README.md`, and
-   > `plans/tasks/60-65-67-checks-that-could-not-fail.md`'s `:414` and `:431`.
+   > neither. Criterion 20 is corrected the same way, and criteria 3 and 4 now name the
+   > records they count **by record id**, which is the anchor `CARRIED_STALE_ANCHORS`
+   > already insists on, "keyed by record file and record id and never by a section
+   > heading, an ordinal or a line number", and the one `88-`'s own introduction adopted
+   > after a line number in its prose went stale three times on one branch.
+   >
+   > **A pointer and a measurement are not the same thing, and what was wrong here was the
+   > classification rather than the distinction.** A pointer's job is to resolve for
+   > whoever reads it, so it is written as anchor text. A measurement is a claim about what
+   > a named tree held, so it carries that tree, and anchor text would be **wrong** for it:
+   > the anchor may not exist on that tree, and the claim is about what was there then.
+   > Criteria 3 and 4's line numbers were filed as measurements by convenience. They
+   > evidence present-tense counts, which a verifier checks by opening the record file
+   > today rather than by checking out `0f6e8df`, so by this note's own rule they were
+   > pointers, and they are record ids now.
+   >
+   > **No list of which numbers this task's diff moved is given here, and that is
+   > deliberate.** An earlier version of this note gave one. It was incomplete; two careful
+   > readers of it then produced two different incomplete corrections of it, which is the
+   > evidence that the form is wrong rather than that the list was short. An enumeration
+   > saying which numbers moved has to be **complete** to be true, and this file cites more
+   > line numbers than a hand-assembled inventory of them stays true over. How many it
+   > cites is left as a command rather than written here as a figure that would itself go
+   > stale on the next edit: `grep -coE ':[0-9]+|lines? [0-9]+'` over this file counts the
+   > lines carrying such a token, and the same expression with `-o` and `wc -l` counts the
+   > tokens, a range like ":85 to :107" being two of them. What bounds the reader harm
+   > instead is complete by construction and cannot rot: the Constraints bullet pins
+   > **every** number in this spec to master `0f6e8df`, so a reader is told which tree to
+   > read all of them against without anybody maintaining a list.
 
 4. `57-`, `72-` and `88-` do **not** get the collateral clause, and this is a decision
-   rather than an omission. Measured: `57-`'s one record targets `tests/shell_harness.mjs`
-   (line 32), `72-`'s one record targets `app/app.js` (line 21), and all five of `88-`'s
-   records target `app/app.js` (lines 60, 206, 321, 386, 441). None of those is a file in
+   rather than an omission, and measured by record id for the same reason criterion 3 is:
+   `57-`'s one record, `g1-insertion-does-not-flatten`, targets `tests/shell_harness.mjs`;
+   `72-`'s one record, `j1-a-missing-key-on-the-payload`, targets `app/app.js`; and all
+   five of `88-`'s records target `app/app.js`, those being
+   `j1-a-missing-key-on-the-cached-session-view`, `j1b-the-naive-fix-run-together-with-j1`,
+   `j2-a-rejection-with-no-reason`, `j4-the-catch-throws-while-writing-the-gate-message`
+   and `j3-a-property-the-dom-stub-refuses`. None of those targets is a file in
    `plans/mutations/` and none is `tests/test_suite_integrity.py`, so no collateral arises
    and a clause claiming it would be false.
 
@@ -432,8 +461,13 @@ rather than from a pointer they may not follow. No JSON block changes and no che
     > **Corrected 2026-09-09 during implementation, for issue #96.** "Across the
     > repository" is false for the "after" number, and the correction is the scope rather
     > than the count. Measured on this branch: the grep returns **fifteen** hits
-    > repository-wide, of which **seven** are in this task spec, which quotes the sentence
-    > seven times, and **eight** are outside it. So eight before and eight after holds
+    > repository-wide, of which **seven** are in this task spec, which carries the string
+    > seven times, and **eight** are outside it. Seven is a count of grep hits and not of
+    > quotations, and an earlier version of this note said "quotes the sentence seven
+    > times", which is the right number on the wrong noun in a note whose one job is to
+    > reconcile a count: the file's seven hits include its own title, the grep pattern
+    > twice, and prose that paraphrases the sentence rather than quoting it. So eight
+    > before and eight after holds
     > under one scope only, **outside this task spec**, and that is the scope the
     > population table above already used: its eight rows name no file of task 96. The
     > "before" number is unaffected either way, because this spec did not exist on
