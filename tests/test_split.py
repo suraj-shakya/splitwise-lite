@@ -224,9 +224,19 @@ def test_the_single_extra_cent_is_not_always_the_same_member() -> None:
 
 
 def test_the_allocator_gives_the_leftover_to_the_largest_remainder() -> None:
-    # Exact quotas of 3.33 and 6.67. The leftover cent goes to the larger remainder and
-    # not to the member who sorts first, which is the case the rotation tie-break can
-    # never produce, because that only runs when the remainders are equal.
+    # Exact quotas of 3.33 and 6.67, so the leftover cent goes to bo and not to the
+    # member who sorts first. This is the documented example of the rule, carried over
+    # from the deleted test_split_by_weight_gives_the_leftover_to_the_largest_remainder
+    # and matching the module docstring.
+    #
+    # It is deliberately NOT the check that the rule is a remainder rule, and the
+    # comment here used to claim it was. Corrected 2026-09-09 on the review of issue
+    # #78, which measured it: delete -remainders[index] from _allocate's sort key and
+    # this stays green, because the rotation offset is (10 // 2) % 2 == 1, so the
+    # rotation alone puts bo first and hands it the same cent. Re-run here, that mutant
+    # gives "1 failed, 2 passed" over these three tests, and the one that fails is
+    # test_the_allocator_ranks_three_unequal_remainders_by_size below. That one is the
+    # discriminator; this one is the worked example beside it.
     assert cents_of(split_module._allocate(10, (ALI, BO), [1, 2])) == {ALI: 3, BO: 7}
 
 
@@ -239,6 +249,10 @@ def test_the_allocator_ranks_three_unequal_remainders_by_size() -> None:
     # key gives {ali: 2, bo: 3, cy: 5} here, because the rotation offset is
     # (10 // 3) % 3 == 0; sorting the remainders ascending gives {ali: 2, bo: 2, cy: 6}.
     # Both differ from this, so the assertion bites in both directions.
+    #
+    # Measured on the review of issue #78, and the reason this one carries the weight:
+    # of the three tests in this section, this is the only one the first of those two
+    # mutants reds. The other two stay green under it.
     assert cents_of(split_module._allocate(10, (ALI, BO, CY), [1, 2, 4])) == {
         ALI: 1,
         BO: 3,

@@ -4,6 +4,34 @@
 decided. This document exists to make the decision cheap and to stop the question being
 re-asked a fifth time.
 
+> **Decided 2026-09-09: Branch A, remove.** The Status paragraph above is retracted. It
+> read "the fork below is undecided. Nobody implements either branch until it is
+> decided", and it was true when it was written and false from the moment the fork was
+> answered. The fork was put to the user explicitly, with both branches and their costs
+> as written below; the user chose **Branch A, remove**, on the pm's recommendation. It
+> was implemented on PR #98, which closes issue #78.
+>
+> **This note exists because the alternative was a PR body.** Eight dated correction
+> notes across seven documents point their readers at this file, so this file is the
+> provenance record the whole change rests on, and section 4's closing bullet is explicit
+> that "**The decision is recorded in the repository, not in a PR body**". A reader who
+> arrives here from one of those notes must not be told the question is still open.
+> `plans/spec.md`'s modelling notes carry the **reason**, which is the thing a reader of
+> the product spec needs; this file carries the fact that a costed fork existed and which
+> way it went, which is the thing a reader of the history needs.
+>
+> **Branch B is the road not taken.** Its criteria B1 to B15 are left standing, unedited,
+> because they are the record of what was weighed and deleting them would leave the
+> decision looking uncontested. None of them is a live requirement, none was implemented,
+> and none is to be picked up from this file without a new decision. Section 4, "What is
+> true either way", still describes both branches as live and is left standing for the
+> same reason; every one of its bullets was in fact honoured by Branch A.
+>
+> The Status paragraph's own last clause is the one thing in it that still holds: this
+> document existed to stop the question being re-asked a fifth time, and the answer now
+> lives in three places a reader might start from, which are `plans/spec.md`,
+> `plans/backlog.md` task 3 and this note.
+
 **Measured on:** worktree at `master` `543bd0e`, 2026-09-09. Every count in this file was
 taken with Read, Grep and Glob against that tree. Nothing here is repeated from the issue
 without being re-measured, and where the issue and the tree disagree, the tree is quoted
@@ -374,6 +402,54 @@ was considered and dropped, so the question is not asked a sixth time.
   remainder cents are assigned, and `plans/spec.md:65-69` makes that rule a locked
   modelling decision rather than an implementation detail. Checkable by diffing
   `split.py:195-233` against `543bd0e` and seeing no change.
+
+  > **Resolution, 2026-09-09.** This criterion's region is a **superset of what its own
+  > reason needs**, and honouring it literally shipped a false sentence in source. Both
+  > halves are measured, not argued.
+  >
+  > A6 gives exactly two reasons for byte-identity: the remainder rule is a locked
+  > modelling decision at `plans/spec.md:65-69`, and this line is what keeps two mutation
+  > anchors matching. Neither reason reaches `_allocate`'s **docstring**. Where the two
+  > anchors actually are, measured with `str.count` against `543bd0e`:
+  >
+  > * `g1-weights-sum-to-zero`, `plans/mutations/65-message-pins.md`: its `find` is the
+  >   three-line `raise InvalidSplit(...)` of the weights-sum-to-zero guard, in
+  >   `_allocate`'s **body**, at `543bd0e:split.py:210-212`.
+  > * `restore-the-member-id-and-the-figure`,
+  >   `plans/mutations/61-identifiers-in-4xx-bodies.md`: its `find` is one line in
+  >   `_ordered_from_mapping`, which is **not in `_allocate` at all**. That line is A7's
+  >   subject, not A6's.
+  >
+  > So the docstring lines, `543bd0e:split.py:198-206`, are covered by neither anchor and
+  > carry no arithmetic. Meanwhile line 201 of that docstring read "``split_equally``
+  > reaches it with every weight set to 1, so the two fair-share modes cannot drift
+  > apart", which Branch A makes false: there is one fair-share mode. A6 as written made
+  > that falsehood mandatory, in the docstring of the function a reader of `_allocate`
+  > opens, while **A30 in this same list says a green test with a false comment "is not
+  > acceptable here"**. The two criteria pulled opposite ways over one file.
+  >
+  > **Resolved by narrowing A6 to its stated reason, and the criterion text above is left
+  > standing.** A6 now reads as: `_allocate`'s **signature, guard and largest-remainder
+  > arithmetic** are byte for byte as they were at `543bd0e`; its docstring prose may be
+  > corrected. Measured after the correction, with `str.count` over the file text, which
+  > is the operation both appliers use:
+  >
+  > * `543bd0e:split.py:207-233`, the whole body, guard and sort key and rotation
+  >   included: **1**.
+  > * the signature, `543bd0e:split.py:195-197`: **1**.
+  > * the weights-sum-to-zero guard alone: **1**. The sort key line alone: **1**. The
+  >   `offset = (total_cents // count) % count` line alone: **1**.
+  > * `g1-weights-sum-to-zero`'s `find`: **1**. `restore-the-member-id-and-the-figure`'s
+  >   `find`: **1**.
+  > * the old whole region, `543bd0e:split.py:195-233`: **0**, which is the docstring
+  >   edit and is the only thing that moved.
+  >
+  > `test_every_recorded_anchor_matches_once_or_is_carried` was re-run after the edit and
+  > is **green**, `CARRIED_STALE_ANCHORS` is unchanged and `CARRIED_STALE_TOTAL` is still
+  > 1. Nothing under `plans/mutations/` rots. Found by the reviewer and by QA on PR #98,
+  > both of whom measured the anchor positions independently; QA was right that obeying
+  > A6 literally was a criterion breach and the reviewer was right that no anchor forced
+  > it, and this note is the two findings reconciled rather than either one alone.
 - A7. **`_ordered_from_mapping`'s `raise InvalidSplit(f"every {field} must be zero or
   positive")` line is unchanged, byte for byte**, and the `field` parameter survives even
   though it now has one caller. Same reason as A6, plus: this line is the live anchor of
@@ -575,6 +651,14 @@ was considered and dropped, so the question is not asked a sixth time.
 ---
 
 ## Branch B: keep it, as a deliberate library capability with no product behind it
+
+> **Not taken. Recorded 2026-09-09.** The fork was decided in favour of **Branch A,
+> remove**, and B1 to B15 below were never implemented. They are left standing, unedited,
+> as the record of what was weighed against Branch A, which is what stops the decision
+> reading as uncontested. **Nothing below this line is a live requirement**, and none of
+> it is to be picked up from this file without a new decision and a new issue. See the
+> dated note under **Status** at the top of this document, and `plans/spec.md`'s
+> modelling notes for the reason.
 
 ### Goal
 

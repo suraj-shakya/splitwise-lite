@@ -1590,8 +1590,9 @@ def _require_exact_amount(value: object, currency: money.Currency) -> int:
     It takes no key. The key here is a member id of the current roster, and it went
     straight into a mapped 400 body until issue #61; dropping the parameter rather than
     only the interpolation is what makes that leak impossible to reintroduce without
-    adding an argument, which is a change a reviewer sees. ``_require_weight`` carried
-    the same note until issue #78 deleted it, so this is now the only copy.
+    adding an argument, which is a change a reviewer sees. This is the only surviving
+    copy of that note: the sibling helper that carried it was deleted by issue #78, so
+    it is not duplication and is not to be tidied away as such.
     """
     if not isinstance(value, str):
         raise MalformedRequest(

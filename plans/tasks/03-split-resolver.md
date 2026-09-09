@@ -156,8 +156,32 @@ so a one-cent remainder would always land on the same index.
 > weaker replacement and not an equal one: it pins a private function, so a later change
 > could stop any public caller reaching that branch with nothing going red. Simplifying
 > `_allocate` to match its one remaining caller was ruled out of scope for the same reason
-> the function was left byte-identical: the rule is a locked modelling decision, and two
-> records in `plans/mutations/` anchor into that exact text.
+> its guard and arithmetic were left byte-identical: the rule is a locked modelling
+> decision, and one of the two `plans/mutations/` records that anchor into `split.py`
+> anchors into that exact text. Its docstring prose was corrected, which those anchors do
+> not touch; see the dated resolution under criterion A6 of
+> `plans/tasks/78-split-by-weight-has-no-product-behind-it.md`.
+>
+> **One loss the paragraph above understated, added 2026-09-09 on the review of #78.**
+> Calling the replacement "weaker" was not specific enough about what went.
+> `test_split_by_weight_rejects_a_negative_weight` and the rest of the deleted eleven
+> were fixed cases, but `test_weighted_split_holds_across_random_weights` was a
+> **property**: 2000 randomly generated weight vectors, up to ten members, weights drawn
+> from `{0, 1, 2, 3, 7, 1000}`, asserting for every allocation the integer quota bound
+> `abs(cents * weight_total - total * weight) < weight_total`, which is "every share
+> within one cent of its exact quota" stated in integers. Its replacement is three fixed
+> cases plus a sum loop over one weight vector. **That property is gone, not weakened**,
+> and no test in the suite asserts the quota bound under unequal weights any more. The
+> sum invariant and the equal-split properties are untouched: `split_equally` still has
+> its exhaustive small-domain enumeration and its 2000-case random large-total run.
+>
+> Also measured on that review, and worth having beside the claim it corrects: of the
+> three replacement tests, only `test_the_allocator_ranks_three_unequal_remainders_by_size`
+> reds when `-remainders[index]` is deleted from `_allocate`'s sort key. The other two
+> stay green, because on their input the rotation tie-break happens to reach the same
+> answer. So the discriminating coverage is one test over one input, which is a further
+> reason the replacement is the weaker one and is recorded here rather than only in a PR
+> body.
 
 **Exact split**
 

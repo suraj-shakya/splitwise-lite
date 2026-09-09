@@ -18,16 +18,20 @@ share is ``(total * weight) // weight_total`` with remainder
 ``(total * weight) % weight_total``, and the leftover cents go one each to the largest
 remainders.
 
-``_allocate`` still takes a weight per member and is deliberately left byte for byte as
-issue #78 found it: the rule it implements is a locked modelling decision in
-``plans/spec.md``, not an implementation detail of the mode that used to exercise it.
-Two consequences of that, stated here rather than tidied away. Its own docstring still
-says the two fair-share modes cannot drift apart, which was written when there were two
-and is history rather than a live claim. And its weights-sum-to-zero guard can no longer
-fire, because ``split_equally`` is its only caller and passes ``[1] * n`` over a list
-``_ordered_from_iterable`` has already refused to leave empty, so the weight total is at
-least 1; ``tests/test_error_messages.py`` carries that as an unreachable row with the
-same reason.
+``_allocate`` still takes a weight per member, and its signature, its guard and its
+arithmetic are deliberately left byte for byte as issue #78 found them: the rule it
+implements is a locked modelling decision in ``plans/spec.md``, not an implementation
+detail of the mode that used to exercise it. Its docstring prose was corrected, because
+one sentence of it counted two fair-share modes; the dated resolution under criterion A6
+of ``plans/tasks/78-split-by-weight-has-no-product-behind-it.md`` records why that was
+in scope and the arithmetic was not, and which two mutation records anchor into which
+lines.
+
+One consequence to state rather than tidy away: ``_allocate``'s weights-sum-to-zero
+guard can no longer fire, because ``split_equally`` is its only caller and passes
+``[1] * n`` over a list ``_ordered_from_iterable`` has already refused to leave empty,
+so the weight total is at least 1. ``tests/test_error_messages.py`` carries it as an
+unreachable row with the same reason.
 
 Under an equal split every remainder is identical, so the tie-break decides. It is a
 rotation: members are placed in ascending ``member_id`` order and the walk starts at
@@ -173,8 +177,13 @@ def _allocate(
 ) -> tuple[Allocation, ...]:
     """Allocate ``total_cents`` by weight, largest remainder first, rotating ties.
 
-    The one place the remainder rule is written. ``split_equally`` reaches it with every
-    weight set to 1, so the two fair-share modes cannot drift apart.
+    The one place the remainder rule is written. ``split_equally`` has been its only
+    caller since issue #78 removed the weighted mode, and reaches it with every weight
+    set to 1. It still takes a weight per member, and the arithmetic below is unchanged,
+    because the rule is a locked modelling decision in ``plans/spec.md`` rather than an
+    implementation detail of the caller that used to exercise it. One consequence of
+    having a single caller: the guard below can no longer fire, and the module docstring
+    says why.
 
     ``weights`` is positional-aligned with ``ordered_member_ids``, and both have already
     been validated. The leftover is always smaller than the number of members, because
