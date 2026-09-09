@@ -1,8 +1,8 @@
 """The suite's check on itself.
 
-Four failures in this repo reported success without exercising the thing they named,
-and this module answers them with something that runs: GitHub issues #67, #65, #70
-and #60.
+Five failures in this repo reported success without exercising the thing they named,
+and this module answers them with something that runs: GitHub issues #67, #65, #70,
+#60 and #87.
 
 The duplicate-definition check refuses a test module that binds one name twice at
 module level, because Python rebinds silently and pytest then collects only the last
@@ -33,8 +33,17 @@ author who has not read it, which is the failure mode
 
 The third issue, #60, is answered by a format rather than by a check on behaviour:
 ``plans/mutations/`` holds mutation records an anchor and a replacement at a time, and
-the last two checks here keep those records machine readable so the next person can
-re-run one instead of reconstructing it from a sentence.
+five checks here read that directory as data. Issue #87 is the promise the first three
+of them did not keep. A record can be re-run only while its ``find`` still occurs
+exactly once in the file it names, which is what both appliers assert and what none of
+those three read, so one record's anchor had matched zero times ever since #61
+edited the guard it quotes and the suite was green over it. The fourth check counts
+them and the fifth reads the retirement note in the record whose anchor is declared
+stale, so a record can stop being appliable only in the open: in a declared baseline
+carrying a reason that names the change, and a dated note in the record itself. What
+that buys is narrower than it looks, and the check's own comment says so: a record
+whose anchor matches is proven appliable, never proven correct, because nothing here
+re-runs a mutation or verifies a ``result``.
 
 Standard library and pytest only, and nothing from ``splitwise_lite``, so these checks
 still run on a checkout where the package will not import.
@@ -1522,15 +1531,24 @@ def test_the_unanchored_block_message_says_what_happened() -> None:
 
 # --- The mutation records (#60) --------------------------------------------
 #
-# These two checks read the records as data: that a record parses, that it is complete,
-# and that no section is prose only. They deliberately do NOT re-verify a record's
-# anchor against the live source file. Re-verifying would put every past mutation in
-# the path of every future refactor, which is exactly the ossification #60 warns
-# against, and it would turn a re-runnable record back into a maintenance burden. A
+# These checks read the records as data: that a record parses, that it is complete, and
+# that no section is prose only. The distinction that still holds, unchanged: a
 # committed mutant is re-run every suite, and mutated() in tests/test_shell_behaviour.py
-# is what makes its anchor self-checking; a recorded one is re-runnable on demand. That
-# difference is the whole reason both exist, so do not "improve" these checks into the
-# thing the issue argued against.
+# is what makes its anchor self-checking; a recorded one is re-runnable on demand, and
+# since #87 it is checked to still BE re-runnable rather than assumed to be.
+#
+# Corrected 2026-09-08 for issue #87. This comment used to open "These two checks", when
+# there were three below it, and it went on: "They deliberately do NOT re-verify a
+# record's anchor against the live source file. Re-verifying would put every past
+# mutation in the path of every future refactor, which is exactly the ossification #60
+# warns against, and it would turn a re-runnable record back into a maintenance burden
+# ... so do not 'improve' these checks into the thing the issue argued against." The
+# stale-anchor check at the end of this section does exactly that, so the instruction
+# told the next reader not to build what #87 built. It is quoted here rather than
+# deleted, because a reader who believes it has to see it retired. The ossification worry
+# it carried was right and is answered rather than abandoned: a rotted anchor is declared
+# once, with a reason and a dated note, no repair is demanded of anybody, and the
+# baseline is expected to grow. That argument is set out where the new check lives.
 
 JSON_BLOCK = re.compile(r"^```json\n(.*?)^```", re.MULTILINE | re.DOTALL)
 SECTION = re.compile(r"^## ", re.MULTILINE)
@@ -1934,6 +1952,976 @@ def test_the_stray_node_id_message_says_what_happened() -> None:
     assert "plans/mutations/16-incompleteness-signal.md" in message
 
 
+# --- The stale-anchor check (#87) ------------------------------------------
+#
+# The guarantee is one sentence: a complete record's `find` occurs exactly once in the
+# file its own `file` key names, or that record is declared in CARRIED_STALE_ANCHORS
+# with a reason naming the change that broke it. Nothing else. The three checks above
+# own "a record parses and is complete", "a section records a mutation rather than
+# describing one" and "a node id in prose is one the record lists"; this one owns "a
+# complete record's anchor still matches its target exactly once".
+#
+# Why exactly once, and why `str.count` rather than a regex, a whitespace-normalised
+# comparison or a fuzzy match: exactly once is the precondition of BOTH appliers. The
+# recipe in plans/mutations/README.md asserts `source.count(record['find']) == 1` after
+# reading the target with read_text, and tests/shell_harness.mjs computes
+# `source.split(find).length - 1` and throws a harness error, exit status 2, when an
+# anchor "matched N times ... not exactly once". A looser operation here would make a
+# green run mean something neither applier promises. So this is a check on that
+# precondition and on nothing else. Zero is a finding because the mutation would apply
+# nothing while the run still reported a result, and two or more is a finding because it
+# would apply in two places.
+#
+# What a green run does NOT mean, said here because a green suite is otherwise read as
+# more than it is: no recorded mutation is re-run and no `result` is verified. A record
+# whose anchor matches is proven APPLIABLE, not proven correct. `result` is not
+# consulted at all, so a `survived` or `killed-for-the-wrong-reason` record's anchor is
+# checked on exactly the same terms as a `killed` one.
+#
+# The ossification argument the section above makes is answered rather than abandoned. A
+# correct change to src/ legitimately rots an anchor. #61 was right to take
+# `{list(ordered)}` out of split.py's repeated-member refusal, and that is issue #87's
+# own central point. So this list is expected to GROW, what the check refuses is an
+# UNDECLARED stale anchor, and no repair is demanded of anybody. Unlike #70's baseline
+# above, nothing here says or implies that this list only shrinks.
+#
+# plans/mutations/README.md is not scanned, and that is not arbitrary. record_files()
+# already excludes it, and its single fenced block is the format's illustration whose
+# `file` is the deliberately fictional src/splitwise_lite/example.py, so widening the
+# sweep to it would red the document that defines the format. Somebody will read the
+# exclusion as arbitrary and reach to widen it; this comment is what refuses that, in
+# the manner the SPECIFIES_THE_SCAN comment below does for the #58 scan.
+
+# The sentinel for a target that could not be read at all, so an unreadable target is a
+# finding that can be carried like any other rather than an exception escaping the test.
+# A future refactor that deletes a module must not be blocked with no way to declare the
+# records that pointed at it.
+TARGET_UNREADABLE = -1
+
+# The reason an entry carries has to name the change that rotted the anchor. There is no
+# audit programme here to commit anybody to, so RETIRING_SLICE has no analogue; every
+# change that can rot an anchor has an issue or a pull request number instead.
+BREAKING_CHANGE = re.compile(r"#\d+")
+
+# What the paste-back prints for a record file that has no entry yet. Deliberately
+# unlike NO_REASON_YET above: that one is over MINIMUM_REASON characters and matches its
+# own RETIRING_SLICE on `70b`, so pasting it unedited clears both of #70's reason
+# checks. This carries no `#NN` and no digit at all, so pasting the printed literal
+# unedited leaves test_every_carried_stale_anchor_names_what_broke_it red, and declaring
+# a record stops being the cheapest way to green a fabricated one.
+NO_BREAKING_CHANGE_YET = (
+    "<which change rotted this anchor, and why the record is kept as it stands>"
+)
+
+# The anchors that do not match their target exactly once, declared per record file and
+# keyed by RECORD ID, with the match count beside each.
+#
+# Keyed by id and never by a section heading, a `##` ordinal or a line number. That is
+# measured rather than stylistic: the issue that produced this check swept "all 31
+# records" where the eight record files it swept held 32, because
+# `## 4 and 5. The check itself, in both directions` in
+# plans/mutations/61-identifiers-in-4xx-bodies.md carries two JSON blocks, so a
+# section is not a subject an entry can be bound to. Line numbers churn on every edit
+# above them and an ordinal is bound to its subject only by position, which is how a
+# correct number ended up against the wrong mutation in this repo.
+#
+# Unlike CARRIED_UNANCHORED_BLOCKS this list is EXPECTED TO GROW. A correct change rots
+# an anchor legitimately, so refusing growth would be refusing the change. What the
+# check refuses is an undeclared stale anchor. What holds the list honest is a reviewer
+# reading a diff that includes a bump to a declared integer, plus the dated note
+# test_every_carried_stale_anchor_carries_a_dated_note_in_its_record demands in the
+# record itself, where a reader of the record sees it rather than only a reader of this
+# file. It may also legitimately become empty, and nothing asserts that it is not.
+#
+# ONE REASON PER RECORD FILE, not one per anchor, and that is the shape criterion 12 of
+# plans/tasks/87-a-mutation-records-anchor-matches-zero-times.md specifies. The shape is
+# #84's and the semantics are not: a retiring slice legitimately covers a whole module,
+# while "the change that rotted this anchor" is anchor-specific by construction. So a
+# second declaration in a file that already carries an entry would inherit the first
+# one's reason, and be explained by a change that had nothing to do with it. Found by the
+# reviewer of this branch by rotting g3-not-a-ledger-event's target, pasting the printed
+# literal unedited, bumping the integer and getting a green run in which #61 explained a
+# rot #61 had no part in. unnamed_records below closes it by requiring the one reason to
+# NAME every record it covers, which is the closure that does not demand a lie: one
+# change may legitimately rot several anchors, so counting #NN references would force a
+# second issue number that does not exist, while naming each record binds each claim to
+# its subject.
+CARRIED_STALE_ANCHORS: dict[str, tuple[frozenset[tuple[str, int]], str]] = {
+    "plans/mutations/65-message-pins.md": (
+        frozenset(
+            {
+                ("g2-repeated-member", 0),
+            }
+        ),
+        "g2-repeated-member rotted when #61 took {list(ordered)} out of split.py's "
+        "repeated-member refusal, so the message this record measured cannot be printed "
+        "any more and re-deriving find would attach a 2026-09-07 measurement to a "
+        "different guard",
+    ),
+}
+
+# How many records the entries above carry, declared once, so growing the list is a
+# one-line diff in a place a reviewer reads. Not the sum of the match counts: a count
+# here is 0, or 2 or more, by construction, so a sum would read 0 today while one record
+# in this repo cannot be re-run as written. Produced by the check itself and pasted
+# back; no number here is a hand count.
+CARRIED_STALE_TOTAL = 1
+
+
+class AnchorSweep(NamedTuple):
+    """One record file's anchors, as this check reads them.
+
+    ``counts`` maps a usable record's id to how many times its ``find`` occurs in its
+    target, ``targets`` maps the same ids to the path each was matched against, and
+    ``examined`` is how many records were usable.
+
+    Keying by id depends on ids being unique within a file, which
+    ``mutation_record_problems`` enforces through its ``seen`` set. That enforcement is
+    also why a record it rejects is skipped below rather than guessed at: a duplicate id
+    would silently overwrite an entry here, and one malformed record should produce one
+    failure rather than two.
+    """
+
+    counts: dict[str, int]
+    targets: dict[str, str]
+    examined: int
+
+
+def anchor_match_count(find: str, target: Path) -> int:
+    """How many times ``find`` occurs in ``target``, or ``TARGET_UNREADABLE``.
+
+    Three unreadable cases come back as the sentinel rather than as an exception out of
+    the test: the target does not exist, the target is a directory, and the target does
+    not decode as UTF-8.
+
+    ``read()`` translates newlines, which is what makes a CRLF checkout and an LF
+    checkout produce the same counts and both CI legs agree, and it is byte for byte
+    what the README's recipe does with ``target.read_text(encoding='utf-8')``.
+
+    One residual, recorded beside the counter rather than fixed. The JavaScript harness
+    reads with ``readFileSync(path, 'utf8')``, which does not translate, so on a CRLF
+    checkout a multi-line anchor into app/app.js or app/api.js can satisfy this check
+    and still refuse a harness run. Reading bytes here instead would make every
+    multi-line anchor match zero times on a CRLF checkout and red this whole check on
+    one CI leg, which is worse than the residual.
+    """
+    try:
+        text = read(target)
+    except (OSError, UnicodeDecodeError):
+        return TARGET_UNREADABLE
+    return text.count(find)
+
+
+def sweep_anchors(text: str) -> AnchorSweep:
+    """Every usable record in one record file, with its anchor's match count.
+
+    A record ``mutation_record_problems`` rejects is skipped, so
+    ``test_every_recorded_mutation_is_machine_readable`` stays the owner of that
+    failure and one malformed record produces one failure and not two.
+    """
+    counts: dict[str, int] = {}
+    targets: dict[str, str] = {}
+    seen: set[str] = set()
+    for block in JSON_BLOCK.findall(text):
+        try:
+            record = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if mutation_record_problems(record, seen):
+            continue
+        # Anything that helper accepts is a dict holding all seven keys, with an id, a
+        # file and a find that are non-empty strings, so nothing below guesses. The
+        # assertion is the pairing stated in code: if that stops holding, this reports
+        # it rather than reading a key off something that has none.
+        assert isinstance(record, dict)
+        identifier = record["id"]
+        seen.add(identifier)
+        targets[identifier] = record["file"]
+        counts[identifier] = anchor_match_count(record["find"], REPO / record["file"])
+    return AnchorSweep(counts, targets, len(counts))
+
+
+def stale_pairs(counts: dict[str, int]) -> set[tuple[str, int]]:
+    """The ``(record id, match count)`` pairs whose anchors do not match exactly once."""
+    return {
+        (identifier, count) for identifier, count in counts.items() if count != 1
+    }
+
+
+def unnamed_records(carried: frozenset[tuple[str, int]], reason: str) -> list[str]:
+    """Carried record ids that this file's one reason string does not name.
+
+    There is one reason per record file, which is the shape criterion 12 of
+    plans/tasks/87-a-mutation-records-anchor-matches-zero-times.md specifies. The shape
+    is #84's and the semantics are not: a retiring slice legitimately covers a whole
+    module, while "the change that rotted this anchor" is anchor-specific by
+    construction. So without this a second declaration inherits the first one's reason
+    and is explained by a change that had nothing to do with it.
+
+    Naming each record is the closure that does not demand a lie. One change may
+    legitimately rot several anchors at once, so requiring a distinct ``#NN`` per pair
+    would force a second issue number that does not exist; requiring the one reason to
+    name each record binds every claim to its subject instead, which is what this repo
+    asks wherever a claim would otherwise be bound to a list by position.
+    """
+    return sorted(identifier for identifier, _ in carried if identifier not in reason)
+
+
+def spelled_stale(pairs: set[tuple[str, int]], targets: dict[str, str]) -> str:
+    """One line per stale anchor, ordered, naming its target and its count."""
+    lines = []
+    for identifier, count in sorted(pairs):
+        target = targets.get(identifier, "the file its record names")
+        if count == TARGET_UNREADABLE:
+            lines.append(
+                f"    {identifier}: {target} could not be read at all, so the anchor "
+                "cannot be counted"
+            )
+        else:
+            lines.append(f"    {identifier}: its find occurs {count} times in {target}")
+    return "\n".join(lines)
+
+
+def spelled_resolved(pairs: set[tuple[str, int]], counts: dict[str, int]) -> str:
+    """One line per carried entry the file no longer agrees with, and which of three.
+
+    The fix differs by case, so the message says which case it is rather than leaving a
+    reader to diff the pair against the file by hand.
+    """
+    lines = []
+    for identifier, count in sorted(pairs):
+        now = counts.get(identifier)
+        if now is None:
+            lines.append(
+                f"    {identifier}: no usable record in this file has that id any "
+                "more, so delete the entry"
+            )
+        elif now == 1:
+            lines.append(
+                f"    {identifier}: its anchor matches exactly once now, so delete "
+                "the entry"
+            )
+        else:
+            lines.append(
+                f"    {identifier}: the match count has changed from {count} to "
+                f"{now}, so update the pair rather than deleting it"
+            )
+    return "\n".join(lines)
+
+
+def stale_anchor_entry_literal(
+    where: str, pairs: set[tuple[str, int]], reason: str
+) -> str:
+    """The CARRIED_STALE_ANCHORS entry for ``where``, ready to paste back.
+
+    The reason is one string for the whole entry, so when the entry grows the printed
+    reason is the one the new pair would inherit. Rather than print that silently, the
+    literal carries a comment naming the records it does not cover, at the line the edit
+    has to happen on. Pasting it unedited is then still red, on
+    ``test_every_carried_stale_anchor_names_what_broke_it``, and the reader is told why
+    in the text they just pasted.
+    """
+    if not pairs:
+        return (
+            f'    (delete the "{where}" entry: every anchor in that file matches '
+            "exactly once now)"
+        )
+    spelled = "\n".join(
+        f'                ("{identifier}", {count}),'
+        for identifier, count in sorted(pairs)
+    )
+    missing = unnamed_records(frozenset(pairs), reason)
+    marker = (
+        f"        # EXTEND THIS REASON: it does not name {', '.join(missing)}, and one\n"
+        "        # reason covers every record in this entry. Say what rotted each.\n"
+        if missing
+        else ""
+    )
+    return (
+        f'    "{where}": (\n'
+        "        frozenset(\n"
+        "            {\n"
+        f"{spelled}\n"
+        "            }\n"
+        "        ),\n"
+        f"{marker}"
+        f'        "{reason}",\n'
+        "    ),"
+    )
+
+
+def computed_stale_total() -> int:
+    """What CARRIED_STALE_TOTAL would read if every stale anchor found were carried."""
+    return sum(
+        len(stale_pairs(sweep_anchors(read(path)).counts)) for path in record_files()
+    )
+
+
+def stale_anchor_message(
+    where: str,
+    undeclared: set[tuple[str, int]],
+    resolved: set[tuple[str, int]],
+    targets: dict[str, str],
+    counts: dict[str, int],
+    literal: str,
+    total: int,
+) -> str:
+    """What the check says when a record file's anchors and its entry disagree.
+
+    Following ``carried_baseline_message`` above and ``stale_digest_message`` in
+    tests/test_web_shell.py, which is how this repo maintains a constant the suite
+    computes: the message ends with the exact text to paste back, labelled with the
+    direction it is for, so nobody counts anything by hand and nobody reads the
+    paste-back as the answer to the direction it is not the answer to.
+    """
+    parts = [
+        f"{where}: the anchors this file records and the entry CARRIED_STALE_ANCHORS "
+        "holds for it have gone out of step."
+    ]
+    if undeclared:
+        parts.append(
+            "These anchors do not match their target exactly once, and nothing "
+            f"declares them:\n{spelled_stale(undeclared, targets)}\n"
+            "\n"
+            "Exactly once is the precondition of both appliers rather than a nicety of "
+            "this check: the recipe in plans/mutations/README.md asserts "
+            "source.count(record['find']) == 1, and tests/shell_harness.mjs throws a "
+            "harness error when an anchor matched N times and not exactly once. So a "
+            "record listed above cannot be applied as written, which is the whole of "
+            "what a record promises.\n"
+            "\n"
+            "This check cannot tell two cases apart, and it says so because the answer "
+            "differs. An anchor that matched once when the record was taken and has "
+            "ROTTED since, which is what a declaration is for. And an anchor that "
+            "NEVER matched, which means the mutation was never applied as written and "
+            "the record is a measurement of nothing. Nothing here distinguishes them, "
+            "so open the record and its target before deciding, and do not declare an "
+            "anchor you have not opened.\n"
+            "\n"
+            "Two answers are real:\n"
+            "\n"
+            "1. Re-run the mutation against today's tree and write a NEW record with a "
+            "new id. Editing find until it matches today's source leaves the recorded "
+            "message, result and node ids beside an anchor they were never measured "
+            "against, which is a correct measurement attached to the wrong subject.\n"
+            "\n"
+            "2. Declare it in CARRIED_STALE_ANCHORS with a reason naming the change "
+            f"that broke it: at least {MINIMUM_REASON} characters and carrying a #NN. "
+            "Then put a dated note in the record's own section, which "
+            "test_every_carried_stale_anchor_carries_a_dated_note_in_its_record "
+            "requires, so a reader of the record sees it too.\n"
+            "\n"
+            "THE REASON IS ONE STRING PER RECORD FILE, not one per anchor, so if this "
+            "file already carries an entry, the reason below is the one the new pair "
+            "inherits and it was written about a different change. Extend it: "
+            "test_every_carried_stale_anchor_names_what_broke_it requires the reason to "
+            "name every record id in the entry, so pasting the literal unedited leaves "
+            "the new pair unnamed and stays red. That is measured rather than assumed. "
+            "Before it was added, pasting the printed entry for a second rot went green "
+            "with the first entry's #NN standing as the explanation for it."
+        )
+    if resolved:
+        parts.append(
+            "These are declared stale and this file no longer agrees, so the entry has "
+            f"outlived its subject:\n{spelled_resolved(resolved, counts)}\n"
+            "\n"
+            "That is the direction that stops this baseline becoming an allowlist "
+            "nobody retires."
+        )
+    # The literal is printed in both directions, because a computed constant's failure
+    # ends with the text to paste back and that is how this repo maintains one. But a
+    # failure's last line is what people act on, and in the undeclared direction the
+    # paste-back is the anti-instruction: it carries the rot instead of reporting it. So
+    # it is labelled rather than withheld, which keeps it available for the retirement
+    # direction in a failure that reports both.
+    handed = (
+        "Paste this in place of this file's entry in CARRIED_STALE_ANCHORS:"
+        if not undeclared
+        else (
+            "Below is that entry as it would now read. It is here for the retirement "
+            "direction, and it is NOT the answer to an undeclared stale anchor: "
+            "pasting it carries the rot instead of reporting it. The reason it prints "
+            "for a file with no entry yet carries no #NN either, so pasting it "
+            "unedited stays red. Use one of the two answers above."
+        )
+    )
+    parts.append(
+        f"{handed}\n"
+        "\n"
+        f"{literal}\n"
+        "\n"
+        "and set:\n"
+        "\n"
+        f"    CARRIED_STALE_TOTAL = {total}"
+    )
+    return "\n\n".join(parts)
+
+
+def stale_anchor_failure(
+    where: str,
+    sweep: AnchorSweep,
+    baseline: dict[str, tuple[frozenset[tuple[str, int]], str]],
+) -> str | None:
+    """The failure for one record file, or ``None`` when it and ``baseline`` agree.
+
+    Set equality per file in both directions, so an undeclared stale anchor reds and a
+    declared entry that has outlived its subject reds and names itself. The baseline is
+    a parameter rather than read from the module, so the self-tests below drive both
+    directions against a synthetic one instead of asserting about set arithmetic they
+    performed themselves.
+    """
+    found = stale_pairs(sweep.counts)
+    carried, reason = baseline.get(where, (frozenset(), NO_BREAKING_CHANGE_YET))
+    if found == set(carried):
+        return None
+    return stale_anchor_message(
+        where,
+        found - set(carried),
+        set(carried) - found,
+        sweep.targets,
+        sweep.counts,
+        stale_anchor_entry_literal(where, found, reason),
+        computed_stale_total(),
+    )
+
+
+def test_every_recorded_anchor_matches_once_or_is_carried() -> None:
+    """Every record's find matches its target exactly once, or is declared stale.
+
+    One test iterating the directory rather than one parametrised per record file, like
+    the three checks above it: ``record_files()`` asserts on an empty directory, and an
+    assertion evaluated at collection time is a collection error rather than a failing
+    test. A module-level, assertion-free second glob of the same directory would be two
+    sources of truth for one population.
+    """
+    failures: list[str] = []
+    examined = 0
+    for path in record_files():
+        where = posix(path)
+        sweep = sweep_anchors(read(path))
+        examined += sweep.examined
+        failure = stale_anchor_failure(where, sweep, CARRIED_STALE_ANCHORS)
+        if failure is not None:
+            failures.append(failure)
+    assert examined, (
+        "this check examined no usable mutation record, so it would have reported "
+        "success over nothing. A green run over zero records is the shape of defect "
+        "this module exists to refuse: JSON_BLOCK could have stopped matching a fenced "
+        "block, or every record in the directory could have become malformed, and this "
+        "check would say nothing while claiming every anchor in the repo is appliable."
+    )
+    assert not failures, "\n\n".join(failures)
+
+
+def section_holding_record(text: str, identifier: str) -> tuple[str, str] | None:
+    """The ``##`` section whose record carries ``identifier``, as heading and text."""
+    for heading, section in record_sections(text):
+        for block in JSON_BLOCK.findall(section):
+            try:
+                record = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict) and record.get("id") == identifier:
+                return heading, section
+    return None
+
+
+def dated_note(section: str) -> list[str]:
+    """The first blockquote run in ``section`` that carries a date, or nothing.
+
+    ``blockquote_run`` and ``DATED_NOTE`` are reused rather than re-derived, so this
+    recognises exactly the correction-note shape the #58 scan below already exempts and
+    a change to either moves both. Both are defined further down this module than this
+    line and are resolved when this body runs, so nothing needs moving.
+    """
+    lines = section.splitlines()
+    for index in range(len(lines)):
+        run = blockquote_run(lines, index)
+        if run and DATED_NOTE.search("\n".join(run)):
+            return run
+    return []
+
+
+def dated_note_problems(section: str, identifier: str) -> list[str]:
+    """Everything wrong with ``identifier``'s retirement note in ``section``.
+
+    The note's shape alone is not enough, and that is measured rather than argued. QA of
+    this branch replaced the whole of ``g2-repeated-member``'s note with
+    ``> Note, 2026-09-08. Nothing in particular.`` and the module stayed green, so the
+    five things criterion 24 of this task's spec asks of that note were held by review
+    only, which is the defect class this module exists to refuse.
+
+    A date inside a blockquote run is still what recognises a note, which is criterion
+    20 unchanged. What is added is the pair that can be checked without demanding prose
+    nobody can measure: the note has to name the record it retires, so the claim is bound
+    to its subject rather than to its position in a file, and it has to name a change
+    with a ``#NN``, which is the same floor CARRIED_STALE_ANCHORS' reason carries. The
+    other three things criterion 24 asks for stay review's job, and saying which are
+    enforced and which are not is the point of listing them here.
+    """
+    run = dated_note(section)
+    if not run:
+        return ["it carries no dated blockquote note at all"]
+    text = "\n".join(run)
+    problems: list[str] = []
+    if identifier not in text:
+        problems.append(f"its dated note does not name {identifier}")
+    if not BREAKING_CHANGE.search(text):
+        problems.append("its dated note names no change, so it carries no #NN")
+    return problems
+
+
+def test_every_carried_stale_anchor_carries_a_dated_note_in_its_record() -> None:
+    """A carried record says so where a reader of the record will see it.
+
+    Not only in a constant in this file. A record that cannot be applied as written
+    while reading as though it can is the whole of issue #87, and the person that
+    misleads is a reader of the record, who has no reason to open this module.
+    """
+    failures: list[str] = []
+    for where, (carried, _) in sorted(CARRIED_STALE_ANCHORS.items()):
+        path = REPO / where
+        if not path.is_file():
+            failures.append(
+                f"{where} is carried in CARRIED_STALE_ANCHORS and is not a file in "
+                "this checkout, so that entry has outlived the record file itself."
+            )
+            continue
+        text = read(path)
+        for identifier, _count in sorted(carried):
+            held = section_holding_record(text, identifier)
+            if held is None:
+                failures.append(
+                    f"{where} carries {identifier} in CARRIED_STALE_ANCHORS and holds "
+                    "no record with that id, so there is no section to put the note in."
+                )
+                continue
+            heading, section = held
+            problems = dated_note_problems(section, identifier)
+            if problems:
+                listed = "\n".join(f"    {problem}" for problem in problems)
+                failures.append(
+                    f"{where} section {heading!r} holds {identifier}, whose anchor is "
+                    f"declared stale, and its retirement note is not usable:\n{listed}\n"
+                    "\n"
+                    "Put the retirement in the record, as a dated blockquote naming the "
+                    "record, the change that rotted its anchor with a #NN, what the "
+                    "target says today, and that repair means re-running the mutation "
+                    "and writing a new record rather than editing this one. A "
+                    "declaration only a reader of tests/test_suite_integrity.py sees "
+                    "leaves the record reading as re-runnable. A dated line with nothing "
+                    "in it does the same: that was measured on this branch, so the date "
+                    "is what recognises the note and is not the whole of it."
+                )
+    assert not failures, "\n\n".join(failures)
+
+
+# Every shape the sweep must find and every near miss it must not, in the shape of
+# test_the_pin_check_still_bites and test_the_node_id_check_still_bites above.
+#
+# The anchors below are matched against real files in this checkout, because the match
+# count is the whole subject and a synthetic target would make every case here hold by
+# construction. pyproject.toml is the target for the healthy and the never-matched
+# cases: it is small, it is not a record file, and this task does not edit it.
+ANCHOR_MATCHING_ONCE = """\
+## A healthy anchor
+
+```json
+{
+  "id": "s-once",
+  "file": "pyproject.toml",
+  "find": "name = \\"splitwise-lite\\"",
+  "replace": "name = \\"something-else\\"",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
+ANCHOR_MATCHING_ZERO = """\
+## An anchor that matches nothing
+
+```json
+{
+  "id": "s-zero",
+  "file": "pyproject.toml",
+  "find": "name = \\"a project this repo has never held\\"",
+  "replace": "name = \\"nor this one\\"",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
+# The anchor here is the text measured to occur TWICE in that record file: on 2026-09-08
+# at line 36, inside a JSON `find`, and at line 50, in the prose quoting the message that
+# guard actually prints. That is the anchor-into-a-record-file trap, recorded in
+# plans/mutations/87-stale-anchor-check.md: a plain sentence is not a unique anchor in a
+# file that quotes its own message text, and an anchor into one has to carry enough of
+# the JSON escaping to sit only inside the block.
+ANCHOR_MATCHING_TWICE = """\
+## An anchor that matches twice
+
+```json
+{
+  "id": "s-twice",
+  "file": "plans/mutations/65-message-pins.md",
+  "find": "weights sum to zero, so there is no share to divide the total into",
+  "replace": "weights sum to nothing at all",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
+ANCHOR_INTO_A_DELETED_FILE = """\
+## An anchor into a module a refactor deleted
+
+```json
+{
+  "id": "s-gone",
+  "file": "src/splitwise_lite/deleted_by_a_later_refactor.py",
+  "find": "raise InvalidSplit",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
+ANCHOR_INTO_A_DIRECTORY = """\
+## An anchor into a directory
+
+```json
+{
+  "id": "s-directory",
+  "file": "src/splitwise_lite",
+  "find": "raise InvalidSplit",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
+# The third unreadable case, with a live subject rather than review only. Found by QA of
+# this branch: dropping UnicodeDecodeError from anchor_match_count's except clause left
+# this module green, because the missing-file and directory cases both raise OSError and
+# nothing else exercised the other class. app/icons/icon-192.png is 2106 bytes of real
+# committed PNG, generated by scripts/make_icons.py, and this task touches nothing under
+# app/, so it is a stable target that will not become text.
+ANCHOR_INTO_A_FILE_THAT_IS_NOT_TEXT = """\
+## An anchor into a file that is not UTF-8 text
+
+```json
+{
+  "id": "s-not-text",
+  "file": "app/icons/icon-192.png",
+  "find": "raise InvalidSplit",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+"""
+
+# Missing `result`, so mutation_record_problems rejects it. Its anchor would be a
+# finding if it were swept, which is what makes the skip visible rather than vacuous.
+RECORD_TOO_BROKEN_TO_SWEEP = """\
+## A record missing a key
+
+```json
+{
+  "id": "s-broken",
+  "file": "pyproject.toml",
+  "find": "name = \\"a project this repo has never held\\"",
+  "replace": "name = \\"nor this one\\"",
+  "kills": [],
+  "survives": []
+}
+```
+"""
+
+SYNTHETIC_RECORD_FILE = "plans/mutations/synthetic.md"
+
+
+def test_the_stale_anchor_check_still_bites() -> None:
+    """Proof the sweep finds what it must and leaves alone what it must not.
+
+    Every record in this repo's directory matches its target exactly once except one,
+    so without these cases the check would be nearly green over the whole population
+    whatever it did, and the two-or-more branch would never be exercised at all.
+    """
+    # a. An anchor matching exactly once in a real file is not a finding.
+    once = sweep_anchors(ANCHOR_MATCHING_ONCE)
+    assert once.counts == {"s-once": 1}
+    assert once.examined == 1
+    assert stale_pairs(once.counts) == set()
+    # b. Zero times is a finding, and it names the file, the id and the count.
+    zero = sweep_anchors(ANCHOR_MATCHING_ZERO)
+    assert stale_pairs(zero.counts) == {("s-zero", 0)}
+    undeclared = stale_anchor_failure(SYNTHETIC_RECORD_FILE, zero, {})
+    assert undeclared is not None
+    assert SYNTHETIC_RECORD_FILE in undeclared
+    assert "s-zero" in undeclared
+    assert "occurs 0 times in pyproject.toml" in undeclared
+    # c. Twice is a finding too, and this is the case that distinguishes "exactly once"
+    #    from "at least once". Weaken the comparison in stale_pairs to `< 1` and this
+    #    is the assertion that reds; that mutation is recorded as
+    #    s4-exactly-once-weakened-to-at-least-once in
+    #    plans/mutations/87-stale-anchor-check.md.
+    twice = sweep_anchors(ANCHOR_MATCHING_TWICE)
+    assert stale_pairs(twice.counts) == {("s-twice", 2)}
+    # d. A target that does not exist is a finding carrying TARGET_UNREADABLE, not an
+    #    exception escaping out of read().
+    gone = sweep_anchors(ANCHOR_INTO_A_DELETED_FILE)
+    assert stale_pairs(gone.counts) == {("s-gone", TARGET_UNREADABLE)}
+    # e. A target that is a directory is the same. This case shares the one `except`
+    #    clause with (d) rather than adding a branch of its own, so it cannot fail
+    #    while (d) passes under any mutation of the implementation as it stands. It is
+    #    here for what it guards against instead: a rewrite reaching for
+    #    `Path.is_file()` or `Path.exists()` in place of catching OSError would pass
+    #    (d) and raise PermissionError on Windows or IsADirectoryError on Linux here.
+    directory = sweep_anchors(ANCHOR_INTO_A_DIRECTORY)
+    assert stale_pairs(directory.counts) == {("s-directory", TARGET_UNREADABLE)}
+    #    And the third unreadable case, a target that is real but is not UTF-8 text.
+    #    This one does NOT share (d)'s and (e)'s branch: those raise OSError and this
+    #    raises UnicodeDecodeError, so dropping that class from the except clause reds
+    #    here and nowhere else in the suite. It was added because QA measured exactly
+    #    that gap on this branch, and it is recorded as
+    #    s5-the-undecodable-target-uncaught in plans/mutations/87-stale-anchor-check.md.
+    not_text = sweep_anchors(ANCHOR_INTO_A_FILE_THAT_IS_NOT_TEXT)
+    assert stale_pairs(not_text.counts) == {("s-not-text", TARGET_UNREADABLE)}
+    # f. A record mutation_record_problems rejects yields no stale-anchor finding, and
+    #    the pairing is proved rather than claimed: the same synthetic yields a problem
+    #    from that helper, so one malformed record produces one failure and not two and
+    #    this check's silence is not silence all round.
+    broken = sweep_anchors(RECORD_TOO_BROKEN_TO_SWEEP)
+    assert broken.counts == {}
+    assert broken.examined == 0
+    assert stale_anchor_failure(SYNTHETIC_RECORD_FILE, broken, {}) is None
+    block = JSON_BLOCK.findall(RECORD_TOO_BROKEN_TO_SWEEP)[0]
+    assert mutation_record_problems(json.loads(block), set()) == ["missing keys: result"]
+    # g. A carried pair equal to the found pair is not a failure, in either direction.
+    declared = {
+        SYNTHETIC_RECORD_FILE: (
+            frozenset({("s-zero", 0)}),
+            "declared for #87 while the synthetic record stands",
+        )
+    }
+    assert stale_anchor_failure(SYNTHETIC_RECORD_FILE, zero, declared) is None
+    # h. A carried pair whose count no longer agrees is a failure, and it says the
+    #    count changed rather than that the anchor is fine.
+    disagreeing = {
+        SYNTHETIC_RECORD_FILE: (
+            frozenset({("s-zero", 2)}),
+            "declared for #87 with a count that has since moved",
+        )
+    }
+    moved = stale_anchor_failure(SYNTHETIC_RECORD_FILE, zero, disagreeing)
+    assert moved is not None
+    assert "changed from 2 to 0" in moved
+    # i. A file with no carried entry and no stale anchor is not a failure, which is
+    #    the empty-baseline case: nothing asserts this baseline is non-empty, so the
+    #    day somebody repairs the last entry the mechanism still works.
+    assert stale_anchor_failure(SYNTHETIC_RECORD_FILE, once, {}) is None
+
+
+def test_the_stale_anchor_message_says_what_happened() -> None:
+    """The message names the record, the target, the count, and what to do about it.
+
+    Following ``stale_digest_message`` in tests/test_web_shell.py and
+    ``carried_baseline_message`` above. The message is the entire product of a check
+    that fires, so it gets a test of its own rather than being read once by its author
+    and left to rot behind a green suite.
+    """
+    message = stale_anchor_message(
+        "plans/mutations/65-pretend.md",
+        {("g9-pretend", 0)},
+        set(),
+        {"g9-pretend": "src/splitwise_lite/pretend.py"},
+        {"g9-pretend": 0},
+        '    "plans/mutations/65-pretend.md": (...),',
+        4,
+    )
+    # The record and the target, so nobody has to open two files to find out which.
+    assert "plans/mutations/65-pretend.md" in message
+    assert "g9-pretend" in message
+    assert "src/splitwise_lite/pretend.py" in message
+    assert "occurs 0 times" in message
+    # Why exactly once, named in both appliers so the reader can check the claim.
+    assert "source.count(record['find']) == 1" in message
+    assert "plans/mutations/README.md" in message
+    assert "tests/shell_harness.mjs" in message
+    assert "not exactly once" in message
+    # The distinction this check cannot make, said plainly. Without it the cheapest way
+    # to green a fabricated record is to declare it, which is the "cheapest resolution
+    # is a lie" failure stray_node_id_message above was rewritten to avoid.
+    assert "cannot tell two cases apart" in message
+    assert "ROTTED" in message
+    assert "NEVER matched" in message
+    # The two answers that are real, and the wrong one named as wrong.
+    assert "write a NEW record with a new id" in message
+    assert "reason naming the change that broke it" in message
+    assert "correct measurement attached to the wrong subject" in message
+    # That the reason is one string per record file, said where the reader is about to
+    # paste an entry that already carries one written about a different change.
+    assert "ONE STRING PER RECORD FILE" in message
+    assert "name every record id in the entry" in message
+    # And the labelled paste-back, which in this direction is the anti-instruction.
+    assert "NOT the answer to an undeclared stale anchor" in message
+    assert "carries the rot instead of reporting it" in message
+    assert message.rstrip().endswith("CARRIED_STALE_TOTAL = 4")
+    # The stale direction says which of three things happened, because the fix differs,
+    # and its paste-back is the answer rather than the anti-instruction.
+    resolved = stale_anchor_message(
+        "plans/mutations/65-pretend.md",
+        set(),
+        {("g9-pretend", 0), ("g8-pretend", 2), ("g7-pretend", 0)},
+        {},
+        {"g9-pretend": 1, "g8-pretend": 5},
+        '    (delete the "plans/mutations/65-pretend.md" entry)',
+        3,
+    )
+    assert "matches exactly once now, so delete the entry" in resolved
+    assert "changed from 2 to 5" in resolved
+    assert "no usable record in this file has that id" in resolved
+    assert "outlived its subject" in resolved
+    assert "Paste this in place of" in resolved
+    assert "NOT the answer" not in resolved
+    assert resolved.rstrip().endswith("CARRIED_STALE_TOTAL = 3")
+
+
+# One section per shape the retirement note has to have, so the note check has positive
+# controls of its own rather than only the live g2-repeated-member subject. The live
+# subject proves the note's ABSENCE reds; these prove its CONTENT does.
+NOTE_THAT_RETIRES = """\
+## A retired record
+
+```json
+{
+  "id": "g9-pretend",
+  "file": "src/splitwise_lite/example.py",
+  "find": "raise X",
+  "replace": "pass",
+  "kills": ["tests/test_example.py::test_one"],
+  "survives": ["tests/test_example.py::test_two"],
+  "result": "killed"
+}
+```
+
+> **Retired 2026-09-09 for issue #87.** g9-pretend's anchor no longer matches, because
+> #61 edited the guard it quotes.
+"""
+
+NOTE_WITH_NO_DATE = NOTE_THAT_RETIRES.replace("2026-09-09 ", "")
+NOTE_THAT_NAMES_NO_RECORD = NOTE_THAT_RETIRES.replace("g9-pretend's", "This record's")
+NOTE_THAT_NAMES_NO_CHANGE = NOTE_THAT_RETIRES.replace(
+    "for issue #87", "on review"
+).replace("#61", "a later change")
+# The exact shape QA greened this check with before the content requirements existed.
+NOTE_THAT_SAYS_NOTHING = (
+    NOTE_THAT_RETIRES.split("> **Retired")[0]
+    + "> Note, 2026-09-09. Nothing in particular.\n"
+)
+
+
+def test_the_dated_note_check_reads_the_note_and_not_only_its_shape() -> None:
+    """Proof that the retirement note has to say something, measured by QA first.
+
+    Before the content requirements, replacing g2-repeated-member's whole note with a
+    bare dated line left this module green, so the five things criterion 24 of this
+    task's spec asks of that note were held by review alone. The live subject still
+    covers absence; these five synthetics cover what the note has to carry.
+    """
+    _, section = section_holding_record(NOTE_THAT_RETIRES, "g9-pretend") or ("", "")
+    # a. A note that dates itself, names the record and names the change is accepted.
+    assert dated_note_problems(section, "g9-pretend") == []
+    # b. No date at all is no note, which is criterion 20's original requirement and
+    #    the one the live g2 subject already exercises by deletion.
+    assert dated_note_problems(NOTE_WITH_NO_DATE, "g9-pretend") == [
+        "it carries no dated blockquote note at all"
+    ]
+    # c. A dated note that does not name the record it retires. This is the one that
+    #    matters when a file carries several records: a note bound to its subject only
+    #    by which section it sits in is the shape this repo keeps finding wrong.
+    assert dated_note_problems(NOTE_THAT_NAMES_NO_RECORD, "g9-pretend") == [
+        "its dated note does not name g9-pretend"
+    ]
+    # d. A dated note that names no change carries no #NN, the same floor the entry's
+    #    reason carries.
+    assert dated_note_problems(NOTE_THAT_NAMES_NO_CHANGE, "g9-pretend") == [
+        "its dated note names no change, so it carries no #NN"
+    ]
+    # e. And the bare dated line QA greened the old check with is now two findings.
+    assert dated_note_problems(NOTE_THAT_SAYS_NOTHING, "g9-pretend") == [
+        "its dated note does not name g9-pretend",
+        "its dated note names no change, so it carries no #NN",
+    ]
+
+
+def test_the_carried_stale_total_is_the_number_of_carried_records() -> None:
+    """One declared integer, so growing the baseline is a diff a reviewer reads.
+
+    The number of carried records, and not the sum of the match counts. A match count
+    here is 0, or 2 or more, by construction, so a sum would read 0 today while one
+    record in this repo cannot be re-run as written.
+    """
+    counted = sum(len(carried) for carried, _ in CARRIED_STALE_ANCHORS.values())
+    assert CARRIED_STALE_TOTAL == counted, (
+        f"CARRIED_STALE_TOTAL says {CARRIED_STALE_TOTAL} and the entries hold "
+        f"{counted} records. The entries are the subject; set CARRIED_STALE_TOTAL to "
+        "how many records they hold."
+    )
+
+
+def test_every_carried_stale_anchor_names_what_broke_it() -> None:
+    """No entry is added with a reason that names no change, or no record.
+
+    Three assertions, and the third is the one a growing entry needs. There is one
+    reason slot per record file, so without it the second declaration in a file that
+    already carries an entry is explained by the first entry's change. That is not
+    hypothetical: it was measured on this branch.
+    """
+    for where, (carried, reason) in sorted(CARRIED_STALE_ANCHORS.items()):
+        assert len(reason) >= MINIMUM_REASON, f"{where}: {reason!r} is not a reason"
+        assert BREAKING_CHANGE.search(reason), (
+            f"{where}: {reason!r} names no change. An anchor rots because something "
+            "changed, and naming that something is what separates a declaration from "
+            "an allowlist entry."
+        )
+        missing = unnamed_records(carried, reason)
+        assert not missing, (
+            f"{where}: this file's entry carries one reason for every record in it, and "
+            f"that reason does not name {', '.join(missing)}. A second declaration in a "
+            "file that already has an entry otherwise inherits the first one's reason "
+            "and is explained by a change that had nothing to do with it, which was "
+            "measured on this branch by pasting the printed literal unedited. Extend "
+            "the reason so it names each record and the change that rotted it. One "
+            "change may legitimately rot several anchors, so nothing here asks for a "
+            "second issue number; it asks for each claim to name its subject."
+        )
+
+
+def test_the_placeholder_reason_does_not_satisfy_the_reason_check() -> None:
+    """Pasting the printed literal unedited does not clear the reason check.
+
+    The deliberate divergence from NO_REASON_YET above, which is over MINIMUM_REASON
+    characters and matches its own RETIRING_SLICE on `70b`, so pasting that one
+    unedited clears both of #70's reason checks. Here the cheapest green must not be a
+    declaration nobody wrote a reason for.
+    """
+    assert len(NO_BREAKING_CHANGE_YET) >= MINIMUM_REASON
+    assert BREAKING_CHANGE.search(NO_BREAKING_CHANGE_YET) is None
+    assert not any(character.isdigit() for character in NO_BREAKING_CHANGE_YET)
+
+
 # --- The measurement that could not fail, refused in the documents (#58) ---
 
 # What is scanned: every Markdown document under plans/, plus README.md and CLAUDE.md.
@@ -2168,6 +3156,9 @@ ENFORCING_SYMBOLS = (
     "test_every_message_block_is_anchored_or_carried",
     "CARRIED_UNANCHORED_BLOCKS",
     "CARRIED_TOTAL",
+    "test_every_recorded_anchor_matches_once_or_is_carried",
+    "CARRIED_STALE_ANCHORS",
+    "CARRIED_STALE_TOTAL",
 )
 
 # Entries naming a path, resolved against the filesystem for the same reason.

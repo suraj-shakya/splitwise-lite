@@ -121,6 +121,46 @@ exercising what it named.
   produced a different mutation and a different result, killing one scenario where QA
   had recorded two. Records go in `plans/mutations/`; `plans/mutations/README.md` says
   when one earns a committed mutant instead.
+
+  **An anchor matches its target exactly once, and that is now checked rather than
+  assumed.** Exactly once is the precondition of both appliers: the README's recipe
+  asserts `source.count(record['find']) == 1`, and `tests/shell_harness.mjs` throws a
+  harness error when an anchor matched anything else. Zero matches mutates nothing while
+  the run still reports a result, and two matches mutates two places, so both are
+  refused. `test_every_recorded_anchor_matches_once_or_is_carried` in
+  `tests/test_suite_integrity.py` counts every recorded `find` in the file that
+  record's own `file` key names. Second scar, issue #87: `g2-repeated-member` in
+  `plans/mutations/65-message-pins.md` had matched **zero** times ever since #61 took
+  `{list(ordered)}` out of `split.py`, and nothing anywhere reported it, so a record
+  that read as re-runnable was not one.
+
+  A green run of that check means a record is **appliable**, not that its verdict still
+  holds: no recorded mutation is re-run and no `result` is verified. The anchors that do
+  not match are declared in `CARRIED_STALE_ANCHORS`, keyed by record file and record id
+  and never by a section heading, an ordinal or a line number, totalled in the declared
+  integer `CARRIED_STALE_TOTAL`, and checked as a set equality in **both** directions.
+  There is **one reason string per record file**, not one per anchor, so it has to be at
+  least twenty characters, carry a `#NN`, and **name every record id in that entry**;
+  without the last of those a second declaration inherits the first one's reason and is
+  explained by a change that had nothing to do with it, which is what happened when the
+  printed literal was pasted unedited in review. Each carried record also gets a dated
+  note in its own section, naming the record and the change, so a reader of the record
+  sees the retirement and not only a reader of the test module. A date alone is not
+  enough there either: a bare dated line satisfied an earlier version of that check.
+
+  **That list is expected to grow, and saying so exactly matters in this file.** A
+  correct change to `src/` legitimately rots an anchor, and #61 was right to make one,
+  so refusing growth would be refusing the change. What the check refuses is an **undeclared** stale
+  anchor. What holds the list honest is a reviewer reading a diff that includes a bump
+  to a declared integer, plus the dated note in the record itself; the suite reads one
+  tree and cannot tell an anchor that rotted from one that never matched, and its
+  failure message says so rather than implying a declaration is proof of anything.
+
+  **A rotted anchor is retired, not re-derived.** Editing `find` until it matches
+  today's source leaves the recorded message, the result and the node ids standing
+  beside an anchor they were never measured against, which is a correct measurement
+  attached to the wrong subject. Repair is re-running the mutation against today's tree
+  and writing a **new** record with a new id.
 - **A Python mutation run sets `PYTHONDONTWRITEBYTECODE=1`.** CPython invalidates
   bytecode on `(mtime, size)`, so two same-size mutations of one file within one second
   run stale bytecode and the run reports the previous mutation's result. Scar: a false
