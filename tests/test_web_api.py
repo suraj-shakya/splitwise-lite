@@ -3288,6 +3288,101 @@ def test_an_unknown_split_mode_names_the_three_that_exist(
     assert expense_count(seeded) == 0
 
 
+THE_WEIGHT_REFUSAL = {
+    "error": {
+        "code": "malformed_request",
+        "message": "a split mode must be one of 'equal' or 'exact', got 'weight'",
+    }
+}
+"""The whole body a ``mode: 'weight'`` request is answered with after issue #78.
+
+Written as the whole body rather than as a fragment on purpose. A substring check
+would be satisfied by a message that also offered a third mode, which is exactly the
+regression these two tests exist to catch, and .claude/rules/testing.md's first scar is
+that a loose pin passes in the case it was written for.
+"""
+
+
+def test_a_weight_split_is_refused_with_the_whole_message(
+    app, seeded: Path
+) -> None:
+    """The mode issue #78 removed is refused by the row that used to accept it.
+
+    That row is
+    ``_ApiRoute("/api/expenses", "create_expense", _create_expense, ("POST",),
+    _Access.MEMBER)``: no route was added or removed, so the session check, the
+    member-link check and the CSRF gate all still run before this refusal.
+    """
+    row = next(
+        route
+        for route in web._API_ROUTES
+        if route.endpoint == "create_expense"
+    )
+    assert (row.rule, row.methods, row.access) == (
+        "/api/expenses",
+        ("POST",),
+        web._Access.MEMBER,
+    )
+
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight", "weights": {members["Sam"]: 1}},
+    )
+    assert response.status_code == 400
+    assert response.mimetype == "application/json"
+    assert response.get_json() == THE_WEIGHT_REFUSAL
+    assert expense_count(seeded) == 0
+
+
+def test_the_weight_refusal_is_about_the_mode_and_not_the_stray_key(
+    app, seeded: Path
+) -> None:
+    """The awkward case: ``weights`` is now an unrecognised key and changes nothing.
+
+    ``_require_keys`` is only reached inside a matched arm, so an unmatched mode is
+    refused before the shape of the rest of the body is looked at. The word ``weight``
+    survives in the body exactly once, as the echo of what the caller sent after
+    ``got ``, and never as one of the modes on offer.
+    """
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight", "weights": {members["Sam"]: 1, members["Ali"]: 3}},
+    )
+    assert response.status_code == 400
+    message = response.get_json()["error"]["message"]
+    assert message == THE_WEIGHT_REFUSAL["error"]["message"]
+    assert message.count("weight") == 1
+    assert message.split("got ")[1] == "'weight'"
+    assert "'weight'" not in message.split(", got ")[0]
+    assert expense_count(seeded) == 0
+
+
+def test_a_weight_mode_with_no_weights_key_gets_the_same_refusal(
+    app, seeded: Path
+) -> None:
+    """The mode is checked before the shape, so dropping ``weights`` changes nothing."""
+    signed = linked_client(app, seeded)
+    members = by_name(signed)
+    response = add_expense(
+        signed,
+        payer_id=members["Sam"],
+        amount="10.00",
+        split={"mode": "weight"},
+    )
+    assert response.status_code == 400
+    assert response.mimetype == "application/json"
+    assert response.get_json() == THE_WEIGHT_REFUSAL
+    assert expense_count(seeded) == 0
+
+
 @pytest.mark.parametrize(
     "split",
     [
