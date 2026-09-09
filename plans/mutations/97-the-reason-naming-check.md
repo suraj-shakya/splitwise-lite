@@ -8,7 +8,7 @@ killed by a named control. The sixth is not, and it is here for that reason: it 
 measurement behind the decision to leave `computed_stale_total` uncontrolled and marked
 as documentation rather than restructured.
 
-Taken against `af52a1e` on 2026-09-09, on branch `task-97`, at master `0f6e8df`, with
+Taken against `f4aa59e` on 2026-09-09, on branch `task-97`, at master `0f6e8df`, with
 this file's own six records committed, so every run below covers the population that
 ships. Nothing changed in the tree after the runs except the figures below being written
 into this file. A record quotes a measurement, so it carries the tree it was measured on:
