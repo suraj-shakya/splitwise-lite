@@ -104,17 +104,35 @@ rather than from a pointer they may not follow. No JSON block changes and no che
 3. `70a-message-block-check.md`'s replacement carries **one extra clause**, because four
    of its five records target `tests/test_suite_integrity.py`, measured at lines 81, 250,
    296 and 342, and applying one of those now reds the sweep as well as whatever the
-   mutation was aimed at. That is the standing collateral `plans/mutations/README.md:85`
-   to `:107` documents, and `README.md:100` to `:106` already names
-   `m4-a-named-check-renamed` **in this very file** as its worked example, so a reader of
-   `70a-` who is not pointed at it will read a `kills` list that is one failure short of
-   what their run prints. Its replacement reads:
+   mutation was aimed at. That is the standing collateral `plans/mutations/README.md`
+   documents under its `### Standing collateral, since that check landed` heading, and
+   that section already names `m4-a-named-check-renamed` **in this very file** as its
+   worked example, so a reader of `70a-` who is not pointed at it will read a `kills` list
+   that is one failure short of what their run prints. Its replacement reads:
 
    > Every anchor below is swept by the suite, which counts each `find` in the file that
    > record's `file` key names and requires exactly one match or a declaration; see
    > `README.md` in this directory for what that check does and does not promise, for the
    > standing collateral it adds to a run of the four records here that target
    > `tests/test_suite_integrity.py`, and for the format and the recipe.
+
+   > **Corrected 2026-09-09 during implementation, for issue #96.** This criterion cited
+   > that section as `plans/mutations/README.md:85` to `:107`, and its worked example as
+   > `README.md:100` to `:106`. Both were true at master `0f6e8df` and are true nowhere on
+   > this branch: criterion 26's own eighteen-line insertion into that file moved the
+   > section to `:101` to `:125`, so this spec's line numbers were falsified by this spec's
+   > own diff, and `README.md:85` here now reads "Then run the node ids in `kills`, alone,
+   > and revert with". The fix taken is the durable one PR #91 landed, **cite by anchor
+   > text rather than by line number**: the citation above names the
+   > `### Standing collateral, since that check landed` heading and the
+   > `m4-a-named-check-renamed` record, and an insertion above either of those moves
+   > neither. Criterion 20 is corrected the same way. Every other line number in this spec
+   > stays as measured and is pinned to master `0f6e8df` by the Constraints bullet, which
+   > is the other half of the same rule; the ones this task's own diff moved, and which are
+   > therefore to be read against that commit rather than against this branch, are the
+   > first-`##` line numbers in the population section, `70a-`'s `:32` to `:33` and `:47`
+   > to `:50`, this file's remaining citations into `plans/mutations/README.md`, and
+   > `plans/tasks/60-65-67-checks-that-could-not-fail.md`'s `:414` and `:431`.
 
 4. `57-`, `72-` and `88-` do **not** get the collateral clause, and this is a decision
    rather than an omission. Measured: `57-`'s one record targets `tests/shell_harness.mjs`
@@ -235,10 +253,16 @@ rather than from a pointer they may not follow. No JSON block changes and no che
 
 20. **`tests/test_suite_integrity.py` is not edited at all.** Four of `70a-`'s five records
     quote fragments of that module as their `find`, so an edit to it would rot those
-    anchors and red the sweep, which is the standing collateral described at
-    `plans/mutations/README.md:85`. This constraint is therefore stronger here than the
+    anchors and red the sweep, which is the standing collateral `plans/mutations/README.md`
+    describes under `### Standing collateral, since that check landed`. This constraint is
+    therefore stronger here than the
     usual "do not touch the tests": editing that module would break the very records this
     task is correcting the prose of.
+
+    > **Corrected 2026-09-09 during implementation, for issue #96.** This criterion cited
+    > `plans/mutations/README.md:85`, which criterion 26's insertion into that file moved to
+    > `:101`. It cites the section by its heading instead, for the reason and by the rule
+    > recorded in the note on criterion 3.
 
 21. **No file under `app/`, `src/` or `scripts/` changes**, and `tests/` is untouched
     entirely, so `SHELL_DIGEST` in `app/sw.js` does not move and no scenario list changes.
@@ -404,6 +428,22 @@ rather than from a pointer they may not follow. No JSON block changes and no che
     quotations inside dated blockquotes, and the four hits listed as "do not touch" in the
     population table are unchanged. Zero hits sit outside a dated blockquote in
     `plans/mutations/`. The number is stated so the check is a count and not an impression.
+
+    > **Corrected 2026-09-09 during implementation, for issue #96.** "Across the
+    > repository" is false for the "after" number, and the correction is the scope rather
+    > than the count. Measured on this branch: the grep returns **fifteen** hits
+    > repository-wide, of which **seven** are in this task spec, which quotes the sentence
+    > seven times, and **eight** are outside it. So eight before and eight after holds
+    > under one scope only, **outside this task spec**, and that is the scope the
+    > population table above already used: its eight rows name no file of task 96. The
+    > "before" number is unaffected either way, because this spec did not exist on
+    > `0f6e8df`. Everything else in the criterion holds as written and was measured on this
+    > branch: the four live instances are now four quotations inside dated notes, the four
+    > "do not touch" hits are textually unchanged, and zero hits sit outside a dated
+    > blockquote in `plans/mutations/`. This is recorded here and not only in the pull
+    > request body, because a verification instruction whose reconciliation lives in a PR
+    > body is the defect criterion 29's note is about: whoever follows this criterion
+    > literally greps, gets fifteen, and needs the reconciliation in front of them.
 
 34. `git diff --name-status $(git merge-base master HEAD)..HEAD` reports exactly these
     **six** paths and nothing else:
