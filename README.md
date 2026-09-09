@@ -20,8 +20,9 @@ linked to a member row with `setup_group.py link`. Signing up on its own shows t
   person's share, the total, who recorded it and when. Nothing on it can be changed.
 - **Adding an expense**: an amount, a description if you want one, whoever paid, and a
   split: equally, across some of you, or uneven amounts you type in. Those are the
-  spec's three modes. The resolver also takes weights, which the API accepts and no
-  screen offers.
+  spec's three modes, and they are all the resolver and the API take. The resolver also
+  took weights, which the API accepted and no screen offered, until issue #78 took that
+  out; `plans/spec.md` records why, and a request sending one now gets a 400.
 - **Balances**: what each member is up or down, and the shortest set of payments that
   would clear the group. Both are worked out fresh on every read and stored nowhere.
   The net figures are read only; the payments open, as the next bullet says.

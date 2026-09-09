@@ -40,6 +40,20 @@ uneven by weight or exact amount), produce allocations that sum exactly to the t
 Remainder cents are assigned by a deterministic rule, not to whoever sorts first.
 Property-test that allocations always sum to the total across random inputs.
 
+> **Corrected 2026-09-09 for issue #78.** The Description above reads "equal across all,
+> equal across a subset, or uneven by weight or exact amount", and that phrase is where a
+> fourth split mode entered this codebase. It reads as something the spec asked for and it
+> was not: `plans/spec.md`'s locked decisions table names three rules, "Equal, equal
+> across a subset, and uneven shares", and it named those three before this entry was
+> written and after it. "uneven by weight or exact amount" widened the third into two
+> without any recorded decision, `plans/tasks/03-split-resolver.md` turned that widening
+> into a four-row table, and `split.py` shipped four resolvers for three rules. Issue #78
+> removed `split_by_weight`, the `weight` wire mode and `_require_weight`; uneven shares
+> are exact amounts. The retracted words are left standing above rather than rewritten,
+> because this entry is what task 3 was built from and a reader of
+> `plans/tasks/03-split-resolver.md` needs to be able to see where its fourth row came
+> from. `plans/spec.md`'s modelling notes carry the decision and the reason.
+
 ## 4. Balance derivation
 Goal: Fold events into pairwise balances without ever storing a balance.
 Depends on: 2

@@ -68,6 +68,20 @@ at entry time. This removes rule types from the data model entirely and leaves o
 rounding problem instead of three. Leftover cents must be assigned deterministically,
 not to whoever happens to sort first.
 
+**A fourth split mode was considered and dropped, on 2026-09-09.**
+`src/splitwise_lite/split.py` carried a fourth resolver, `split_by_weight`, from task 3
+until issue #78, reachable through a `weight` shape on `POST /api/expenses`. It answered
+no rule in the locked table above, which names three, and no screen ever offered it. It
+was removed, because a weight typo produces a wrong but valid split where a wrong exact
+share is refused with both figures named, which is exactly the "looks authoritative while
+being wrong" risk this document opens on. Uneven shares are expressed as exact amounts.
+It entered through `plans/backlog.md` task 3's wording rather than through any decision
+recorded here, which is why three readers came to this file, found it silent, and asked
+whether the fourth mode was an oversight; the answer is in this paragraph so a fourth
+does not have to ask. Nothing needed backfilling: an expense stores explicit
+`(person, cents)` and no rule type, per the paragraph above, so expenses recorded through
+weight mode are indistinguishable from any other.
+
 **Group currency is immutable** once the first expense lands. Otherwise historical
 amounts silently change meaning.
 
