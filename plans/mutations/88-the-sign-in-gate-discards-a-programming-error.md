@@ -49,8 +49,27 @@ alone: a constant no test references is a second copy of an anchor with nothing 
 it in step, which is the drift this task refuses one file away when it declines to copy
 api.js's six kinds into `app/app.js`.
 
-The suite deliberately does not re-verify these anchors; see `README.md` in this
-directory for that reasoning, and for the format and the recipe.
+Every anchor below is swept by the suite, which counts each `find` in the file that
+record's `file` key names and requires exactly one match or a declaration; see
+`README.md` in this directory for what that check does and does not promise, and for
+the format and the recipe.
+
+> **Corrected 2026-09-09 for issue #96**, per
+> `plans/tasks/96-record-files-still-say-the-suite-does-not-re-verify.md`. This paragraph
+> used to open: "The suite deliberately does not re-verify these anchors; see `README.md`
+> in this directory for that reasoning". That is no longer true of this repo. PR #93
+> landed `test_every_recorded_anchor_matches_once_or_is_carried` in
+> `tests/test_suite_integrity.py`, which counts every recorded `find` in the file that
+> record's own `file` key names and refuses anything but exactly one match, unless the
+> record is declared in `CARRIED_STALE_ANCHORS` with a reason naming the change that
+> broke it. One thing about this copy in particular, because a reader who checks the
+> dates will otherwise read it as carelessness: PR #91 wrote it here while the sentence
+> was still true, PR #93 falsified it a short time later, so this file went stale by a
+> merge rather than by anybody being careless, and the population of the retired sentence
+> was three on a tree without #91 and four on a tree holding both merges. What is still
+> true, and is what that sentence was protecting, is narrower: no recorded mutation is
+> re-run and no `result` is verified, so a matching anchor proves a record **appliable**
+> and not correct.
 
 ## A programming error on the gate's success path
 

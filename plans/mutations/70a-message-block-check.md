@@ -8,8 +8,23 @@ directions.
 Taken against `bdca309` on 2026-09-08, on branch `task-70`, and re-taken there after merging `a595330`, which grew this module. A record quotes a
 measurement, so it carries the tree it was measured on: if an anchor below no longer
 matches exactly once, that is the tree to diff against rather than a defect in the
-record. The suite deliberately does not re-verify these anchors; see `README.md` in this
-directory for that reasoning, and for the format and the recipe.
+record. Every anchor below is swept by the suite, which counts each `find` in the file
+that record's `file` key names and requires exactly one match or a declaration; see
+`README.md` in this directory for what that check does and does not promise, for the
+standing collateral it adds to a run of the four records here that target
+`tests/test_suite_integrity.py`, and for the format and the recipe.
+
+> **Corrected 2026-09-09 for issue #96**, per
+> `plans/tasks/96-record-files-still-say-the-suite-does-not-re-verify.md`. This paragraph
+> used to end: "The suite deliberately does not re-verify these anchors; see `README.md`
+> in this directory for that reasoning". That is no longer true of this repo. PR #93
+> landed `test_every_recorded_anchor_matches_once_or_is_carried` in
+> `tests/test_suite_integrity.py`, which counts every recorded `find` in the file that
+> record's own `file` key names and refuses anything but exactly one match, unless the
+> record is declared in `CARRIED_STALE_ANCHORS` with a reason naming the change that
+> broke it. What is still true, and is what that sentence was protecting, is narrower: no
+> recorded mutation is re-run and no `result` is verified, so a matching anchor proves a
+> record **appliable** and not correct.
 
 **What each run was, named as a quantity rather than left to be inferred.** Every run
 below was the whole of `tests/test_suite_integrity.py`, unfiltered, which collects **89

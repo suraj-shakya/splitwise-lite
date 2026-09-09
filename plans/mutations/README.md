@@ -39,6 +39,24 @@ keeps finding, not a pass.
 
 `tests/test_suite_integrity.py` checks that every block here parses and is complete.
 
+**One sentence about the sweep, and one home for it.** A record file's introduction
+carries the tree it was measured on and one sentence about that check, and that sentence
+gets copied into the next record file, so it lives here and is copied from here: *Every
+anchor below is swept by the suite, which counts each `find` in the file that record's
+`file` key names and requires exactly one match or a declaration; see `README.md` in this
+directory for what that check does and does not promise, and for the format and the
+recipe.* Adjust the number for a file with a single record, and add the standing
+collateral this file documents under `### Standing collateral, since that check landed`
+to what this README is being cited for if any of the file's records target a file in this
+directory or `tests/test_suite_integrity.py`. Issue #96 is why this has a home: the
+sentence it replaces was carried by four record files, the fourth copied in good faith by
+PR #91 while it was still true and falsified by PR #93 a short time later, so the
+population grew by one merge rather than by anybody being careless. A home names the
+origin of a copy and does not remove the fan-out, which is the residual rather than
+something to leave for a reader to discover: if that check changes again, every record
+file already carrying the sentence still needs its own correction, and this paragraph is
+one more place to correct rather than one fewer.
+
 ## Why these three keys
 
 `file`, `find` and `replace` are deliberately the same three keys the JavaScript harness

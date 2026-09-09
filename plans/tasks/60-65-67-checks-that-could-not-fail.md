@@ -130,6 +130,25 @@ verifying would put every past mutation in the path of every future refactor, wh
 ossification #60 warns against. A committed mutant is re-run; a recorded one is re-runnable.
 That is the whole difference between the two, and it is why both exist.
 
+> **Corrected 2026-09-09 for issue #96**, per
+> `plans/tasks/96-record-files-still-say-the-suite-does-not-re-verify.md`. Two claims in
+> the paragraph above are retired, and only those two: "**The records are not re-verified
+> against live source by the suite.**" and "it does not check that its anchor still
+> matches". The rest of the paragraph stands, including "The suite checks that a record is
+> machine readable and complete", which it still does. It is left in place rather than
+> rewritten so a reader sees the claim beside its withdrawal. PR #93 landed
+> `test_every_recorded_anchor_matches_once_or_is_carried` in
+> `tests/test_suite_integrity.py`, which counts every recorded `find` in the file that
+> record's own `file` key names and refuses anything but exactly one match, unless the
+> record is declared in `CARRIED_STALE_ANCHORS` with a reason naming the change that broke
+> it. The ossification worry the paragraph carries was right and is **not** retired: it is
+> answered rather than abandoned, because a rotted anchor is declared once, with a reason
+> and a dated note, and no repair is demanded of anybody. "A committed mutant is re-run; a
+> recorded one is re-runnable" also stands word for word; what changed is that the
+> re-runnable half is now checked instead of assumed. What is still true, and is what that
+> sentence was protecting, is narrower: no recorded mutation is re-run and no `result` is
+> verified, so a matching anchor proves a record **appliable** and not correct.
+
 **No Python mutation runner, and no committed Python mutant.** A Python equivalent of the
 `MUTANT_*` machinery would have to re-enter pytest from inside pytest, and #60 is explicit
 that a mutation-testing framework is out of scope because it would be a dependency. What #60
@@ -415,6 +434,23 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
        re-verifying would put every past mutation in the path of every future refactor, which is
        the ossification #60 warns against. A committed mutant is re-run; a recorded one is
        re-runnable.
+
+       > **Corrected 2026-09-09 for issue #96**, per
+       > `plans/tasks/96-record-files-still-say-the-suite-does-not-re-verify.md`.
+       > The first clause of sub-criterion (g) is retired, and only that clause: "that the
+       > suite does **not** re-verify a record's anchor against live source". Its "and why"
+       > stands, and so does the sentence after it. The sub-criterion is left standing above
+       > so the claim reads beside its withdrawal. PR #93 landed
+       > `test_every_recorded_anchor_matches_once_or_is_carried` in
+       > `tests/test_suite_integrity.py`, so what rule (e) of `.claude/rules/testing.md`
+       > carries today is the exactly-once rule and not this. The ossification reason (g)
+       > gives was right and is not retired: the declaration route answers it, one entry in
+       > `CARRIED_STALE_ANCHORS` with a reason and a dated note, and no repair demanded of
+       > anybody. "A committed mutant is re-run; a recorded one is re-runnable" stands word
+       > for word. What is still true, and is what that sentence was protecting, is
+       > narrower: no recorded mutation is re-run and no `result` is verified, so a matching
+       > anchor proves a record **appliable** and not correct.
+
 34. `plans/mutations/65-message-pins.md` exists and holds one section per guard deleted in the
     audit. Each section carries: the JSON record; the **exact message the run printed**, quoted;
     the pins from criterion 25 that guard covers, by test name; and the verdict in one sentence.
@@ -432,6 +468,28 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
     comment beside the two tests above states that the anchor is deliberately not checked against
     the live file, giving the ossification reason, so the next reader does not "improve" the check
     into the thing #60 argued against.
+
+    > **Corrected 2026-09-09 for issue #96**, per
+    > `plans/tasks/96-record-files-still-say-the-suite-does-not-re-verify.md`. This
+    > criterion is retired in whole, and both halves of it go rather than one: the check it
+    > asked nobody to write is written, and the comment it asked for instead was itself
+    > retired in place and is quoted as retired in `tests/test_suite_integrity.py`, in the
+    > comment carrying the marker `Corrected 2026-09-08 for issue #87`. That citation is
+    > anchor text rather than a line range deliberately: the range this note first gave,
+    > `:1540` to `:1551`, was true when written and PR #102 moved it four lines down twelve
+    > minutes later, by the two commits' own timestamps, and this document pins nothing to a
+    > commit for its reader to fall back on.
+    > That is the full scope, and the criterion is left standing above so the claim
+    > reads beside its withdrawal. PR #93 landed
+    > `test_every_recorded_anchor_matches_once_or_is_carried` in
+    > `tests/test_suite_integrity.py`, which counts every recorded `find` in the file that
+    > record's own `file` key names and refuses anything but exactly one match, unless the
+    > record is declared in `CARRIED_STALE_ANCHORS` with a reason naming the change that
+    > broke it. What issue #87 found is that nothing was checking the re-runnable half, so
+    > a record could quietly stop being re-runnable and the suite stayed green over it for
+    > as long as nobody tried. What is still true, and is what that sentence was protecting, is
+    > narrower: no recorded mutation is re-run and no `result` is verified, so a matching
+    > anchor proves a record **appliable** and not correct.
 38. No committed Python mutant is added, no mutation runner is added, no file under `scripts/` is
     created, and `tests/test_shell_behaviour.py` is not edited. `git diff` shows no change to that
     file at all.
