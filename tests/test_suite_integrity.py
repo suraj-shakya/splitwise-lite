@@ -2175,9 +2175,10 @@ def unnamed_records(carried: frozenset[tuple[str, int]], reason: str) -> list[st
     sentence is a finding whose fix is to write the id as it is. A substring standing in
     for a naming is the exact defect this helper was added to fix, one level down: an id
     that happens to be spelled inside a longer word explains nothing about the record it
-    is supposed to be about. Measured on 2026-09-09 over the 47 recorded ids: no id is a
-    substring of another id in the same record file, so this closes a latent hole rather
-    than a live failure, and mutation ``r4-delimited-naming-weakened-to-a-substring`` in
+    is supposed to be about. Measured on 2026-09-09 over all 53 recorded ids in
+    plans/mutations/ as this branch ships them: no id is a substring of another id in
+    the same record file, so this closes a latent hole rather than a live failure, and
+    mutation ``r4-delimited-naming-weakened-to-a-substring`` in
     plans/mutations/97-the-reason-naming-check.md is what makes it a decision rather
     than a preference.
     """
