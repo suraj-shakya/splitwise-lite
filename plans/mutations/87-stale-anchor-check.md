@@ -5,8 +5,10 @@ complete record's `find` occurs exactly once in the file its own `file` key name
 that record is declared in `CARRIED_STALE_ANCHORS` with a reason naming the change that
 broke it, and that the declaration carries a dated note in the record itself.
 
-Taken against `a0e48eb` on 2026-09-09, on branch `task-87`, which is this branch merged
-up to master `5bfc117`. A record quotes a measurement, so it carries the tree it was
+Taken against `df507b3` on 2026-09-09, on branch `task-87`, which is this branch merged
+up to master `5bfc117` with this file's own seven records committed, so every run below
+covers the population that ships. A record quotes a measurement, so it carries the tree
+it was
 measured on: if an anchor below no longer matches exactly once, that is the tree to diff
 against rather than a defect in the record. Every anchor below is itself swept by the
 check this file is about; see `README.md` in this directory for what that check does and
@@ -20,7 +22,7 @@ counts. Nothing was selected with `-k`, so a claim that a mutation is caught by 
 is a claim about the other ninety-nine staying green rather than about a filtered
 subset. Every `survives` entry below was observed green in that named run.
 
-**Which population the sweep covered.** At `a0e48eb` the check examines **44** records in
+**Which population the sweep covered.** At `df507b3` the check examines **47** records in
 **11** record files, including the seven in this one, and finds exactly one stale anchor,
 `g2-repeated-member`. That was measured with the shipped helpers rather than counted.
 
@@ -33,7 +35,7 @@ subset. Every `survives` entry below was observed green in that named run.
 > gave `1 failed, 98 passed` exactly as recorded, and at the branch tip it gave
 > `2 failed, 97 passed`, the second failure being the sweep, which that record listed
 > under `survives`. The cause is the standing collateral described below, and it is why
-> every run in this file has now been re-taken at `a0e48eb` with this file in the swept
+> every run in this file has now been re-taken at `df507b3` with this file in the swept
 > population. The old figures are not restated as current anywhere.
 
 **Standing collateral, and it applies to every mutation in this file.** Each `find` here
@@ -58,13 +60,13 @@ result, which is what happened on PR #62 and looked exactly like a genuine findi
 **The anchor-into-a-record-file trap, because it will cost somebody an hour otherwise.**
 Three of these mutations target a record file, and a record file quotes its own message
 text in prose, so a plain sentence is **not** a unique anchor in one. Measured in
-`plans/mutations/65-message-pins.md` at `a0e48eb`: the text
+`plans/mutations/65-message-pins.md` at `df507b3`: the text
 `weights sum to zero, so there is no share to divide the total into` occurs **twice**,
 once inside the JSON `find` of `g1-weights-sum-to-zero` and once below it in the
 "message the guard actually prints" quote. Sites here are named by their anchor text
 rather than by a line number, following the introduction of
 `88-the-sign-in-gate-discards-a-programming-error.md`, whose own line numbers went stale
-three times on one branch; at `a0e48eb` those two occurrences are at lines 36 and 50, and
+three times on one branch; at `df507b3` those two occurrences are at lines 36 and 50, and
 that is the only place a number for them appears. The recipe would refuse that anchor,
 correctly, and a looser applier would mutate the prose as well as the record. So an
 anchor into a record file carries enough of the JSON escaping, a `\"` or a `\n`, to sit
@@ -287,7 +289,7 @@ for anything the weakening let through. Do not read it as evidence.
 > population rather than as a survivor.
 
 **What actually carries the exactly-once argument is the population, measured directly.**
-At `a0e48eb` every one of the 44 recorded anchors counts exactly 1 in its target except
+At `df507b3` every one of the 47 recorded anchors counts exactly 1 in its target except
 `g2-repeated-member`, which counts 0. **No anchor in this repo matches twice.** So the
 sweep over the real population could not be the positive control for the two-or-more
 branch whatever it did, and the synthetic case (c) is the only thing standing between

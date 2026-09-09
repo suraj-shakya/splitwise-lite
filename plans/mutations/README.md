@@ -97,7 +97,7 @@ red scenario: a record that quietly omitted one of its failures would not reprod
 reproducing is the whole point.
 
 **It reaches records taken before the check existed**, which is why it is written here and
-not only in the record that introduced it. Measured on 2026-09-09 at `a0e48eb`: applying
+not only in the record that introduced it. Measured on 2026-09-09 at `df507b3`: applying
 `m4-a-named-check-renamed` from `70a-message-block-check.md` gives `2 failed, 98 passed`
 where that record says `1 failed, 88 passed`. The second failure is the sweep, with
 `m4-a-named-check-renamed: its find occurs 0 times in tests/test_suite_integrity.py`.
