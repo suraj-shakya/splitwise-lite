@@ -928,6 +928,133 @@ def test_a_throw_inside_the_feed_render_arrives_as_an_unhandled_rejection() -> N
     assert found[THE_FEED_REFUSAL]["passed"], found[THE_FEED_REFUSAL]["failures"]
 
 
+# --- A programming error on the gate's success path carries its own stack ---
+
+# The substitution task 88 is built on, and it is task 72's THE_FEED_RENDER_THROW
+# transplanted onto the gate. One line, anchored on the last statement of the gate's
+# fulfilled handler, that appends a `.then` to the promise that handler returns and
+# dereferences a missing key inside it.
+#
+# Why the cached session view and not a DOM member, which is task 72's reason in this
+# task's shape. A substitution reaching for something the stub does not define routes
+# through refusedProperty(), which records a failure line against the running scenario
+# at the moment it refuses, whatever the shipped code then does with the exception. The
+# check below would then be satisfied by the guard's own line under either promise
+# shape and would prove nothing. The client's own global is not guarded, and the view
+# it caches is a plain object parsed out of a stubbed response, so a missing key on it
+# throws a plain TypeError whose fate only the gate's chain decides. If the cached view
+# is null on some path that reaches this line, that is a plain TypeError too, so no
+# guard is involved either way.
+#
+# Why this anchor and not one inside refresh() or showApp(). refresh() is also called
+# bare when the client finishes loading, where a rejection reaches nobody and escapes
+# already. A substitution inside either of those would put an `unhandled rejection`
+# line in the report before the fix as well, and the before-run being green is the
+# whole reproduction. This anchor throws after refresh() has settled, so every request
+# each scenario declares still goes out and every assertion it makes still holds, and
+# only the gate's chain decides what happens to the throw.
+THE_GATE_SUCCESS_THROW = {
+    "file": "app/app.js",
+    "find": "        return refresh();",
+    "replace": (
+        "        return refresh().then(function () "
+        "{ return api.cachedSession().nope.alsoNope; });"
+    ),
+}
+
+# Task 88's other two mutations, a rejection with no reason at all and the control that
+# proves this anchor executes, live in
+# plans/mutations/88-the-sign-in-gate-discards-a-programming-error.md and nowhere else.
+# They were carried here as constants at first, and that was wrong: a mutation gets two
+# homes, recorded in plans/mutations/, or committed as a mutant the suite re-runs, and a
+# constant no test reads is neither. It is a second copy of one anchor with nothing
+# keeping it in step with the first, which is the drift this task refuses one file away
+# when it declines to copy api.js's six kinds into app/app.js.
+
+# The scenario the throw is asserted against: the sign-in succeeds, so the gate's
+# fulfilled handler runs and the substitution fires inside it.
+THE_SUCCESSFUL_SIGN_IN = "a_successful_sign_in_keeps_the_screen_the_person_was_on"
+
+# The two controls for the half that must not change, both of them refusals api.js
+# classified. The first never reaches the fulfilled handler at all, so the
+# substitution is inert in it. The second is the one that makes the naive fix wrong: a
+# sign-in that got no answer arrives at the same catch, it is an ApiError of kind
+# 'offline', and it must stay a silent early return with the offline notice already up.
+THE_GATE_REFUSAL = "a_refused_sign_in_tells_the_person_why"
+THE_OFFLINE_SIGN_IN = "a_sign_in_that_cannot_reach_the_server_leaves_the_gate_alone"
+
+# The scenario that signs in successfully *and* asserts #gate-submit is enabled
+# afterwards, which is how "the submit control still comes back" is checked rather than
+# claimed in prose: the substitution fires in it, so the chain takes the re-raising
+# path, and its own assertion on the control is what says the trailing handler still
+# ran.
+THE_DEAD_SESSION = (
+    "a_session_that_dies_between_sign_in_and_session_read_says_so_instead_of_the_gate"
+)
+
+
+def test_a_throw_on_the_gates_success_path_arrives_as_an_unhandled_rejection() -> None:
+    """A programming error during sign-in reaches the hook carrying its own stack.
+
+    This is diagnosis, not correctness, and nothing a person sees changes. The gate's
+    catch used to return early for any reason without a recognised `kind`, and a
+    TypeError has none, so the rejection was consumed, the trailing handler tidied the
+    control away, and the screen looked entirely normal. That is worse than the feed's
+    version of the same defect rather than different in kind: on the feed a throw left
+    #feed-loading up and the in-flight invariant could see it, and here there was
+    nothing at all to see.
+
+    **The assertion is on the failure line, not on redness.** Redness alone would
+    distinguish the two runs here, because the before-run of this substitution is
+    entirely green: 160 of 160 scenarios pass with the throw in place, which is the bug
+    stated as a measurement. A redness assertion would therefore bite. It is still
+    wrong, because a scenario that reds for an unrelated reason would satisfy it, and
+    what this test exists to say is that the hook fired.
+
+    **The check this test is deliberately not.** A tenth entry in the MUTANT_A to
+    MUTANT_I family cannot be added on this anchor at all. Before the fix the mutation
+    *survives*, so there are no named scenarios for it to assert red; after the fix it
+    would assert that some scenarios went red, which is a weaker version of what is
+    asserted below and would duplicate it. That is a judgement about duplication, and
+    not task 72's reason, which was that its redness check could not have failed.
+
+    **No stack frame name is pinned.** The throw is inside an anonymous function, so
+    V8 may name that frame by position alone. `app.js` is asserted, the real lines are
+    pasted into the record, and a frame name is pinned nowhere.
+    """
+    completed = run_harness({"substitutions": [THE_GATE_SUCCESS_THROW]})
+    # Exactly 1, never merely non-zero: a substitution that broke the file into a
+    # syntax error exits 2, and would otherwise be mistaken for a caught defect.
+    assert completed.returncode == 1, (
+        f"expected exit 1, got {completed.returncode}.\nstderr:\n{completed.stderr}"
+    )
+    found = results(parse_report(completed))
+    assert not found[THE_SUCCESSFUL_SIGN_IN]["passed"]
+    messages = " ".join(found[THE_SUCCESSFUL_SIGN_IN]["failures"])
+    # The hook fired at all, which is the whole change.
+    assert "unhandled rejection" in messages, messages
+    # And it carries what no id-and-hidden invariant could: the error's own type and
+    # the file and line it was thrown from. That is what makes it a diagnosis rather
+    # than a symptom, and it is why the fix is worth a line of shipped source.
+    assert "TypeError" in messages, messages
+    assert "app.js" in messages, messages
+    # The half that must not change, control one: a refused sign-in never reaches the
+    # fulfilled handler, so the substitution is inert and the scenario still reads its
+    # message on the gate.
+    assert found[THE_GATE_REFUSAL]["passed"], found[THE_GATE_REFUSAL]["failures"]
+    # Control two, and the one that makes a bare re-raise wrong. A sign-in that got no
+    # answer is an ApiError, it arrives at the same catch, and it must stay a silent
+    # early return rather than becoming an unhandled rejection of its own.
+    assert found[THE_OFFLINE_SIGN_IN]["passed"], found[THE_OFFLINE_SIGN_IN]["failures"]
+    # And the control that comes back. This scenario signs in successfully, so the
+    # substitution fires and the chain re-raises; it also asserts #gate-submit is
+    # enabled after settling. So the hook's line appears and the invariant's does not,
+    # which is the trailing handler running on the re-raising path.
+    dead = " ".join(found[THE_DEAD_SESSION]["failures"])
+    assert "unhandled rejection" in dead, dead
+    assert "#gate-submit" not in dead, dead
+
+
 # --- api.js is the only place a status is interpreted ----------------------
 
 # A status read in order to be compared, either way round, and a comparison against
