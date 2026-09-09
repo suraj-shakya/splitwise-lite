@@ -8,9 +8,8 @@ broke it, and that the declaration carries a dated note in the record itself.
 Taken against `df507b3` on 2026-09-09, on branch `task-87`, which is this branch merged
 up to master `5bfc117` with this file's own seven records committed, so every run below
 covers the population that ships. A record quotes a measurement, so it carries the tree
-it was
-measured on: if an anchor below no longer matches exactly once, that is the tree to diff
-against rather than a defect in the record. Every anchor below is itself swept by the
+it was measured on: if an anchor below no longer matches exactly once, that is the tree
+to diff against rather than a defect in the record. Every anchor below is itself swept by the
 check this file is about; see `README.md` in this directory for what that check does and
 does not promise, for the standing collateral it adds to every run here, and for the
 format and the recipe.
