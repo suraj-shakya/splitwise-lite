@@ -473,8 +473,13 @@ POSIX-form (`tests/test_balances.py`), so the same string reads the same on both
     > `plans/tasks/96-record-files-still-say-the-suite-does-not-re-verify.md`. This
     > criterion is retired in whole, and both halves of it go rather than one: the check it
     > asked nobody to write is written, and the comment it asked for instead was itself
-    > retired in place and is quoted as retired at `tests/test_suite_integrity.py:1540` to
-    > `:1551`. That is the full scope, and the criterion is left standing above so the claim
+    > retired in place and is quoted as retired in `tests/test_suite_integrity.py`, in the
+    > comment carrying the marker `Corrected 2026-09-08 for issue #87`. That citation is
+    > anchor text rather than a line range deliberately: the range this note first gave,
+    > `:1540` to `:1551`, was true when written and PR #102 moved it four lines down twelve
+    > minutes later, by the two commits' own timestamps, and this document pins nothing to a
+    > commit for its reader to fall back on.
+    > That is the full scope, and the criterion is left standing above so the claim
     > reads beside its withdrawal. PR #93 landed
     > `test_every_recorded_anchor_matches_once_or_is_carried` in
     > `tests/test_suite_integrity.py`, which counts every recorded `find` in the file that
